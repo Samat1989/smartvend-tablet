@@ -1,0 +1,822 @@
+M102 型售货机控制卡
+M102 Vending Machine control board
+使用说明
+instructions
+
+1 / 25
+1. 目录
+1.catalog
+1.
+目录____________________________________________________________ 1
+1. catalog___________________________________________________________________1_
+2.
+版本修订________________________________________________________ 3
+2.Version revision_______________________________________________2
+3.
+产品概览________________________________________________________ 3
+3.overview of the product_________________________________________
+4.
+电气特性说明____________________________________________________ 5
+4.Description of electrical characteristics_____________________________
+5.
+安装尺寸________________________________________________________ 8
+5. The mounting size_____________________________________________
+6.
+接线方式________________________________________________________ 9
+6.
+mode of wire connection_______________________________________________________
+6.1
+电源和通讯线的连接________________________________________________ 9
+6.1
+Connection of power and communication wires_________________________
+6.2
+电磁铁或两线制电机接线方式_______________________________________ 10
+6.2
+Electromagnet or two wire motor connection mode________________________
+6.3
+三线制电机接线方法_______________________________________________ 12
+6.3
+Three-wire motor wiring method____________________________________
+6.4
+光幕接线方式_____________________________________________________ 14
+6.4
+Light curtain connection mode______________________________________
+6.5
+温度检测接线_____________________________________________________ 14
+6.5
+Temperature detection wiring_______________________________________
+6.6
+开关量输出端口___________________________________________________ 14
+6.6
+Switch output port_______________________________________________
+6.7
+开关量输入端口___________________________________________________ 15
+6.7
+Switch input port________________________________________________
+
+7.
+通讯参数_______________________________________________________ 16
+
+2 / 25
+7. Communication parameters____________________________________________
+8.
+指令格式_______________________________________________________ 17
+8. The instruction format________________________________________
+9.
+详细指令模式___________________________________________________ 18
+9.
+Detailed instruction mode_____________________________________
+9.1
+获取序列号(ID) 指令:01H____________________________________________ 18
+9.1
+Get serial number (ID) instruction: 01H _________________________
+9.2
+查询Run 执行状态(Motor Poll)指令:03H_______________________________ 18
+9.2
+Query Run execution status (Motor Poll) directive :03H_______________
+9.3
+测试(Motor Scan)指令:04H___________________________________________19
+9.3
+Motor Scan instruction: 04H___________________________________
+9.4
+启动电机(Motor Run)指令：05H______________________________________20
+9.4
+Motor Run command: 05H_____________________________________
+9.5
+读温度( Read Temp)指令07H________________________________________ 21
+9.5
+Read Temperature (Read Temp) instruction 07H_____________________
+9.6
+开关量输出(Write DO)指令08H______________________________________ 21
+9.6
+Switch Quantity Output (Write DO) instruction 08H__________________
+9.7
+读开关量状态(Read DI)指令09_______________________________________22
+9.7
+Read Switch Quantity Status (Read DI) instruction
+9.8
+设置板卡地址Set Address 指令FF____________________________________ 22
+9.8
+Set the board address Set Address directive FF_____________________
+10.
+样例_________________________________________________________ 23
+10.
+sample________________________________________________________________
+11.
+使用流程_____________________________________________________ 24
+11.
+Using process____________________________________________________________
+
+3 / 25
+2. 版本修订
+2.Revision
+2018-9-30 全新制定
+2018-9-30 new revision
+3. 产品概览
+3.Product overview
+
+意法半导体芯片控制
+
+S.D. semiconductor chip control
+
+精密逻辑控制电路
+
+Precision logic control circuit
+
+矩阵式电路结构,板载矩阵交叉电路，减少线束成本
+
+Matrix circuit structure, on-board matrix cross circuit, reduce the cost of wiring
+harness
+
+支持100 通道的出货机构驱动, 60 电机40 电磁锁
+
+Supports 100-channel shipping mechanism drive, 60 motor 40 electromagnetic
+lock
+
+三线电机和两线电机混合使用
+
+The three-wire motor is mixed with the two-wire motor
+
+电机与电磁铁混合使用
+
+The motor is mixed with the electromagnet
+
+支持最多255 块控制卡并联扩展，实现无限扩展
+
+parallel extension support up to 255 pieces of control card, realize the unlimited
+extension
+
+增强型灵活通讯口，板载TTL,RS-232、RS-485 接口
+
+Enhanced flexible communication port, on-board TTL, RS-232, RS-485 interface
+
+高抗干扰设计
+
+High anti-interference design
+
+掉货检测接口
+
+Drop detection interface
+
+开关量输出：8 路开关量输出
+
+4 / 25
+
+Switch output: 8 switch output
+
+开关量输入：8 路开关量输入
+
+Switch quantity input: 8 switch quantity input
+
+温度采样：
+1 路温度采样
+
+Temperature sampling: 1 way temperature sampling
+
+5 / 25
+4. 电气特性说明
+4. Description of electrical characteristics
+供电电压：DC24V （12V 可选）
+Supply voltage: DC24V (12V optional)
+静态电流：小于20mA
+Static current: less than 20mA
+驱动电流：最大1A
+drive current: Maximum 1A
+通讯接口：RS-232
+communication interface: RS-232
+1）供电电源
+1) Power supply
+供电电压：DC24V （可定制DC12V 版本）。电源功率不低于50W。
+Supply Voltage: DC24V (customizable DC12V version). The power supply
+is not less than 50W
+2）负载
+2) Load
+支持3 线制马达80 个
+Support 3-wire motor 80
+支持2 限制马达100 个
+Support 2 limit motor 100
+支持
+电磁锁100 个
+Support electromagnetic lock 100
+a) 无反馈电磁铁，可以驱动100 路
+a) No feedback electromagnet, which can drive 100 channels
+b) 有反馈电磁铁，可以驱动100 路
+当电磁锁关闭时，开关处于闭合状态；当门弹开后，开关处于断开状态
+b) It has feedback electromagnet, which can drive 100 channels
+
+6 / 25
+When the electromagnetic lock is closed, the switch is in a closed state;When the
+door pops open, the switch is on
+c) 两线制电机，可以驱动100 路
+c) two-wire motor that can drive 100 channels
+d) 三线制电机，可以驱动80 路
+d) Three-wire motor, can drive 80 channels
+3）开关量输出
+3）Switch output
+带有8 路开关量输出回路，系统id 为0~7。对外输出0V 或者高阻抗。支
+持吸入电流50mA 每路（足够驱动普通24V 继电器）。
+With 8 switch output circuit, the system id is 0 to 7. Output 0V or high
+impedance. Supports suction current of 50mA per pass (enough to drive
+
+7 / 25
+normal 24V relays)
+4）开关量输入
+4)Switch input
+有8 路开关量输入回路，编号为0~7。外部可以输入0~24V 或者开关按钮
+信号。
+There are 8 switch input circuits, numbered 0~7.External input can be
+0~24V or switch button signal.
+5）测温回路
+5)Temperature measurement circuit
+带有1 路测温回路，配套传感器型号为NTC 10K@25℃B=3950。温度测
+量范围为-50.0℃~50.0℃，未接传感器时系统返回-50.0℃。
+With 1 temperature measuring loop, the supporting sensor model is NTC
+10K@25℃
+B=3950.The
+temperature
+measurement
+range
+is
+-
+50.0℃~50.0℃, and the system returns -50.0℃without the sensor.
+
+8 / 25
+5. 安装尺寸5. Installation dimensions
+单位(mm)
+Unit (mm)
+
+9 / 25
+6.接线方式
+6.Connection mode
+6.1 电源和通讯线的连接
+6.1 Connection of power supply and communication cable
+(1)
+供电电压24V，12V 可选
+(2) Supply voltage 24V,12V optional
+(3)
+静态电流小于40mA
+(4) Static current less than 40mA
+(5)
+最大电流取决于负载电流
+(6) The maximum current depends on the load current
+(7)
+J1 供电
+(8) J1 power supply
+(9)
+J4 为了兼容M101G
+(10)J4 for compatibility with M101G
+(11) J5 为了兼容M101H\M101J
+(12)J5 for compatibility with M101H\M101J
+
+10 / 25
+J5 TTL 通讯接口
+J5 TTL communication interface
+J2 RS-232 接口
+J2 RS-232 interface
+J3
+RS-485 接口
+J3 RS-485 interface
+6.2 电磁铁或两线制电机接线方式
+6.2 Electromagnet or two-wire motor connection mode
+两线制接口需要使用到的信号是L1~L10 ; C1~C6 ，C7~C10 。L 信号输出24V 正
+极，C 信号输出0V。L 与C 之间接负载形成回路。
+The signals needed for the two-wire interface are L1~L10;C1 ~ C6 and
+C7 ~ C10.L signal output 24V positive pole, C signal output 0V.The
+indirect load between L and C forms a loop.
+
+11 / 25
+图中的电机，实际是安装过选通二极管、续流二极管、位置检测微动
+开关的组合，并非普通电机。
+The motor shown in the figure is actually a combination of the over-
+gating diode, the continuous-flow diode and the position detection
+micro switch, rather than an ordinary motor.
+
+12 / 25
+6.3 三线制电机接线方法
+6.3Three-wire motor wiring method
+三线制接口需要使用到的信号是L1~L10 ; C1~C6 ；H1-H6 。L 信号输出
+24V 正极，C 信号输出0V。L 与C 之间接负载形成回路。H 信号是电机
+到位的检测信号，当电机停止时是高阻抗，当电机运转过程中是24V。
+The signals required by the three-wire interface are L1~L10;C1 ~
+C6.H1 - H6.L signal output 24V positive pole, C signal output 0V.The
+indirect load between L and C forms a loop.H signal is the detection
+signal when the motor is in place, high impedance when the motor
+stops, and 24V when the motor is running.
+
+13 / 25
+图中的电机，实际是安装过选通二极管、续流二极管、位置检测微动开关的组
+合，并非普通电机。
+The motor shown in the figure is actually a combination of the over-gating
+diode, the continuous-flow diode and the position detection micro switch,
+rather than an ordinary motor
+
+14 / 25
+6.4 光幕接线方式
+6.4Light curtain wiring Mode
+光幕接口信号V1；SIG;GND。
+V1 给光幕供电，SIG 光幕信号，GND
+是光幕的电源地线。
+Light curtain interface signal V1;SIG; GND。V1 supplies power to the
+light curtain, SIG light curtain signal, GND is the power ground of the
+light curtain.
+待机时：V1 无输出，光幕不供电。此时SIG 需要是，高阻抗或者断
+路。
+Standby: V1 no output, light curtain no power supply.SIG needs to be
+high impedance or open circuit.
+启动马达前，V1 输出24V 给光幕供电，此时SIG 需要是0V（或者说与GND 通
+路）。货物掉落经过光幕时，SIG 信号是有高阻抗或者断路。
+Before starting the motor, V1 outputs 24V to supply power to the light
+curtain, at which point SIG needs to be 0V (or GND channel).The SIG
+signal is high impedance or open when the cargo falls through the light
+curtain.
+6.5 温度检测接线
+6.5Temperature detection wiring
+TEMP 接线，仅需要接上，规格符合热敏电阻即可。
+TEMP wiring, only need to be connected, the specification conforms to
+thermistor.
+6.6 开关量输出端口
+6.6Switch output port
+Vo 输出24V
+Vo 24 v output
+O1，O2，O3，O4 ,O5,O6,O7,O8 吸入电流（负载能力40mA）可以驱
+动24V 继电器，驱动光耦时需要串联10K 1/4W 电阻。
+O1, O2, O3, O4,O5,O6,O7,O8 suction current (load capacity: 40mA)
+can drive 24V relay. To drive optocoupler, 10K 1/4W resistor is
+required in series
+
+15 / 25
+6.7 开关量输入端口
+6.7Switch input port
+CO 端口是公共线，I1，I2，I3，I4,I5,I6,I7,I8 是每路的输入点，可以
+接入外部开关信号
+CO port is the common line, I1, I2, I3, I4,I5,I6,I7 and I8 are the input
+points of each channel, which can access external switching
+signals
+
+16 / 25
+7.通讯参数
+7.Communication parameters
+控制卡采用TTL 串口方式进行通讯,可以方便转换成232 或者485 电平。
+The control card communicates by means of TTL serial port, which can be
+easily converted to 232 or 485 levels.
+通讯参数：9600bps，1 停止位，无奇偶校验，无流量控制
+Communication parameters: 9600bps, 1 stop bit, no parity, no flow control
+在通讯过程中，上位机（安卓或者PC，称为主机）与控制卡（称为从机）采用主从方
+式
+In the communication process, the host computer (Android or PC, known
+as the host) and the control card (known as the slave) adopt the master-
+slave mode
+1) 每次通讯由主机发起请求，从机应答
+1）Each communication shall be requested by the host and answered by
+the slave
+2) 主机收到上次请求的应答或者超时后才可以发起新的请求
+2) The host can only issue a new request after receiving the reply or
+timeout of the last request
+3) 在一个通讯网络中可包含一台主机和若干台从机
+3)A communication network may contain one host and several slaves
+computers
+4) 在一个通讯网络中可包含一台主机和若干台从机，通过个设备地址(1 字
+节)，来区分这些设备。其中主机的地址为0，MS101G 控制卡的地址为
+1-8。
+4) A communication network may contain one host and several slaves,
+which can be distinguished by the address of each device (1 byte).The
+host address is 0, and the MS101G control card address is 1-8.
+5)此外地址255 作为广播地址。目前此地址只用作从机地址修改。（慎重使
+用）
+5) In addition, address 255 serves as the broadcast address.This address
+is currently used only for slave address modification.(Use with caution)
+6)控制卡卡上的指示灯的连续闪烁次数即为它的通讯地址。
+6)To control the continuous flashing times of the indicator light on the card
+
+17 / 25
+is its address.
+通讯流程如下：
+The communication process is as follows:
+1.主机下发指令
+1.The master gives instructions
+2.等待50ms
+2.Wait for 50 ms
+1.
+接收从机响应(超时1 秒)
+3.Receive slave response (timeout 1 second)
+8.指令格式
+8.Instruction format
+为了便于上位机程序的编写，通讯协议中使用了定长数据帧，一帧指令或响应的长度
+为20 字节，包含了地址，指令,数据段及校验代码四部分。当数据段中有效数据小于
+16 字节时，需要填0 补充至16 字节。
+In order to facilitate the programming of upper computer, fixed-length data frame is
+used in the communication protocol. The length of a frame instruction or response is
+20 bytes, including address, instruction, data segment and verification code.When
+the valid data in the data segment is less than 16 bytes, you need to fill in 0 to
+supplement 16 bytes
+格式如下：
+Format as follows:
+指令：主机-> 从机
+Instruction: host -> slave
+从机地址（1byte）
+指令（1byte）
+数据（16byte）
+校验代码(2byte)
+Slave Address(1byte)
+Instruction(1byte)
+Data(16byte)
+Check Code(2byte)
+数据用Y1~Y16 表达
+响应：从机->主机
+Response: slave -> host
+主机地址（1byte）
+指令（1byte）
+数据（0-16byte）
+校验代码(2byte)
+Master Address(1byte)
+Instruction(1byte)
+Data (0-16byte)
+Check Code(2byte)
+
+18 / 25
+数据用Z1~Z16 表达
+The data is expressed in Z1 to Z16
+地址：
+Address
+从机地址1~8，主机地址为0。
+指令：
+Instructions:
+详见指令表
+See instruction table for details.
+数据：
+Data
+数据段可包含16 字节，指令中的数据用Y1-Y16 表达，响应中的数据用Z1-Z16 表
+达。数据段中可包含单字节和双字节两种整数，其中16 位整数的高字节在前，低字节
+在后。
+The data segment can contain 16 bytes, and the data in the instruction is expressed
+as Y1-y16, and the data in the response as Z1-Z16.A data segment may contain
+both single-byte and double-byte integers, with the high byte of a 16-bit integer
+coming first and the low byte following.
+校验代码：
+Check code
+采用CRC16 校验方式，运算过程见附录。校验代码的低字节在前、高字节在后。
+CRC16 calibration method is adopted, and the operation process is shown in
+appendix.The low byte of the validation code comes before the high byte.
+9.详细指令模式
+9.Detailed instruction mode
+5.1 获取序列号(ID) 指令:01H
+5.1 Obtain sequence number (ID) instruction :01H
+Z1-Z12
+控制卡的序列号
+Z1-Z12
+The serial number of the control card
+5.2 查询Run 执行状态(Motor Poll)指令:03H
+Z1
+Run 指令执行状态
+0 = 空闲
+1 = 执行中
+2 = 执行完毕
+
+19 / 25
+Z1
+Run instruction
+execution
+status 0 - Idle
+1 - Execute
+2 - Executed
+Z2
+正在运转的电机编号
+00~59 （共60 个）
+Z2
+Running motor
+numbers
+00 to 59 (60 in total)
+Z3
+执行结果
+0 = 成功。
+1 = 过流。负载过重,或者卡货
+2 =欠流。一般是电线断开,或者负载未安装
+3 = 超时。指超过7 秒仍未检测到电机到位信
+号。（一般是由于负载过重、卡货或开关电
+源干扰引起）
+4 = 光幕自检失败，未启动电机。
+5= 有反馈电磁铁门未开
+Z3
+The execution result
+0-Successful
+1-Overflow Heavy load, or cargo stuck
+2-underflowTypically,the
+wire
+is
+disconnected, or the load is not installed
+3-timed out Means that the motor in place
+signal has not been detected for more than 7
+seconds. (Generally due to heavy load,
+stuck goods or switching power interference)
+4-Light curtain self-test failed and the motor
+was not started
+5 - The feedback electromagnetic door is not
+open
+Z4-Z5
+峰值电流
+单位mA
+Z4-Z5
+peak current
+Unit mA
+Z6-Z7
+平均电流
+单位mA
+Z6-Z7
+Average
+Unit mA
+Z8-Z9
+运行时间
+单位ms
+Z8-Z9
+Running time
+Unit ms
+Z10
+光幕状态
+0=无掉货
+1~200 表示货物经过光栅的时间（单位ms）
+Z10
+Light curtain state
+0 - No drop
+1 to 200 indicates the time the goods pass
+through the grating (unit ms)
+9.3 测试(Motor Scan)指令:04H
+9.3 Test(Motor Scan)Instruction:04H
+Y1
+电机索引号
+00~99
+Y1
+Motor index number
+00~99
+Z1
+结果
+AA=正常BB=异常CC=过载
+
+20 / 25
+Z1
+Result
+AA= normal BB= abnormal CC= overload
+9.4 启动电机(Motor Run)指令：05H
+9.4 Motor Run instruction: 05H
+Y1
+电机索引号
+00~59
+Y1
+Motor index number
+00~59
+Y2
+电机类型
+0=无反馈电磁铁
+1=有反馈电磁铁
+2=两线制电机
+3=三线制电机
+Y2
+The type of motor
+0= No feedback electromagnet
+1= Feedback electromagnet
+2= Two-wire motor
+3= three-wire mot
+Y3
+光幕工作模式
+0 = 电机运转不参考光幕。
+1= 启动电机前，需光幕自检成功；电机到位
+后停止。
+2 =启动电机前，需光幕自检成功；当光幕检
+测到掉货后电机立即停止，未检测到掉货时
+电机，一直运转直到超时（7s）
+Y3
+Light curtain
+operating mode
+0 = The motor operation does not refer to the
+light curtain.
+1= Before starting the motor, the light screen
+should be self-checked successfully;Stop the
+motor when in place.
+2 = Before starting the motor, the light screen
+should be self-checked successfully;When the
+light curtain detects the goods falling off, the
+motor will stop immediately. When the goods
+falling off is not detected, the motor will
+continue to operate until timeout (7s).
+Y4
+电机过流阈值
+1-255 代表10mA-2550mA。
+0 表示默认值()
+Y4
+Motor overflow
+threshold
+1-255 represents 10MA-2550 mA.
+0 is the default value ()
+Y5
+电机欠流阈值
+1-255 代表10mA-2550mA。
+0 表示默认值()
+Y5
+Motor undercurrent
+1-255 represents 10MA-2550 mA.
+0 is the default value ()
+threshold
+
+21 / 25
+Y6
+电机到位超时时间
+1-100 代表0.1S – 10.0S。
+0 表示默认值(7 秒)
+Y6
+Motor in place time
+out
+
+1-100 represents 0.1s -- 10.0s.
+0 represents the default value (7 seconds)
+Z1
+指定执行结果
+0=已启动；
+1=无效的电机索引号；
+2=另一台电机在运行；
+Z1
+Specify the execution
+result
+0= Started;
+1= Invalid motor index number;
+2= Another motor is running;
+9.5 读温度( Read Temp)指令07H
+9.5Read Temp instruction 07H
+本驱动板卡带有一路温度采样回路
+This drive board card has a temperature sampling loop all the way
+Z1-Z2
+温度值
+-50.0℃~50.0℃，未安装传感器时为-50.0℃。
+Z1-Z2
+temperature value
+-50.0 to 50.0 degrees C, -50.0 degrees C
+when the sensor is not installed
+FE0C = -500 代表-50.0
+FE0C - -500 for -50.0
+01F4 = 500 代表50.0 读
+01F4 s 500 for 50.0 reading
+9.6 开关量输出(Write DO)指令08H
+9.6 Switch output (Write DO) instruction 08H
+本驱动卡带有4 路开关量输出回路，编号为0~3。
+This drive card has a 4-way switch output circuit, numbered 0 to 3.
+Y1
+DO 索引
+0-6
+Y1
+The DO index
+0-6
+Y2
+操作
+1=ON 0=OFF
+Y2
+Operation.
+1=ON 0=OFF
+Z1
+DO 索引
+0-6
+Z1
+The DO index
+0-6
+Z2
+操作结果
+Z2=Y2+F0 . 00->F0 01->F1
+Z2
+The result of the
+operation
+Z2=Y2+F0 . 00->F0 01->F1
+
+22 / 25
+9.7 读开关量状态(Read DI)指令09
+9.7Read switch state (Read DI) instruction 09
+本驱动卡带有4 路开关量输入回路，编号为0~3。
+The drive cassette has 4 switch input circuits, numbered 0~3.
+主机下发
+The host issued
+从机地址
+指令
+数值
+校验代码
+The address from
+the master
+Instructions
+Numerical.
+Check
+code
+01~08
+09
+Y1~Y16
+CRC-16
+01~08
+09
+Y1~Y16
+CRC-16
+Y1=0
+从机应答
+主机地址
+指令
+数据
+校验代码
+Answer from the
+slave
+Instructions
+Numerical.
+Check code
+01~08
+08
+Z1~Z16
+CRC-16
+01~08
+08
+Z1~Z16
+CRC-16
+Z1~Z4 ==DI1~DI4
+1=外部连接0=外部断开
+Z1~Z4 ==DI1~DI4 1= external connection 0= External disconnect
+9.8 设置板卡地址Set Address 指令FF
+9.8 Set the board Address Set Address instruction FF
+该指令用于修改驱动卡的通讯地址。按以下步骤操作：
+This instruction is used to modify the address of the driver card.Follow these steps:
+整个网络中只保留主机和一块驱动卡。
+1)Only the host and one driver card are kept in the whole network.
+发送设置设置指令，人工确认指示灯闪烁次数。
+2)Send setting instructions and manually confirm the blinking times of the indicator light.
+该网络恢复原样。
+3)The network is restored to its original state
+注意：该指令为的通讯地址采用广播地址（255）。
+Note: this instruction uses a broadcast address for the correspondence address(255)
+
+23 / 25
+板卡地址可以根据指示灯闪烁次数获得
+The board address can be obtained based on the number of times the light
+flashes
+Y1
+驱动卡新地址
+1-8
+Y1
+Driver card new address
+1-8
+Z1
+驱动卡新地址
+1-8
+Z1
+Driver card new address
+1-8
+10.样例
+10.Sample
+获取ID
+Get the ID
+01 01 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 71 88
+00 01 00 64 00 3B 04 47 36 32 33 38 36 39 00 00 00 00 6F 8E
+启动#0 号马达3 线制无光幕
+Start #0 motor 3 wire matt curtain
+01 05 00 03 00 00 00 00 00 00 00 00 00 00 00 00 00 00 70 48
+00 05 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 62 B5
+获取马达旋转结果
+Get the result of motor rotation
+01 03 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 D0 E8
+00 03 02 00 00 05 BA 00 77 0A 3C 00 00 00 00 00 00 00 98 46
+Z1=02
+运转完毕
+Z1=02 run out
+Z2= 00 当前操作id 0
+2= 00 The current operation id is 0
+Z3=00
+无故障
+Z3 = 00 trouble-free
+Z4,Z5=05BA 峰值电流1466mA
+Z3=00 fault-free Z4,Z5=05BA peak current 1466mA
+
+24 / 25
+Z6,Z7= 0077 平均电流119mA
+Z6,Z7= 0077 average current 119mA
+Z8,Z9=0A3C 运转耗时2620mS
+Z8,Z9=0A3C operation time 2620mS
+修改从机地址
+Modify slave address
+FF 01 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 20 50
+FF 02 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 D0 A0
+FF 03 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 81 30
+FF 04 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 33 01
+FF 05 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 62 91
+FF 06 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 92 61
+FF 07 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 C3 F1
+FF 08 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 F6 02
+启动#1 路DO
+Start #1 DO
+01 08 00 01 00 00 00 00 00 00 00 00 00 00 00 00 00 00 66 DA
+00 08
+00
+F1 00 00 00 00 00 00 00 00 00 00 00 00 00 00 C7 62
+关闭#1 路DO
+Close #1 DO
+01 08 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 A7 DA
+00 08
+00
+F0 00 00 00 00 00 00 00 00 00 00 00 00 00 00 06 62
+读取DI
+Read DI
+01 09 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 F6 4A
+00 09
+00
+00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 A7
+B6
+11.使用流程
+11.Using process

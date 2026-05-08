@@ -1,0 +1,46 @@
+# --- Decompiled factory app ----------------------------------------------
+# Reverse-engineered sources of `com.shengma.huishu.hasakesitan` (Yi-Pu-Teng).
+# Useful for grep + reading, but: tens of thousands of files, copyright-
+# encumbered, and easily regenerated from the original APK with jadx /
+# apktool. Do NOT commit.
+snack_jadx/
+snack_apktool/
+
+# --- Build / patching scratch -------------------------------------------
+_patch_tmp/
+
+# --- Binaries we can rebuild --------------------------------------------
+# Signed/unsigned APKs and sidecar files. Big, can be reproduced via
+# `flutter build apk` for the new app or apktool for the legacy patches.
+*.apk
+*.apk.idsig
+
+# Third-party tooling jars (downloaded separately when needed).
+apktool*.jar
+uber-apk-signer*.jar
+
+# --- Local IDE / agent state --------------------------------------------
+# Project-scope `.claude/settings.json` and `.mcp.json` ARE committed —
+# they help future contributors (and the AI assistant) pick up where we
+# left off. Only the personal local override is gitignored.
+.claude/settings.local.json
+
+# --- Python -------------------------------------------------------------
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+
+# --- OS / editors -------------------------------------------------------
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.swp
+
+# --- Test screenshots ---------------------------------------------------
+# May contain Kaspi QR codes / order ids — not safe to publish.
+photo_*.jpg
+photo_*.jpeg
+photo_*.png
