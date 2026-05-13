@@ -217,7 +217,7 @@ class _TesterScreenState extends State<TesterScreen> {
                     value: board.baud,
                     isExpanded: true,
                     items: const [
-                      DropdownMenuItem(value: 9600, child: Text('9600 baud')),
+                      DropdownMenuItem(value: 9600, child: Text('9600 baud (заводское)')),
                       DropdownMenuItem(value: 19200, child: Text('19200 baud')),
                       DropdownMenuItem(value: 38400, child: Text('38400 baud')),
                       DropdownMenuItem(value: 115200, child: Text('115200 baud')),
@@ -236,6 +236,20 @@ class _TesterScreenState extends State<TesterScreen> {
                     onChanged: (v) => board.setSlaveAddr(int.tryParse(v) ?? 1),
                   ),
                 ),
+              ],
+            ),
+            // Factory "M102 encryption" toggle: mixes a hidden 11-byte
+            // password into CRC. Defaults ON (matches the factory APK).
+            // Turn OFF only if the BS bench board (no password support)
+            // doesn't respond.
+            Row(
+              children: [
+                Switch(
+                  value: board.useM102Password,
+                  onChanged: (v) => board.setUseM102Password(v),
+                ),
+                const SizedBox(width: 4),
+                const Text('CRC с паролем M102 (заводское)'),
               ],
             ),
           ],
@@ -386,6 +400,9 @@ class _TesterScreenState extends State<TesterScreen> {
               break;
             case 'RX':
               c = Colors.greenAccent;
+              break;
+            case 'RAW':
+              c = Colors.tealAccent;
               break;
             case 'ERR':
               c = Colors.redAccent;

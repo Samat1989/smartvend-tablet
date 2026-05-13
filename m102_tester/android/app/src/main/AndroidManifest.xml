@@ -45,7 +45,10 @@
                 <category android:name="android.intent.category.HOME"/>
                 <category android:name="android.intent.category.DEFAULT"/>
             </intent-filter>
-            <!-- Auto-launch the app when a known USB-serial adapter is attached -->
+            <!-- Auto-launch the app when the M109E's CH340 USB-Serial
+                 adapter is plugged in. The exact VID/PID is in
+                 res/xml/device_filter.xml (matches the factory app's
+                 UsbUtil.findUSB which filters on 0x1A86 / 0x7523). -->
             <intent-filter>
                 <action android:name="android.hardware.usb.action.USB_DEVICE_ATTACHED"/>
             </intent-filter>

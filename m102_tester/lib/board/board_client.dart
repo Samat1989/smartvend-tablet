@@ -70,15 +70,27 @@ class DispenseResult {
   String toString() => '${success ? "OK" : "FAIL"}: $message';
 }
 
-/// Driver for M102 / M109E vending control board over USB-Serial (FTDI / CH340).
+/// Driver for M102 / M109E vending control board over USB-Serial.
 ///
-/// Handles low-level frame building (20-byte fixed, Modbus CRC-16 low-first),
-/// transport over a UsbPort, and request/response correlation.
+/// Matches the factory app exactly (`UsbUtil.findUSB` in the decompiled
+/// `com.example.shuai.vendingmachine`): the M109E control board ships with
+/// an inline CH340 USB-Serial adapter (VID 0x1A86 / PID 0x7523) at
+/// **9600 8N1**. We auto-detect that exact device on every USB attach event.
+///
+/// Frame format: 20-byte fixed, Modbus CRC-16 low-first.
 class BoardClient extends ChangeNotifier {
-  /// Known USB-to-Serial chip VIDs we'll try to auto-connect to.
+  /// Factory app filters on this exact pair before opening — see
+  /// `UsbUtil.findUSB`: `vendorId == 6790 && productId == 29987`.
+  /// CH340 / CH341 USB-Serial chip from QinHeng.
+  static const int ch340Vid = 0x1A86; // 6790
+  static const int ch340Pid = 0x7523; // 29987
+
+  /// VIDs we recognise as USB-Serial adapters for the manual "Connect"
+  /// path in the tester UI. Auto-connect uses [ch340Vid] only (matches
+  /// factory) to avoid attaching to unrelated peripherals.
   static const Set<int> knownUsbSerialVids = {
+    0x1A86, // QinHeng: CH340/CH341 — factory default
     0x0403, // FTDI: FT232R/FT232H/FT2232/FT4232/FT-X
-    0x1A86, // QinHeng: CH340/CH341
     0x10C4, // Silicon Labs: CP210x
     0x067B, // Prolific: PL2303
   };
@@ -94,8 +106,35 @@ class BoardClient extends ChangeNotifier {
   int? _pendingOpcode;
   Timer? _pendingTimeout;
 
+  /// Factory uses `BOTELV_9600 = 9600`, 8N1.
   int _baud = 9600;
   int _slaveAddr = 1;
+
+  /// "Password" appended to the frame body before CRC-16 is computed.
+  /// The factory app calls this "M102 encryption mode" (`m964getM102()`)
+  /// and it is **enabled by default** (`getBoolean("IS_M102GOTOCODE", true)`).
+  ///
+  /// Wire format unchanged: still 20 bytes (`addr+order+data+crc`). The
+  /// password is mixed in only during CRC computation — boards with this
+  /// mode active silently reject frames whose CRC was computed without it.
+  ///
+  /// The 11 password bytes (`0x31 0x38 ... 0x36`) decode to ASCII
+  /// `"18633695826"`. See decompiled `Flag.f282CMD_M102_` /
+  /// `CreatADH.m141biany()`.
+  static const List<int> m102Password = <int>[
+    0x31, 0x38, 0x36, 0x33, 0x33, 0x36, 0x39, 0x35, 0x38, 0x32, 0x36,
+  ];
+
+  /// Whether to mix [m102Password] into outgoing CRC. Default `true` to
+  /// match the factory app's `IS_M102GOTOCODE = true` default. Disable
+  /// only when bench-testing with the BS board that ignores the password.
+  bool _useM102Password = true;
+  bool get useM102Password => _useM102Password;
+
+  void setUseM102Password(bool v) {
+    _useM102Password = v;
+    notifyListeners();
+  }
 
   final _logCtrl = StreamController<LogEntry>.broadcast();
   final _logHistory = <LogEntry>[];
@@ -147,7 +186,9 @@ class BoardClient extends ChangeNotifier {
     if (_selected != null && !devs.any((d) => d.deviceId == _selected!.deviceId)) {
       _selected = null;
     }
-    _selected ??= devs.isNotEmpty ? devs.first : null;
+    // Prefer the CH340 (factory default) when present.
+    _selected ??= devs.where((d) => d.vid == ch340Vid && d.pid == ch340Pid).firstOrNull
+        ?? (devs.isNotEmpty ? devs.first : null);
     _info('Found ${devs.length} USB device(s)');
     for (final d in devs) {
       _info('  ${d.productName ?? "?"}  vid=0x${d.vid?.toRadixString(16)} pid=0x${d.pid?.toRadixString(16)}');
@@ -172,20 +213,29 @@ class BoardClient extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// Auto-detect a known USB-Serial adapter (FTDI / CH340 / CP210x / PL2303)
-  /// and connect to the first one found. Returns true if connected.
+  /// Auto-detect the M109E CH340 (VID 0x1A86 / PID 0x7523) the same way
+  /// `UsbUtil.findUSB` does in the factory app, and connect at 9600 8N1.
+  /// Falls back to any other known USB-Serial chip if no CH340 is present
+  /// (useful on bench tablets with FTDI dongles).
   Future<bool> autoConnect() async {
     if (isConnected) return true;
     await refreshDevices();
-    final candidates = _devices.where((d) => knownUsbSerialVids.contains(d.vid));
-    final first = candidates.isNotEmpty ? candidates.first : null;
-    if (first == null) {
-      _info('Auto-connect: no known USB-serial adapter found');
+    final ch340 = _devices.where(
+      (d) => d.vid == ch340Vid && d.pid == ch340Pid,
+    ).firstOrNull;
+    final fallback = _devices.where(
+      (d) => knownUsbSerialVids.contains(d.vid),
+    ).firstOrNull;
+    final pick = ch340 ?? fallback;
+    if (pick == null) {
+      _info('Auto-connect: no USB-Serial adapter found '
+          '(expected CH340 vid=0x1A86 pid=0x7523)');
       return false;
     }
-    _info('Auto-connect: trying ${first.productName ?? "device"} '
-        '(vid=0x${first.vid?.toRadixString(16)})');
-    return connect(device: first);
+    _info('Auto-connect: trying ${pick.productName ?? "device"} '
+        '(vid=0x${pick.vid?.toRadixString(16)} '
+        'pid=0x${pick.pid?.toRadixString(16)})');
+    return connect(device: pick);
   }
 
   Future<bool> connect({UsbDevice? device, int? baud, int? slaveAddr}) async {
@@ -209,8 +259,14 @@ class BoardClient extends ChangeNotifier {
         _err('port.open() failed (permission denied?)');
         return false;
       }
-      await port.setDTR(true);
-      await port.setRTS(true);
+      // NOTE: We deliberately do NOT call setDTR / setRTS here. The SM
+      // M109E board talks via an RS485 transceiver whose DE/RE direction
+      // pin is wired to one of those control lines. Asserting DTR or RTS
+      // (true) holds the transceiver in TX-only mode — we can send frames
+      // but the board's replies are never received. The factory app
+      // (`UsbUtil.connect`) skips these calls too, relying on hoho's
+      // default after open(): DTR=false, RTS=false (deasserted), which is
+      // what the transceiver needs.
       await port.setPortParameters(
         _baud,
         UsbPort.DATABITS_8,
@@ -278,7 +334,13 @@ class BoardClient extends ChangeNotifier {
     for (int i = 0; i < data.length && i < 16; i++) {
       frame[2 + i] = data[i] & 0xFF;
     }
-    final crc = _crc16Modbus(frame.sublist(0, 18));
+    // CRC over `addr+order+data` (18 bytes), optionally followed by the
+    // 11-byte M102 password — the board firmware uses the same recipe and
+    // drops frames whose CRC doesn't match.
+    final crcInput = _useM102Password
+        ? Uint8List.fromList([...frame.sublist(0, 18), ...m102Password])
+        : frame.sublist(0, 18);
+    final crc = _crc16Modbus(crcInput);
     frame[18] = crc[0];
     frame[19] = crc[1];
     return frame;
@@ -340,6 +402,10 @@ class BoardClient extends ChangeNotifier {
   }
 
   void _onRx(Uint8List data) {
+    // Log every chunk that arrives over USB — even bytes that don't make
+    // up a complete 20-byte frame. Helps diagnose RS485 direction issues,
+    // wrong baud (frame misalignment), or noise on the line.
+    if (data.isNotEmpty) _addLog(LogEntry('RAW', _hex(data)));
     _rxBuffer.add(data);
     // Try to extract 20-byte frames.
     while (_rxBuffer.length >= 20) {
