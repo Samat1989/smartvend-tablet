@@ -3,7 +3,6 @@ import 'package:provider/provider.dart';
 
 import '../models/climate_config.dart';
 import '../services/climate_controller.dart';
-import '../services/vending_service.dart';
 
 /// Minimal climate screen — only mode + temperature setpoint are user-editable.
 /// All compressor safety constants are hardcoded from the factory algorithm
@@ -27,8 +26,6 @@ class ClimateScreen extends StatelessWidget {
               if (ctrl.config.mode != ClimateMode.off) _setpointCard(ctrl),
               const SizedBox(height: 16),
               _lightCard(ctrl),
-              const SizedBox(height: 16),
-              const _CurtainCard(),
               const SizedBox(height: 16),
               _detailsExpansion(ctrl),
             ],
@@ -271,44 +268,6 @@ class _BulletText extends StatelessWidget {
   }
 }
 
-class _CurtainCard extends StatelessWidget {
-  const _CurtainCard();
-
-  @override
-  Widget build(BuildContext context) {
-    return Consumer<VendingService>(
-      builder: (context, svc, _) {
-        return Card(
-          child: Padding(
-            padding: const EdgeInsets.all(16),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                const Text('Датчик выдачи (световая завеса)',
-                    style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600)),
-                const SizedBox(height: 4),
-                const Text(
-                  'Когда включён, плата проверяет что товар реально упал. '
-                  'Если выдаётся ошибка "CurtainErr" — попробуйте Режим 2 '
-                  'или проверьте питание/провода датчика.',
-                  style: TextStyle(fontSize: 12, color: Colors.grey),
-                ),
-                const SizedBox(height: 12),
-                SegmentedButton<int>(
-                  segments: const [
-                    ButtonSegment(value: 0, label: Text('Выкл')),
-                    ButtonSegment(value: 1, label: Text('Режим 1')),
-                    ButtonSegment(value: 2, label: Text('Режим 2')),
-                  ],
-                  selected: {svc.curtainModeOverride},
-                  onSelectionChanged: (s) =>
-                      svc.curtainModeOverride = s.first,
-                ),
-              ],
-            ),
-          ),
-        );
-      },
-    );
-  }
-}
+// _CurtainCard was removed — drop-sensor mode now lives in the service
+// menu under «Режим выдачи» as a global app-wide setting persisted in
+// DeviceStorage. The climate screen is for fridge/heating loop only.

@@ -1,3 +1,24 @@
 {
+  "permissions": {
+    "allow": [
+      "Bash(/c/car/platform-tools/adb.exe connect *)",
+      "Bash(/c/car/platform-tools/adb.exe devices *)",
+      "Bash(ping -n 2 10.16.16.222)",
+      "Bash(/c/car/platform-tools/adb.exe kill-server *)",
+      "Bash(/c/car/platform-tools/adb.exe start-server *)",
+      "Bash(/c/car/platform-tools/adb.exe pair *)",
+      "Bash(/c/car/platform-tools/adb.exe version *)",
+      "Bash(/c/car/platform-tools/adb.exe mdns *)",
+      "Bash(/c/car/platform-tools/adb.exe -s 10.16.16.222:35809 shell \"getprop ro.product.model; getprop ro.build.version.release; getprop ro.product.manufacturer\")",
+      "Bash(flutter run *)",
+      "Bash(echo \"q\" > /dev/tty 2>&1; sleep 1; ps -ef 2>&1 | grep -E \"flutter|dart\" | head -5)",
+      "Bash(/c/car/platform-tools/adb.exe -s 10.16.16.222:35809 install -r /c/m109e/m102_tester/build/app/outputs/flutter-apk/app-release.apk)",
+      "Bash(/c/car/platform-tools/adb.exe -s 10.16.16.222:35809 shell monkey -p kz.smartvend.m102_tester -c android.intent.category.LAUNCHER 1)",
+      "Bash(git restore *)"
+    ],
+    "additionalDirectories": [
+      "\\dev"
+    ]
+  },
   "enableAllProjectMcpServers": true
 }

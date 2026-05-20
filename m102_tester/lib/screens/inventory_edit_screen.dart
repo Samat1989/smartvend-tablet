@@ -3,8 +3,10 @@ import 'package:provider/provider.dart';
 
 import '../models/motor_layout.dart';
 import '../models/product.dart';
+import '../services/device_storage.dart';
 import '../services/strings.dart';
 import '../services/vending_service.dart';
+import '../theme.dart';
 import 'product_edit_screen.dart';
 
 /// Service-mode tool: vertical list of all 36 motor slots, one row per slot.
@@ -39,17 +41,88 @@ class InventoryEditScreen extends StatelessWidget {
           }
           final byMotor = {for (final p in svc.catalog) p.motorId: p};
           final motors = MotorLayout.allMotors().toList();
-          return ListView.separated(
-            padding: const EdgeInsets.all(12),
-            itemCount: motors.length,
-            separatorBuilder: (_, _) => const SizedBox(height: 8),
-            itemBuilder: (_, i) {
-              final motorId = motors[i];
-              final product = byMotor[motorId];
-              return _ProductRow(motorId: motorId, product: product);
-            },
+          return Column(
+            children: [
+              const _SensorModeHeader(),
+              Expanded(
+                child: ListView.separated(
+                  padding: const EdgeInsets.all(12),
+                  itemCount: motors.length,
+                  separatorBuilder: (_, _) => const SizedBox(height: 8),
+                  itemBuilder: (_, i) {
+                    final motorId = motors[i];
+                    final product = byMotor[motorId];
+                    return _ProductRow(motorId: motorId, product: product);
+                  },
+                ),
+              ),
+            ],
           );
         },
+      ),
+    );
+  }
+}
+
+/// Global "real dispense" sensor mode, persisted in DeviceStorage. The
+/// picker sits on top of the inventory list because that's where the
+/// operator manages the warehouse / slots — it's conceptually a
+/// per-machine warehouse setting, not a per-product one.
+class _SensorModeHeader extends StatelessWidget {
+  const _SensorModeHeader();
+
+  @override
+  Widget build(BuildContext context) {
+    final s = context.watch<Strings>();
+    final storage = context.watch<DeviceStorage>();
+    final mode = storage.dispenseSensorMode;
+    return Container(
+      padding: const EdgeInsets.fromLTRB(16, 12, 16, 14),
+      decoration: const BoxDecoration(
+        color: AppColors.surfaceContainerLowest,
+        border: Border(
+          bottom: BorderSide(
+              color: AppColors.surfaceContainerHigh, width: 0.5),
+        ),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              const Icon(Icons.sensors,
+                  size: 18, color: AppColors.primary),
+              const SizedBox(width: 8),
+              Text(
+                s.t('service_sensor_mode').toUpperCase(),
+                style: const TextStyle(
+                    fontSize: 11,
+                    fontWeight: FontWeight.bold,
+                    letterSpacing: 1.5,
+                    color: AppColors.onSurfaceVariant),
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          SegmentedButton<int>(
+            showSelectedIcon: false,
+            segments: [
+              ButtonSegment(value: 0, label: Text(s.t('sensor_off'))),
+              ButtonSegment(value: 1, label: Text(s.t('sensor_on'))),
+            ],
+            selected: {mode},
+            onSelectionChanged: (set) =>
+                storage.setDispenseSensorMode(set.first),
+          ),
+          const SizedBox(height: 6),
+          Text(
+            s.t('sensor_mode_hint'),
+            style: const TextStyle(
+                fontSize: 11,
+                color: AppColors.onSurfaceVariant,
+                height: 1.3),
+          ),
+        ],
       ),
     );
   }

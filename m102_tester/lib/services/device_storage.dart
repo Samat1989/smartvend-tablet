@@ -10,8 +10,13 @@ class DeviceStorage extends ChangeNotifier {
   static const _kServicePin = 'service_pin';
   static const _kLanguage = 'language';
   static const _kGridColumns = 'grid_columns';
+  static const _kDispenseSensorMode = 'dispense_sensor_mode';
   static const _defaultPin = '1234';
   static const _defaultGridColumns = 3;
+  static const _defaultDispenseSensorMode = 1; // sensor required by default
+  // — most installs have the IR curtain wired, so refund-on-no-drop is
+  // the safer default for production. Operator can turn it off from the
+  // inventory screen for machines without a sensor.
   static const minGridColumns = 2;
   static const maxGridColumns = 5;
 
@@ -29,6 +34,15 @@ class DeviceStorage extends ChangeNotifier {
   /// 2..5 from the service menu for very narrow or very wide screens.
   int get gridColumns =>
       _prefs.getInt(_kGridColumns) ?? _defaultGridColumns;
+
+  /// Drop-sensor (light-curtain) mode used for every real dispense.
+  /// 0 = off (motor result only), 1 = sensor required (refund if no drop).
+  /// Mode 2 (priority) is intentionally NOT exposed here — it's only
+  /// available as a one-off override on the test-motor screen, where the
+  /// operator may want to exercise the sensor without changing the
+  /// machine's normal behaviour.
+  int get dispenseSensorMode =>
+      _prefs.getInt(_kDispenseSensorMode) ?? _defaultDispenseSensorMode;
 
   bool get isPaired {
     final m = machid;
@@ -67,6 +81,14 @@ class DeviceStorage extends ChangeNotifier {
   Future<void> setGridColumns(int n) async {
     final clamped = n.clamp(minGridColumns, maxGridColumns);
     await _prefs.setInt(_kGridColumns, clamped);
+    notifyListeners();
+  }
+
+  Future<void> setDispenseSensorMode(int mode) async {
+    // 0 = off, 1 = on. Mode 2 (priority) is rejected here so it can't
+    // accidentally end up as the "all dispenses" default.
+    final clamped = mode == 1 ? 1 : 0;
+    await _prefs.setInt(_kDispenseSensorMode, clamped);
     notifyListeners();
   }
 }

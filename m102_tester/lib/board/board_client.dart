@@ -158,7 +158,11 @@ class BoardClient extends ChangeNotifier {
 
   List<UsbDevice> get devices => List.unmodifiable(_devices);
   UsbDevice? get selectedDevice => _selected;
-  bool get isConnected => _port != null;
+  /// In debug builds (`flutter run` on emulator or any non-release sideload)
+  /// pretend the M102 is connected even when no real USB port is open, so
+  /// the UI doesn't spam "board disconnected" while you exercise the
+  /// payment/sale flow without hardware. Release builds report the truth.
+  bool get isConnected => _port != null || kDebugMode;
   int get baud => _baud;
   int get slaveAddr => _slaveAddr;
   Stream<LogEntry> get logStream => _logCtrl.stream;

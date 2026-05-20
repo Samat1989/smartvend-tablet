@@ -76,6 +76,10 @@ class ServiceMenuScreen extends StatelessWidget {
                       color: Colors.deepPurple,
                       onTap: () => _changeLayout(context),
                     ),
+                    // Sensor mode picker moved into the inventory screen.
+                    // The operator manages slot-level concerns there, and
+                    // sensor mode is one of them — keeps service-menu
+                    // focused on machine-wide settings (PIN, layout, etc).
                     _Tile(
                       icon: Icons.password,
                       label: s.t('service_change_pin'),

@@ -173,6 +173,52 @@ class Strings extends ChangeNotifier {
       'kk': 'Каталог орналасуы',
       'en': 'Catalog layout',
     },
+    'service_sensor_mode': {
+      'ru': 'Режим выдачи',
+      'kk': 'Беру режимі',
+      'en': 'Dispense mode',
+    },
+    'sensor_off': {
+      'ru': 'Без датчика',
+      'kk': 'Сенсорсыз',
+      'en': 'Without sensor',
+    },
+    'sensor_on': {
+      'ru': 'С датчиком',
+      'kk': 'Сенсормен',
+      'en': 'With sensor',
+    },
+    'sensor_priority': {
+      'ru': 'Приоритет',
+      'kk': 'Басымдылық',
+      'en': 'Priority',
+    },
+    'sensor_mode_hint': {
+      'ru':
+          'Применяется ко всем слотам. «С датчиком» делает рефанд если '
+              'товар не упал в зону луча после оборота мотора.',
+      'kk':
+          'Барлық слоттарға қолданылады. «Сенсормен» — мотор айналғаннан '
+              'кейін тауар сәуле аймағына түспесе, ақша қайтарылады.',
+      'en':
+          'Applied to every slot. "With sensor" issues a refund when the '
+              'motor finished but the drop sensor never triggered.',
+    },
+    'test_mode_override': {
+      'ru': 'Режим теста',
+      'kk': 'Тест режимі',
+      'en': 'Test mode',
+    },
+    'tap_to_test': {
+      'ru': 'Нажмите на слот для теста',
+      'kk': 'Тексеру үшін слотты басыңыз',
+      'en': 'Tap a slot to test it',
+    },
+    'testing_motor': {
+      'ru': 'Тест мотора',
+      'kk': 'Мотор тексерілуде',
+      'en': 'Testing motor',
+    },
     'layout_columns': {
       'ru': 'Товаров в строке',
       'kk': 'Жолдағы тауарлар саны',

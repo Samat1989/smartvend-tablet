@@ -24,6 +24,9 @@ uber-apk-signer*.jar
 # they help future contributors (and the AI assistant) pick up where we
 # left off. Only the personal local override is gitignored.
 .claude/settings.local.json
+# Lock file is runtime state, no value in source control. Use `**/`
+# so it matches both `.claude/` at the root and inside `m102_tester/`.
+**/.claude/scheduled_tasks.lock
 
 # --- Python -------------------------------------------------------------
 __pycache__/

@@ -4,7 +4,6 @@ import 'package:provider/provider.dart';
 
 import '../board/board_client.dart';
 import '../models/product.dart';
-import '../services/climate_controller.dart';
 import '../services/device_storage.dart';
 import '../services/strings.dart';
 import '../services/vending_service.dart';
@@ -25,18 +24,19 @@ class HomeScreen extends StatefulWidget {
 }
 
 class _HomeScreenState extends State<HomeScreen> {
-  String _search = '';
   String? _selectedCategoryId;
-  // Hidden service entry: 5 quick taps on the logo within 2 seconds.
-  final List<DateTime> _logoTaps = [];
+  // Hidden service entry: 5 quick taps on the machine-id corner badge
+  // within 2 seconds. The badge is intentionally tiny and at the bottom-
+  // right so customers don't discover it.
+  final List<DateTime> _serviceTaps = [];
 
-  void _onLogoTap() {
+  void _onServiceTap() {
     final now = DateTime.now();
-    _logoTaps
+    _serviceTaps
       ..add(now)
       ..removeWhere((t) => now.difference(t) > const Duration(seconds: 2));
-    if (_logoTaps.length >= 5) {
-      _logoTaps.clear();
+    if (_serviceTaps.length >= 5) {
+      _serviceTaps.clear();
       Navigator.of(context).push(
         MaterialPageRoute(builder: (_) => const ServicePinScreen()),
       );
@@ -55,26 +55,23 @@ class _HomeScreenState extends State<HomeScreen> {
           children: [
             Column(
               children: [
-                _Header(onLogoTap: _onLogoTap),
-                _SearchBar(
-                  value: _search,
-                  onChanged: (v) => setState(() => _search = v),
-                ),
+                // No header, no search bar — categories chips sit at the
+                // very top, customer scrolls/filters via chips only.
+                const SizedBox(height: 8),
                 _CategoryChips(
                   selectedId: _selectedCategoryId,
                   onSelect: (id) =>
                       setState(() => _selectedCategoryId = id),
                 ),
                 Expanded(
-                  child: _Body(
-                    search: _search,
-                    categoryId: _selectedCategoryId,
-                  ),
+                  child: _Body(categoryId: _selectedCategoryId),
                 ),
               ],
             ),
             if (svc.cartCount > 0 && !boardDown) const _FloatingCartBar(),
-            if (boardDown) _MaintenanceOverlay(onLogoTap: _onLogoTap),
+            if (boardDown) _MaintenanceOverlay(onServiceTap: _onServiceTap),
+            const _LangCorner(),
+            _MachidCorner(onTap: _onServiceTap),
           ],
         ),
       ),
@@ -85,9 +82,9 @@ class _HomeScreenState extends State<HomeScreen> {
 /// Full-screen "out of service" curtain shown when the M102 board is
 /// either disconnected or hasn't responded to the last 4 commands.
 class _MaintenanceOverlay extends StatelessWidget {
-  const _MaintenanceOverlay({required this.onLogoTap});
+  const _MaintenanceOverlay({required this.onServiceTap});
 
-  final VoidCallback onLogoTap;
+  final VoidCallback onServiceTap;
 
   @override
   Widget build(BuildContext context) {
@@ -95,7 +92,7 @@ class _MaintenanceOverlay extends StatelessWidget {
     return Positioned.fill(
       child: GestureDetector(
         behavior: HitTestBehavior.opaque,
-        onTap: onLogoTap,
+        onTap: onServiceTap,
         child: Container(
           color: const Color(0xEB2F2E32),
           alignment: Alignment.center,
@@ -133,179 +130,103 @@ class _MaintenanceOverlay extends StatelessWidget {
   }
 }
 
-class _Header extends StatelessWidget {
-  const _Header({required this.onLogoTap});
+// _Header removed entirely — its only remaining content (bag icon and
+// language switcher) is gone or relocated. Search bar now sits at the
+// top of the column, language goes into the bottom-left corner.
 
-  final VoidCallback onLogoTap;
+/// Tiny machine number in the bottom-right. Doubles as the hidden
+/// 5-tap entry point to service mode (the round logo + bag-icon that
+/// used to host it was removed). It's small enough that customers
+/// ignore it and the operator knows where to tap.
+class _MachidCorner extends StatelessWidget {
+  const _MachidCorner({required this.onTap});
+
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final machid = context.watch<DeviceStorage>().machid;
+    if (machid == null) return const SizedBox.shrink();
+    return Positioned(
+      right: 8,
+      bottom: 6,
+      child: GestureDetector(
+        onTap: onTap,
+        behavior: HitTestBehavior.opaque,
+        // A bit of inflated padding makes the 10pt text easier to
+        // hit with a finger without making the visible label larger.
+        child: Padding(
+          padding: const EdgeInsets.all(8),
+          child: Text(
+            '№$machid',
+            style: const TextStyle(
+                fontSize: 10,
+                fontWeight: FontWeight.bold,
+                letterSpacing: 0.5,
+                color: Color(0x665D5B5F)),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// Language toggle in the bottom-LEFT corner. One tap cycles through
+/// ru → kk → en → ru — no popup, no list. Visually mirrors the
+/// machid corner on the opposite side.
+class _LangCorner extends StatelessWidget {
+  const _LangCorner();
+
+  static const _cycle = ['ru', 'kk', 'en'];
 
   @override
   Widget build(BuildContext context) {
     final s = context.watch<Strings>();
-    final storage = context.watch<DeviceStorage>();
-    return Container(
-      padding: const EdgeInsets.fromLTRB(20, 14, 20, 14),
-      decoration: const BoxDecoration(
-        // glassmorphism approximation — the customer_web uses 80% opacity
-        // background + backdrop blur. Solid 88% is visually similar
-        // without the GPU cost of BackdropFilter on the kiosk.
-        color: Color(0xE0FAF5FB),
-        border: Border(
-          bottom: BorderSide(
-              color: AppColors.surfaceContainerHigh, width: 0.5),
-        ),
-      ),
-      child: Row(
-        children: [
-          GestureDetector(
-            onTap: onLogoTap,
-            behavior: HitTestBehavior.opaque,
+    final i = _cycle.indexOf(s.lang);
+    final next = _cycle[(i + 1) % _cycle.length];
+    final display = s.lang == 'kk' ? 'KZ' : s.lang.toUpperCase();
+    return Positioned(
+      left: 8,
+      bottom: 6,
+      child: Material(
+        color: const Color(0xCCFFFFFF),
+        shape: const StadiumBorder(),
+        elevation: 1,
+        shadowColor: Colors.black12,
+        child: InkWell(
+          customBorder: const StadiumBorder(),
+          onTap: () => s.setLang(next),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
             child: Row(
+              mainAxisSize: MainAxisSize.min,
               children: [
-                Container(
-                  width: 40,
-                  height: 40,
-                  decoration: const BoxDecoration(
-                    color: Color(0x1A9C3F00), // primary @ 10%
-                    shape: BoxShape.circle,
+                const Icon(Icons.language,
+                    size: 14, color: AppColors.primary),
+                const SizedBox(width: 4),
+                Text(
+                  display,
+                  style: const TextStyle(
+                    color: AppColors.primary,
+                    fontWeight: FontWeight.w900,
+                    fontSize: 11,
+                    letterSpacing: 0.5,
                   ),
-                  child: const Icon(Icons.shopping_bag_outlined,
-                      color: AppColors.primary, size: 20),
-                ),
-                const SizedBox(width: 12),
-                Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(s.t('app_title'),
-                        style: const TextStyle(
-                            color: AppColors.primary,
-                            fontSize: 20,
-                            fontWeight: FontWeight.w900,
-                            letterSpacing: -0.8)),
-                    Text(
-                      '№${storage.machid ?? '—'}',
-                      style: const TextStyle(
-                          fontSize: 10,
-                          fontWeight: FontWeight.bold,
-                          letterSpacing: 1.5,
-                          color: AppColors.onSurfaceVariant),
-                    ),
-                  ],
                 ),
               ],
             ),
           ),
-          const Spacer(),
-          const _ClimateBadge(),
-          const SizedBox(width: 4),
-          const _LangSwitcher(),
-        ],
-      ),
-    );
-  }
-}
-
-class _LangSwitcher extends StatelessWidget {
-  const _LangSwitcher();
-
-  @override
-  Widget build(BuildContext context) {
-    final s = context.watch<Strings>();
-    return PopupMenuButton<String>(
-      tooltip: '',
-      icon: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          const Icon(Icons.language, color: AppColors.primary, size: 20),
-          const SizedBox(width: 4),
-          Text(
-            s.lang.toUpperCase() == 'KK' ? 'KZ' : s.lang.toUpperCase(),
-            style: const TextStyle(
-                color: AppColors.primary,
-                fontWeight: FontWeight.bold,
-                fontSize: 12),
-          ),
-        ],
-      ),
-      onSelected: (code) => s.setLang(code),
-      itemBuilder: (_) => const [
-        PopupMenuItem(value: 'ru', child: Text('Русский')),
-        PopupMenuItem(value: 'kk', child: Text('Қазақша')),
-        PopupMenuItem(value: 'en', child: Text('English')),
-      ],
-    );
-  }
-}
-
-class _ClimateBadge extends StatelessWidget {
-  const _ClimateBadge();
-
-  @override
-  Widget build(BuildContext context) {
-    return Consumer<ClimateController>(
-      builder: (context, climate, _) {
-        final t = climate.temperatureC;
-        if (t == null) return const SizedBox.shrink();
-        final tStr = '${t.toStringAsFixed(1)}°';
-        final compressing = climate.compressorOn;
-        return Container(
-          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-          decoration: BoxDecoration(
-            color: compressing
-                ? const Color(0xFFE3F2FD)
-                : AppColors.surfaceContainerLow,
-            borderRadius: BorderRadius.circular(20),
-          ),
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Icon(
-                compressing ? Icons.ac_unit : Icons.thermostat,
-                size: 14,
-                color: compressing
-                    ? Colors.lightBlue
-                    : AppColors.onSurfaceVariant,
-              ),
-              const SizedBox(width: 4),
-              Text(tStr,
-                  style: TextStyle(
-                      fontSize: 11,
-                      fontWeight: FontWeight.bold,
-                      color: compressing
-                          ? Colors.lightBlue.shade800
-                          : AppColors.onSurfaceVariant)),
-            ],
-          ),
-        );
-      },
-    );
-  }
-}
-
-class _SearchBar extends StatelessWidget {
-  const _SearchBar({required this.value, required this.onChanged});
-
-  final String value;
-  final ValueChanged<String> onChanged;
-
-  @override
-  Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(20, 16, 20, 8),
-      child: TextField(
-        decoration: const InputDecoration(
-          hintText: '...',
-          prefixIcon: Icon(Icons.search,
-              color: AppColors.onSurfaceVariant, size: 20),
-          fillColor: AppColors.surfaceContainerLow,
-          filled: true,
-          contentPadding:
-              EdgeInsets.symmetric(horizontal: 14, vertical: 14),
         ),
-        onChanged: onChanged,
       ),
     );
   }
 }
+
+// _ClimateBadge removed — temperature is operator-only info, accessible
+// from service mode → "Холодильник". Customers don't need it.
+
+// _SearchBar removed — customers find products by category chips only.
+// Kept _Body without the `search` filter parameter accordingly.
 
 class _CategoryChips extends StatelessWidget {
   const _CategoryChips({
@@ -396,9 +317,8 @@ class _Chip extends StatelessWidget {
 }
 
 class _Body extends StatelessWidget {
-  const _Body({required this.search, required this.categoryId});
+  const _Body({required this.categoryId});
 
-  final String search;
   final String? categoryId;
 
   @override
@@ -413,10 +333,8 @@ class _Body extends StatelessWidget {
           case CatalogState.error:
             return _ErrorView(message: svc.error ?? '');
           case CatalogState.ready:
-            final query = search.toLowerCase();
             final filtered = svc.catalog.where((p) {
               if (p.stock <= 0) return false;
-              if (!p.name.toLowerCase().contains(query)) return false;
               if (categoryId != null && p.categoryId != categoryId) {
                 return false;
               }
@@ -445,9 +363,10 @@ class _Body extends StatelessWidget {
                 crossAxisCount: cols,
                 mainAxisSpacing: 14,
                 crossAxisSpacing: 14,
-                // Slightly taller than wide so name + price + stepper all
-                // get vertical headroom even at narrow phone widths.
-                childAspectRatio: 0.66,
+                // Full-bleed image cards look balanced at ~3:4 portrait
+                // ratio — gives enough vertical room for the name+price
+                // overlay and the stepper without squashing the photo.
+                childAspectRatio: 0.78,
               ),
               itemCount: filtered.length,
               itemBuilder: (_, i) => _ProductTile(product: filtered[i]),
@@ -518,7 +437,7 @@ class _ProductTile extends StatelessWidget {
 
     return Container(
       decoration: BoxDecoration(
-        color: AppColors.surfaceContainerLowest,
+        color: AppColors.surfaceContainerLow,
         borderRadius: BorderRadius.circular(20),
         boxShadow: const [appCardShadow],
       ),
@@ -527,125 +446,107 @@ class _ProductTile extends StatelessWidget {
         color: Colors.transparent,
         child: InkWell(
           // Whole card is tappable — first tap adds to cart, subsequent
-          // taps work too (up to stock). Once count > 0 the inline
-          // stepper at the bottom takes over for fine control.
+          // taps work too. Once count > 0 the inline stepper at the
+          // bottom takes over for fine control.
           onTap: canAdd ? () => svc.addToCart(product) : null,
-          child: Padding(
-            padding: const EdgeInsets.all(10),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                // Thumbnail uses Expanded so it shrinks/grows with the
-                // available card height and never overflows. The shelf
-                // label is overlaid as a small badge so the customer can
-                // glance from the screen to the physical sticker on the
-                // machine and confirm they're at the right slot.
-                Expanded(
-                  child: Stack(
-                    children: [
-                      Positioned.fill(
-                        child: ClipRRect(
-                          borderRadius: BorderRadius.circular(12),
-                          child: Container(
-                            color: AppColors.surfaceContainerLow,
-                            alignment: Alignment.center,
-                            child: ProductThumb(
-                              product: product,
-                              emojiSize: 56,
-                            ),
-                          ),
-                        ),
-                      ),
-                      Positioned(
-                        top: 6,
-                        left: 6,
-                        child: Container(
-                          padding: const EdgeInsets.symmetric(
-                              horizontal: 7, vertical: 3),
-                          decoration: BoxDecoration(
-                            color: const Color(0xCC2F2E32),
-                            borderRadius: BorderRadius.circular(8),
-                          ),
-                          child: Text(
-                            product.shelfLabel,
-                            style: const TextStyle(
-                              color: Colors.white,
-                              fontSize: 10,
-                              fontWeight: FontWeight.w900,
-                              letterSpacing: 0.6,
-                              fontFeatures: [FontFeature.tabularFigures()],
-                            ),
-                          ),
-                        ),
-                      ),
-                    ],
+          child: Stack(
+            fit: StackFit.expand,
+            children: [
+              // ---------- 1. Full-bleed image background ----------
+              // No padding — the image (or emoji fallback) fills the
+              // entire card edge-to-edge, like a food-delivery tile.
+              Positioned.fill(
+                child: ProductThumb(
+                  product: product,
+                  emojiSize: 72,
+                  fit: BoxFit.cover,
+                ),
+              ),
+              // ---------- 2. Dark gradient at the bottom ----------
+              // Keeps the name + price readable over any image content.
+              Positioned(
+                left: 0,
+                right: 0,
+                bottom: 0,
+                child: Container(
+                  height: 110,
+                  decoration: const BoxDecoration(
+                    gradient: LinearGradient(
+                      begin: Alignment.topCenter,
+                      end: Alignment.bottomCenter,
+                      colors: [
+                        Color(0x002F2E32),
+                        Color(0xCC2F2E32),
+                        Color(0xEE2F2E32),
+                      ],
+                      stops: [0.0, 0.55, 1.0],
+                    ),
                   ),
                 ),
-                const SizedBox(height: 8),
-                Text(
-                  product.name,
-                  maxLines: 2,
-                  overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(
-                    fontSize: 13,
-                    fontWeight: FontWeight.bold,
-                    color: AppColors.onSurface,
-                    letterSpacing: -0.2,
-                    height: 1.15,
+              ),
+              // ---------- 3. Slot label badge top-left ----------
+              Positioned(
+                top: 8,
+                left: 8,
+                child: Container(
+                  padding: const EdgeInsets.symmetric(
+                      horizontal: 8, vertical: 4),
+                  decoration: BoxDecoration(
+                    color: const Color(0xCC2F2E32),
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: Text(
+                    product.shelfLabel,
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 10,
+                      fontWeight: FontWeight.w900,
+                      letterSpacing: 0.6,
+                      fontFeatures: [FontFeature.tabularFigures()],
+                    ),
                   ),
                 ),
-                const SizedBox(height: 6),
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                  crossAxisAlignment: CrossAxisAlignment.center,
+              ),
+              // ---------- 4. Name + price overlay at bottom ----------
+              Positioned(
+                left: 10,
+                right: 10,
+                bottom: count > 0 ? 50 : 10,
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
                   children: [
+                    Text(
+                      product.name,
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 14,
+                        fontWeight: FontWeight.w900,
+                        letterSpacing: -0.3,
+                        height: 1.1,
+                      ),
+                    ),
+                    const SizedBox(height: 4),
                     RichText(
                       text: TextSpan(
                         children: [
                           TextSpan(
                             text: '${product.priceTenge} ',
                             style: const TextStyle(
-                              fontSize: 16,
+                              fontSize: 18,
                               fontWeight: FontWeight.w900,
-                              color: AppColors.primary,
-                              letterSpacing: -0.4,
+                              color: Colors.white,
+                              letterSpacing: -0.5,
                             ),
                           ),
                           const TextSpan(
                             text: '₸',
                             style: TextStyle(
-                              fontSize: 11,
-                              color: Color(0xCC9C3F00),
+                              fontSize: 12,
+                              color: Color(0xCCFFFFFF),
                               fontWeight: FontWeight.bold,
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                    Container(
-                      padding: const EdgeInsets.symmetric(
-                          horizontal: 6, vertical: 2),
-                      decoration: BoxDecoration(
-                        color: AppColors.surfaceContainerHigh,
-                        borderRadius: BorderRadius.circular(8),
-                      ),
-                      child: Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          const Icon(Icons.inventory_2_outlined,
-                              size: 10,
-                              color: AppColors.onSurfaceVariant),
-                          const SizedBox(width: 3),
-                          // Show what's left AFTER the customer's cart, not
-                          // the raw DB stock — otherwise the counter
-                          // wouldn't visibly drop as they tap, which is the
-                          // bug "после выбора товара не уменьшается остаток".
-                          Text(
-                            '${(product.stock - count).clamp(0, product.stock)}',
-                            style: const TextStyle(
-                              fontSize: 10,
-                              fontWeight: FontWeight.bold,
-                              color: AppColors.onSurfaceVariant,
                             ),
                           ),
                         ],
@@ -653,17 +554,21 @@ class _ProductTile extends StatelessWidget {
                     ),
                   ],
                 ),
-                if (count > 0) ...[
-                  const SizedBox(height: 8),
-                  _InlineStepper(
+              ),
+              // ---------- 5. Inline stepper at bottom when in cart ----
+              if (count > 0)
+                Positioned(
+                  left: 10,
+                  right: 10,
+                  bottom: 8,
+                  child: _InlineStepper(
                     count: count,
                     canAdd: canAdd,
                     onMinus: () => svc.removeOne(product.motorId),
                     onPlus: () => svc.addToCart(product),
                   ),
-                ],
-              ],
-            ),
+                ),
+            ],
           ),
         ),
       ),

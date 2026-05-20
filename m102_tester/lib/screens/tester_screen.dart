@@ -1,15 +1,23 @@
-import 'dart:async';
-
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
-import 'package:usb_serial/usb_serial.dart';
 
 import '../board/board_client.dart';
+import '../models/motor_layout.dart';
+import '../services/strings.dart';
+import '../theme.dart';
 
-/// Original M102 tester UI — keeps every low-level command, raw send,
-/// auto-poll and live log. Available from the home screen via long-press
-/// on the settings icon.
+/// Operator-facing motor tester.
+///
+/// 6×6 grid of all physical slots (labels 001..056 → motor ids 99..44).
+/// One tap runs a full RUN-then-POLL cycle on that motor with the
+/// currently-selected curtain mode and shows the result inline on the
+/// card. The card briefly highlights green/red/orange while a result
+/// is held, then returns to neutral.
+///
+/// Curtain mode at the top of the screen is the per-test override —
+/// includes the priority (=2) variant that's intentionally NOT offered
+/// in the main «Режим выдачи» dialog. Useful for one-off diagnostics
+/// of the drop sensor without changing how real sales behave.
 class TesterScreen extends StatefulWidget {
   const TesterScreen({super.key});
 
@@ -18,410 +26,294 @@ class TesterScreen extends StatefulWidget {
 }
 
 class _TesterScreenState extends State<TesterScreen> {
-  final _slaveCtrl = TextEditingController();
-  final _motorIdxCtrl = TextEditingController(text: '0');
-  final _motorTypeCtrl = TextEditingController(text: '2');
-  final _motorCurtainCtrl = TextEditingController(text: '0');
-  final _doIdxCtrl = TextEditingController(text: '0');
-  final _doStateCtrl = TextEditingController(text: '1');
-  final _rawCtrl = TextEditingController();
+  /// Curtain mode used for tests started from this screen. Reset to 0
+  /// (off) when entering — the operator picks per-session if needed.
+  int _curtain = 0;
 
-  Timer? _pollTimer;
-  bool _autoPoll = false;
+  /// Currently-running motor id, or null when idle. Used to disable
+  /// other cards while a test is in flight (board can only run one
+  /// motor at a time).
+  int? _runningMotorId;
 
-  StreamSubscription<LogEntry>? _logSub;
-  final _logScroll = ScrollController();
-  final _logs = <LogEntry>[];
+  /// Last result per motor id, used to colour the cards after a test.
+  /// `null` = never tested, `true` = success, `false` = error.
+  final Map<int, bool> _results = {};
 
-  @override
-  void initState() {
-    super.initState();
+  /// Optional human label for the result (e.g. localized poll code).
+  final Map<int, String> _resultText = {};
+
+  Future<void> _runTest(int motorId) async {
+    if (_runningMotorId != null) return;
+    final s = context.read<Strings>();
     final board = context.read<BoardClient>();
-    _slaveCtrl.text = board.slaveAddr.toString();
-    _logs.addAll(board.logHistory);
-    _logSub = board.logStream.listen((e) {
-      setState(() {
-        _logs.add(e);
-        if (_logs.length > 1000) _logs.removeRange(0, _logs.length - 1000);
-      });
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (_logScroll.hasClients) {
-          _logScroll.jumpTo(_logScroll.position.maxScrollExtent);
-        }
-      });
+    if (!board.isConnected) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text(s.t('board_not_found')),
+        backgroundColor: const Color(0xFFB3261E),
+      ));
+      return;
+    }
+    setState(() => _runningMotorId = motorId);
+    final r = await board.dispense(
+      motorId,
+      type: 2, // physical machine is all 2-wire; matches motor_layout doc
+      curtain: _curtain,
+    );
+    if (!mounted) return;
+    final code = r.finalStatus?.result;
+    setState(() {
+      _runningMotorId = null;
+      _results[motorId] = r.success;
+      _resultText[motorId] =
+          code != null ? s.pollResult(code) : (r.success ? 'OK' : r.message);
     });
   }
 
   @override
-  void dispose() {
-    _pollTimer?.cancel();
-    _logSub?.cancel();
-    _slaveCtrl.dispose();
-    _motorIdxCtrl.dispose();
-    _motorTypeCtrl.dispose();
-    _motorCurtainCtrl.dispose();
-    _doIdxCtrl.dispose();
-    _doStateCtrl.dispose();
-    _rawCtrl.dispose();
-    _logScroll.dispose();
-    super.dispose();
+  Widget build(BuildContext context) {
+    final s = context.watch<Strings>();
+    return Scaffold(
+      backgroundColor: AppColors.background,
+      appBar: AppBar(
+        title: Text(s.t('service_test_motors').toUpperCase(),
+            style: const TextStyle(
+                fontWeight: FontWeight.w900,
+                letterSpacing: -0.5,
+                fontSize: 20)),
+      ),
+      body: Column(
+        children: [
+          _TopBar(
+            curtain: _curtain,
+            disabled: _runningMotorId != null,
+            onChanged: (v) => setState(() => _curtain = v),
+          ),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 8, 16, 4),
+            child: Row(
+              children: [
+                const Icon(Icons.info_outline,
+                    size: 14, color: AppColors.onSurfaceVariant),
+                const SizedBox(width: 6),
+                Expanded(
+                  child: Text(
+                    s.t('tap_to_test'),
+                    style: const TextStyle(
+                        fontSize: 12,
+                        color: AppColors.onSurfaceVariant),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          Expanded(
+            child: GridView.builder(
+              padding: const EdgeInsets.all(12),
+              gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+                crossAxisCount: MotorLayout.cols, // 6 — matches physical layout
+                mainAxisSpacing: 8,
+                crossAxisSpacing: 8,
+                childAspectRatio: 0.85,
+              ),
+              itemCount: MotorLayout.totalMotors,
+              itemBuilder: (_, i) {
+                final motorId = MotorLayout.allMotors().toList()[i];
+                final shelf = MotorLayout.motorToLabel(motorId);
+                final running = _runningMotorId == motorId;
+                final result = _results[motorId];
+                final resultText = _resultText[motorId];
+                return _MotorCard(
+                  shelf: shelf,
+                  motorId: motorId,
+                  running: running,
+                  disabledByOthers:
+                      _runningMotorId != null && !running,
+                  lastResult: result,
+                  lastResultText: resultText,
+                  onTap: () => _runTest(motorId),
+                );
+              },
+            ),
+          ),
+        ],
+      ),
+    );
   }
+}
 
-  void _toggleAutoPoll(BoardClient board) {
-    setState(() => _autoPoll = !_autoPoll);
-    _pollTimer?.cancel();
-    if (_autoPoll) {
-      _pollTimer = Timer.periodic(const Duration(milliseconds: 900), (_) {
-        board.poll();
-      });
-    }
-  }
+/// Curtain-mode segmented selector with section label above it. Disabled
+/// while a test is mid-flight so the operator can't change the param
+/// while a motor is already running with the previous setting.
+class _TopBar extends StatelessWidget {
+  const _TopBar({
+    required this.curtain,
+    required this.disabled,
+    required this.onChanged,
+  });
 
-  Future<void> _sendRaw(BoardClient board) async {
-    final hex = _rawCtrl.text.replaceAll(RegExp(r'[\s,:]'), '');
-    if (hex.isEmpty || hex.length.isOdd) return;
-    final bytes = Uint8List(hex.length ~/ 2);
-    for (int i = 0; i < bytes.length; i++) {
-      bytes[i] = int.parse(hex.substring(i * 2, i * 2 + 2), radix: 16);
-    }
-    // Use the public send-and-receive path via a one-off frame: write directly.
-    // The BoardClient doesn't expose raw write because protocol commands
-    // already build correct frames; here we keep manual control for debug.
-    if (!board.isConnected) return;
-    // Bypass framing — we treat _rawCtrl input as a fully formed frame.
-    // (Kept for advanced testing only.)
-    await _writeRawBypass(board, bytes);
-  }
-
-  /// Write raw bytes through the connected port, without waiting for a
-  /// response. The RX listener will still log incoming bytes.
-  Future<void> _writeRawBypass(BoardClient board, Uint8List bytes) async {
-    // We don't have a public API for this; reach via reflection of the
-    // exposed connect path. Since BoardClient doesn't expose port, we
-    // expose this through a dedicated method below in BoardClient if needed.
-    // Simpler: drop down to commands the BoardClient knows about.
-    // For now: only accept frames whose opcode matches a known command,
-    // so the response correlation works.
-    if (bytes.length < 2) return;
-    final cmd = bytes[1];
-    final data = bytes.length > 18 ? bytes.sublist(2, 18) : bytes.sublist(2);
-    switch (cmd) {
-      case 0x01:
-        await board.getId();
-        break;
-      case 0x03:
-        await board.poll();
-        break;
-      case 0x05:
-        if (data.length >= 3) {
-          await board.motorRun(data[0], type: data[1], curtain: data[2]);
-        }
-        break;
-      case 0x07:
-        await board.readTemp();
-        break;
-      case 0x08:
-        if (data.length >= 2) {
-          await board.writeDo(data[0], data[1] != 0);
-        }
-        break;
-      default:
-        // Unsupported in correlation-based API — quietly ignore.
-        break;
-    }
-  }
+  final int curtain;
+  final bool disabled;
+  final ValueChanged<int> onChanged;
 
   @override
   Widget build(BuildContext context) {
-    return Consumer<BoardClient>(
-      builder: (context, board, _) {
-        final connected = board.isConnected;
-        return Scaffold(
-          appBar: AppBar(
-            title: const Text('Админ — M102 тестер'),
-            actions: [
-              IconButton(
-                tooltip: 'Refresh devices',
-                onPressed: board.refreshDevices,
-                icon: const Icon(Icons.refresh),
-              ),
-              IconButton(
-                tooltip: 'Clear log',
-                onPressed: () => setState(_logs.clear),
-                icon: const Icon(Icons.delete_sweep),
-              ),
-            ],
+    final s = context.watch<Strings>();
+    return Container(
+      padding: const EdgeInsets.fromLTRB(16, 12, 16, 12),
+      decoration: const BoxDecoration(
+        color: AppColors.surfaceContainerLowest,
+        border: Border(
+          bottom:
+              BorderSide(color: AppColors.surfaceContainerHigh, width: 0.5),
+        ),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            s.t('test_mode_override').toUpperCase(),
+            style: const TextStyle(
+                fontSize: 10,
+                fontWeight: FontWeight.bold,
+                letterSpacing: 1.5,
+                color: AppColors.onSurfaceVariant),
           ),
-          body: SafeArea(
+          const SizedBox(height: 8),
+          SegmentedButton<int>(
+            showSelectedIcon: false,
+            segments: [
+              ButtonSegment(value: 0, label: Text(s.t('curtain_off'))),
+              ButtonSegment(value: 1, label: Text(s.t('curtain_standard'))),
+              ButtonSegment(value: 2, label: Text(s.t('curtain_priority'))),
+            ],
+            selected: {curtain},
+            onSelectionChanged:
+                disabled ? null : (set) => onChanged(set.first),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// Single motor tile. Visual state in priority order:
+///   1. running   → primary-tinted background, spinner under the label
+///   2. last=true → green tint, localized poll code
+///   3. last=false → red tint, localized poll code / error message
+///   4. otherwise → neutral white card
+///
+/// `disabledByOthers` darkens the card when another test is mid-flight
+/// so the operator doesn't queue up taps the board can't service.
+class _MotorCard extends StatelessWidget {
+  const _MotorCard({
+    required this.shelf,
+    required this.motorId,
+    required this.running,
+    required this.disabledByOthers,
+    required this.lastResult,
+    required this.lastResultText,
+    required this.onTap,
+  });
+
+  final String shelf;
+  final int motorId;
+  final bool running;
+  final bool disabledByOthers;
+  final bool? lastResult;
+  final String? lastResultText;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final Color bg;
+    final Color border;
+    if (running) {
+      bg = const Color(0x1A9C3F00);
+      border = AppColors.primary;
+    } else if (lastResult == true) {
+      bg = const Color(0x1A2E7D32);
+      border = const Color(0x4D2E7D32);
+    } else if (lastResult == false) {
+      bg = const Color(0x1AB3261E);
+      border = const Color(0x4DB3261E);
+    } else {
+      bg = AppColors.surfaceContainerLowest;
+      border = AppColors.surfaceContainerHigh;
+    }
+
+    return AnimatedContainer(
+      duration: const Duration(milliseconds: 200),
+      decoration: BoxDecoration(
+        color: bg,
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: border, width: 1.5),
+        boxShadow: const [appCardShadow],
+      ),
+      child: Material(
+        color: Colors.transparent,
+        borderRadius: BorderRadius.circular(14),
+        child: InkWell(
+          borderRadius: BorderRadius.circular(14),
+          onTap: disabledByOthers ? null : onTap,
+          child: Opacity(
+            opacity: disabledByOthers ? 0.4 : 1.0,
             child: Padding(
               padding: const EdgeInsets.all(8),
               child: Column(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
+                mainAxisAlignment: MainAxisAlignment.center,
                 children: [
-                  _connectionPanel(board, connected),
-                  const SizedBox(height: 8),
-                  if (connected) _commandPanel(board),
-                  const SizedBox(height: 8),
-                  const Divider(height: 1),
-                  const SizedBox(height: 4),
-                  Expanded(child: _logView()),
+                  Text(
+                    shelf,
+                    style: const TextStyle(
+                      fontSize: 22,
+                      fontWeight: FontWeight.w900,
+                      letterSpacing: -0.5,
+                      color: AppColors.onSurface,
+                      fontFeatures: [FontFeature.tabularFigures()],
+                    ),
+                  ),
+                  const SizedBox(height: 2),
+                  Text(
+                    'M$motorId',
+                    style: const TextStyle(
+                      fontSize: 10,
+                      fontWeight: FontWeight.w600,
+                      color: AppColors.onSurfaceVariant,
+                      letterSpacing: 0.5,
+                    ),
+                  ),
+                  const SizedBox(height: 6),
+                  if (running)
+                    const SizedBox(
+                      width: 18,
+                      height: 18,
+                      child: CircularProgressIndicator(
+                          strokeWidth: 2, color: AppColors.primary),
+                    )
+                  else if (lastResultText != null)
+                    Text(
+                      lastResultText!,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        fontSize: 9,
+                        fontWeight: FontWeight.bold,
+                        color: lastResult == true
+                            ? const Color(0xFF2E7D32)
+                            : const Color(0xFFB3261E),
+                      ),
+                    )
+                  else
+                    const Icon(
+                      Icons.precision_manufacturing,
+                      size: 18,
+                      color: AppColors.onSurfaceVariant,
+                    ),
                 ],
               ),
             ),
           ),
-        );
-      },
-    );
-  }
-
-  Widget _connectionPanel(BoardClient board, bool connected) {
-    return Card(
-      child: Padding(
-        padding: const EdgeInsets.all(8),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              children: [
-                Expanded(
-                  child: DropdownButton<UsbDevice>(
-                    isExpanded: true,
-                    value: board.selectedDevice,
-                    hint: const Text('Нет USB-устройств'),
-                    items: board.devices
-                        .map((d) => DropdownMenuItem(
-                              value: d,
-                              child: Text(
-                                '${d.productName ?? "?"} '
-                                '(vid=0x${d.vid?.toRadixString(16)} '
-                                'pid=0x${d.pid?.toRadixString(16)})',
-                                overflow: TextOverflow.ellipsis,
-                              ),
-                            ))
-                        .toList(),
-                    onChanged: connected ? null : board.selectDevice,
-                  ),
-                ),
-                const SizedBox(width: 8),
-                FilledButton.icon(
-                  onPressed: connected ? board.disconnect : board.connect,
-                  icon: Icon(connected ? Icons.link_off : Icons.link),
-                  label: Text(connected ? 'Отключить' : 'Подключить'),
-                ),
-              ],
-            ),
-            Row(
-              children: [
-                Expanded(
-                  child: DropdownButton<int>(
-                    value: board.baud,
-                    isExpanded: true,
-                    items: const [
-                      DropdownMenuItem(value: 9600, child: Text('9600 baud (заводское)')),
-                      DropdownMenuItem(value: 19200, child: Text('19200 baud')),
-                      DropdownMenuItem(value: 38400, child: Text('38400 baud')),
-                      DropdownMenuItem(value: 115200, child: Text('115200 baud')),
-                    ],
-                    onChanged: connected ? null : (v) => board.setBaud(v ?? 9600),
-                  ),
-                ),
-                const SizedBox(width: 8),
-                SizedBox(
-                  width: 130,
-                  child: TextField(
-                    decoration: const InputDecoration(labelText: 'Slave addr'),
-                    keyboardType: TextInputType.number,
-                    inputFormatters: [FilteringTextInputFormatter.digitsOnly],
-                    controller: _slaveCtrl,
-                    onChanged: (v) => board.setSlaveAddr(int.tryParse(v) ?? 1),
-                  ),
-                ),
-              ],
-            ),
-            // Factory "M102 encryption" toggle: mixes a hidden 11-byte
-            // password into CRC. Defaults ON (matches the factory APK).
-            // Turn OFF only if the BS bench board (no password support)
-            // doesn't respond.
-            Row(
-              children: [
-                Switch(
-                  value: board.useM102Password,
-                  onChanged: (v) => board.setUseM102Password(v),
-                ),
-                const SizedBox(width: 4),
-                const Text('CRC с паролем M102 (заводское)'),
-              ],
-            ),
-          ],
         ),
-      ),
-    );
-  }
-
-  Widget _commandPanel(BoardClient board) {
-    return Card(
-      child: Padding(
-        padding: const EdgeInsets.all(8),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Wrap(
-              spacing: 6,
-              runSpacing: 6,
-              children: [
-                _btn('Get ID (01)', board.getId),
-                _btn('Poll (03)', board.poll),
-                _btn('Read Temp (07)', board.readTemp),
-                FilledButton.tonalIcon(
-                  onPressed: () => _toggleAutoPoll(board),
-                  icon: Icon(_autoPoll ? Icons.stop : Icons.play_arrow),
-                  label: Text(_autoPoll ? 'Stop poll 900ms' : 'Auto-poll 900ms'),
-                ),
-              ],
-            ),
-            const SizedBox(height: 8),
-            Row(
-              children: [
-                Expanded(
-                  child: TextField(
-                    controller: _motorIdxCtrl,
-                    decoration: const InputDecoration(labelText: 'Motor idx'),
-                    keyboardType: TextInputType.number,
-                  ),
-                ),
-                const SizedBox(width: 6),
-                Expanded(
-                  child: TextField(
-                    controller: _motorTypeCtrl,
-                    decoration: const InputDecoration(labelText: 'Type 0/1/2/3'),
-                    keyboardType: TextInputType.number,
-                  ),
-                ),
-                const SizedBox(width: 6),
-                Expanded(
-                  child: TextField(
-                    controller: _motorCurtainCtrl,
-                    decoration: const InputDecoration(labelText: 'Curtain 0/1/2'),
-                    keyboardType: TextInputType.number,
-                  ),
-                ),
-              ],
-            ),
-            const SizedBox(height: 6),
-            Wrap(
-              spacing: 6,
-              runSpacing: 6,
-              children: [
-                _btn('Motor Run (05)', () async {
-                  final idx = int.tryParse(_motorIdxCtrl.text) ?? 0;
-                  final type = int.tryParse(_motorTypeCtrl.text) ?? 2;
-                  final curtain = int.tryParse(_motorCurtainCtrl.text) ?? 0;
-                  await board.motorRun(idx, type: type, curtain: curtain);
-                }),
-                _btn('Dispense+wait', () async {
-                  final idx = int.tryParse(_motorIdxCtrl.text) ?? 0;
-                  final type = int.tryParse(_motorTypeCtrl.text) ?? 2;
-                  final curtain = int.tryParse(_motorCurtainCtrl.text) ?? 0;
-                  await board.dispense(idx, type: type, curtain: curtain);
-                }),
-              ],
-            ),
-            const SizedBox(height: 8),
-            Row(
-              children: [
-                Expanded(
-                  child: TextField(
-                    controller: _doIdxCtrl,
-                    decoration: const InputDecoration(labelText: 'DO idx 0-4'),
-                    keyboardType: TextInputType.number,
-                  ),
-                ),
-                const SizedBox(width: 6),
-                Expanded(
-                  child: TextField(
-                    controller: _doStateCtrl,
-                    decoration: const InputDecoration(labelText: 'DO state 0/1'),
-                    keyboardType: TextInputType.number,
-                  ),
-                ),
-                const SizedBox(width: 6),
-                _btn('Write DO (08)', () async {
-                  final idx = int.tryParse(_doIdxCtrl.text) ?? 0;
-                  final st = int.tryParse(_doStateCtrl.text) ?? 0;
-                  await board.writeDo(idx, st != 0);
-                }),
-              ],
-            ),
-            const SizedBox(height: 8),
-            Row(
-              children: [
-                Expanded(
-                  child: TextField(
-                    controller: _rawCtrl,
-                    decoration: const InputDecoration(
-                      labelText: 'Raw HEX (must be a known opcode)',
-                      hintText: '01 03 00 00 ... CRC_LO CRC_HI',
-                    ),
-                  ),
-                ),
-                const SizedBox(width: 6),
-                _btn('Send raw', () => _sendRaw(board)),
-              ],
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _btn(String label, Future<dynamic> Function() onTap) {
-    return FilledButton(
-      onPressed: () => onTap(),
-      child: Text(label),
-    );
-  }
-
-  Widget _logView() {
-    return Container(
-      padding: const EdgeInsets.all(8),
-      decoration: BoxDecoration(
-        color: Colors.black,
-        borderRadius: BorderRadius.circular(8),
-      ),
-      child: ListView.builder(
-        controller: _logScroll,
-        itemCount: _logs.length,
-        itemBuilder: (_, i) {
-          final e = _logs[i];
-          Color c;
-          switch (e.dir) {
-            case 'TX':
-              c = Colors.lightBlueAccent;
-              break;
-            case 'RX':
-              c = Colors.greenAccent;
-              break;
-            case 'RAW':
-              c = Colors.tealAccent;
-              break;
-            case 'ERR':
-              c = Colors.redAccent;
-              break;
-            default:
-              c = Colors.white70;
-          }
-          final t = e.time;
-          final ts =
-              '${t.hour.toString().padLeft(2, '0')}:${t.minute.toString().padLeft(2, '0')}:${t.second.toString().padLeft(2, '0')}.${t.millisecond.toString().padLeft(3, '0')}';
-          return Text(
-            '$ts  ${e.dir.padRight(4)}  ${e.text}',
-            style: TextStyle(
-              color: c,
-              fontFamily: 'monospace',
-              fontSize: 12,
-            ),
-          );
-        },
       ),
     );
   }

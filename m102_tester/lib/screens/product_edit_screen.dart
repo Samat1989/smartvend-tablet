@@ -144,10 +144,14 @@ class _ProductEditScreenState extends State<ProductEditScreen> {
       return;
     }
     setState(() => _testing = true);
+    // Use the global "real dispense" sensor mode so this button mirrors
+    // what an actual paying customer would trigger. The dedicated
+    // "Test drop sensor" button below forces curtain=1 for diagnostics.
+    final curtain = context.read<DeviceStorage>().dispenseSensorMode;
     final r = await board.dispense(
       widget.motorId,
       type: _motorType,
-      curtain: _curtain,
+      curtain: curtain,
     );
     if (!mounted) return;
     setState(() => _testing = false);
@@ -330,18 +334,11 @@ class _ProductEditScreenState extends State<ProductEditScreen> {
               onSelectionChanged: (set) =>
                   setState(() => _motorType = set.first),
             ),
-            const SizedBox(height: 16),
-            _sectionLabel(s.t('field_curtain')),
-            SegmentedButton<int>(
-              segments: [
-                ButtonSegment(value: 0, label: Text(s.t('curtain_off'))),
-                ButtonSegment(value: 1, label: Text(s.t('curtain_standard'))),
-                ButtonSegment(value: 2, label: Text(s.t('curtain_priority'))),
-              ],
-              selected: {_curtain},
-              onSelectionChanged: (set) =>
-                  setState(() => _curtain = set.first),
-            ),
+            // Per-product drop-sensor setting was removed — the global
+            // sensor mode in service menu → «Режим выдачи» now applies
+            // to every slot. We still keep the field on the Product model
+            // (DB column stays) so the operator can override via SQL if
+            // an exotic edge-case ever needs it.
             const SizedBox(height: 24),
             OutlinedButton.icon(
               icon: _testing

@@ -70,16 +70,6 @@ class VendingService extends ChangeNotifier {
   String? _error;
   String? _paymentId;
 
-  /// Global override for the curtain (drop sensor) mode applied to all
-  /// products at dispense time. 0 = off, 1 = present, 2 = priority.
-  int _curtainModeOverride = 0;
-  int get curtainModeOverride => _curtainModeOverride;
-  set curtainModeOverride(int mode) {
-    if (mode < 0 || mode > 2) return;
-    _curtainModeOverride = mode;
-    notifyListeners();
-  }
-
   CatalogState get state => _state;
   String? get error => _error;
   List<Product> get catalog => List.unmodifiable(_catalog);
@@ -204,14 +194,17 @@ class VendingService extends ChangeNotifier {
 
   /// Dispense everything in the cart, one motor at a time, sequentially.
   /// Yields per-item results so the UI can show progress.
+  ///
+  /// Sensor mode is global now: [DeviceStorage.dispenseSensorMode] applies
+  /// to every motor regardless of the per-product `curtain_mode` column
+  /// (kept in DB for legacy data but ignored at dispense time). Operators
+  /// can switch the mode in service mode → «Режим выдачи».
   Stream<DispenseStepResult> dispenseAll() async* {
     final items = _cart.toList();
+    final curtain = _storage.dispenseSensorMode;
 
     for (final item in items) {
       for (var n = 0; n < item.quantity; n++) {
-        final curtain = item.product.curtainMode != 0
-            ? item.product.curtainMode
-            : _curtainModeOverride;
         final r = await board.dispense(
           item.product.motorId,
           type: item.product.motorType,
