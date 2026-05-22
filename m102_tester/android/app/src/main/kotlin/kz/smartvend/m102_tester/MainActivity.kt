@@ -1,13 +1,19 @@
 package kz.smartvend.m102_tester
 
+import android.app.admin.DevicePolicyManager
+import android.content.Context
+import android.content.Intent
 import android.os.Build
 import android.os.Bundle
+import android.provider.Settings
 import android.view.View
 import android.view.WindowManager
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import io.flutter.embedding.android.FlutterActivity
+import io.flutter.embedding.engine.FlutterEngine
+import io.flutter.plugin.common.MethodChannel
 
 /**
  * Kiosk-mode host activity.
@@ -30,10 +36,50 @@ import io.flutter.embedding.android.FlutterActivity
  */
 class MainActivity : FlutterActivity() {
 
+    /**
+     * When true, [onResume] will not re-enter lock task. Set by the
+     * `exitToAndroid` channel call so that an operator who just pressed
+     * "Exit to Android" in service mode isn't immediately re-locked when
+     * the Settings activity starts and our onResume fires (which it does
+     * once before we lose focus).
+     *
+     * The flag is cleared on the *next* resume that follows the operator
+     * coming back to the app, so subsequent customer sessions re-lock as
+     * usual.
+     */
+    private var suppressLockOnce = false
+
+    override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
+        super.configureFlutterEngine(flutterEngine)
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, KIOSK_CHANNEL)
+            .setMethodCallHandler { call, result ->
+                when (call.method) {
+                    "exitToAndroid" -> {
+                        suppressLockOnce = true
+                        try { stopLockTask() } catch (_: Throwable) {}
+                        try {
+                            startActivity(
+                                Intent(Settings.ACTION_SETTINGS)
+                                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+                            )
+                            result.success(null)
+                        } catch (t: Throwable) {
+                            result.error("settings_unavailable", t.message, null)
+                        }
+                    }
+                    else -> result.notImplemented()
+                }
+            }
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         // Keep the display on while the activity is in the foreground.
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+
+        // Configure device-owner-only kiosk features (no-op if we
+        // haven't been provisioned via `adb shell dpm set-device-owner`).
+        configureDeviceOwnerKiosk()
 
         // Show over keyguard / wake the screen for boot-launches.
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
@@ -75,10 +121,49 @@ class MainActivity : FlutterActivity() {
      * `excludeFromRecents` and HOME-category to make escape harder.
      */
     private fun tryEnterLockTask() {
+        if (suppressLockOnce) {
+            // Operator just chose "Exit to Android" — don't fight them.
+            suppressLockOnce = false
+            return
+        }
         try {
             startLockTask()
         } catch (_: Throwable) {
             // Not allowed on this device / not pinned. Ignore.
         }
+    }
+
+    /**
+     * If this package is the device owner, whitelist itself for
+     * lock-task and clear all system-UI features so a subsequent
+     * [startLockTask] silently pins the app — no "App is pinned"
+     * confirmation, no navigation bar, no status bar, no notification
+     * shade. If we aren't device owner this is a no-op; the OS will
+     * fall back to the standard pinning confirmation flow.
+     */
+    private fun configureDeviceOwnerKiosk() {
+        val dpm = getSystemService(Context.DEVICE_POLICY_SERVICE)
+            as? DevicePolicyManager ?: return
+        if (!dpm.isDeviceOwnerApp(packageName)) return
+        val admin = KioskAdminReceiver.componentName(this)
+        try {
+            dpm.setLockTaskPackages(admin, arrayOf(packageName))
+        } catch (_: SecurityException) {
+            return
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            // 0 == LOCK_TASK_FEATURE_NONE — hides every system surface
+            // (status bar, nav bar, notifications, keyguard, recents).
+            try {
+                dpm.setLockTaskFeatures(admin, 0)
+            } catch (_: Throwable) {
+                // Older OEM builds occasionally throw — ignore so the
+                // base lock-task still applies.
+            }
+        }
+    }
+
+    companion object {
+        private const val KIOSK_CHANNEL = "kz.smartvend/kiosk"
     }
 }

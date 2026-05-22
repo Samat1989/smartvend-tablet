@@ -39,7 +39,53 @@ class AppColors {
   /// Kaspi-red — used only on the primary "Pay" CTA so the brand is
   /// instantly recognisable to KZ customers.
   static const kaspi = Color(0xFFF14635);
+
+  // --- MicroMart palette (iOS-style, from Figma "Menu - Nothing Selected") ---
+  // The customer-facing kiosk screens use this set; service-mode screens
+  // continue to use the warmer Kinetic Gourmet tokens above so the two
+  // contexts stay visually distinct.
+  static const iosBackground = Color(0xFFF2F2F7);
+  static const iosOrange = Color(0xFFFF8D28); // shelf-number badge, price
+  static const iosBlue = Color(0xFF0088FF); // active shelf tab, "+" buttons
+  static const iosGray = Color(0xFF8E8E93); // inactive tab label, captions
+  static const iosBlack = Color(0xFF1C1C1E); // card text, primary button bg
 }
+
+/// Soft, layered shadow lifted from the Figma card style. Two layers
+/// give that "glass-card" feel without looking like a Material elevation.
+const iosCardShadow = [
+  BoxShadow(
+    color: Color(0x192F2E32), // ~10 % opacity
+    blurRadius: 16,
+    spreadRadius: -8,
+    offset: Offset(0, 16),
+  ),
+  BoxShadow(
+    color: Color(0x0D2F2E32), // ~5 % opacity
+    blurRadius: 4,
+    spreadRadius: -4,
+    offset: Offset(0, 4),
+  ),
+];
+
+/// Brighter, deeper shadow used when a product card is "selected"
+/// (at least one in cart). Same two-layer structure as [iosCardShadow]
+/// but ~2x the opacity and a wider spread so the lift is noticeable
+/// against the default flat-card baseline.
+const iosCardSelectedShadow = [
+  BoxShadow(
+    color: Color(0x332F2E32), // ~20 % opacity
+    blurRadius: 24,
+    spreadRadius: -6,
+    offset: Offset(0, 18),
+  ),
+  BoxShadow(
+    color: Color(0x1A2F2E32), // ~10 % opacity
+    blurRadius: 8,
+    spreadRadius: -2,
+    offset: Offset(0, 6),
+  ),
+];
 
 /// The card shadow used everywhere in customer_web — soft, large, low
 /// opacity. Looks premium without competing with Material elevation.

@@ -4,6 +4,7 @@ import 'package:flutter/foundation.dart';
 
 import '../board/board_client.dart';
 import '../models/climate_config.dart';
+import 'device_storage.dart';
 
 enum CompressorPhase {
   idle,         // climate off, or in-band (between hysteresis bounds)
@@ -38,9 +39,28 @@ enum CompressorPhase {
 /// 5-minute rest. The factory has this code path declared but never
 /// triggers it — we activate it because it's the right thing to do.
 class ClimateController extends ChangeNotifier {
-  ClimateController(this.board);
+  ClimateController(this.board, this._storage) {
+    // Rehydrate the last-known config so operator-set mode/setpoint
+    // survive reboots. Falls back to the model defaults when the
+    // operator has never opened the climate screen.
+    final mode = _modeFromName(_storage.climateModeName);
+    _config = ClimateConfig(
+      mode: mode,
+      setpointC: _storage.climateSetpoint,
+      lightAlwaysOn: _storage.climateLightAlwaysOn,
+    );
+  }
 
   final BoardClient board;
+  final DeviceStorage _storage;
+
+  static ClimateMode _modeFromName(String? name) {
+    if (name == null) return const ClimateConfig().mode;
+    for (final m in ClimateMode.values) {
+      if (m.name == name) return m;
+    }
+    return const ClimateConfig().mode;
+  }
 
   // ---- factory-derived constants (do not expose in UI) ----
   static const double _hysteresisC = 4.0;
@@ -74,7 +94,7 @@ class ClimateController extends ChangeNotifier {
   bool get heaterModuleOn => _heaterModuleOn;
 
   // ---- algorithm state ----
-  ClimateConfig _config = const ClimateConfig();
+  late ClimateConfig _config;
   ClimateConfig get config => _config;
 
   CompressorPhase _phase = CompressorPhase.idle;
@@ -97,6 +117,13 @@ class ClimateController extends ChangeNotifier {
   void updateConfig(ClimateConfig next) {
     final modeChanged = _config.mode != next.mode;
     _config = next;
+    // Persist without awaiting — SharedPreferences writes return quickly
+    // and the controller mustn't block on disk before responding.
+    _storage.setClimateConfig(
+      modeName: next.mode.name,
+      setpointC: next.setpointC,
+      lightAlwaysOn: next.lightAlwaysOn,
+    );
     notifyListeners();
     if (modeChanged) {
       // Reset the spin-up counter when the user flips the mode so the next

@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Policies the kiosk admin needs to be active. We only ask for the
+  bare minimum — once we're device owner the framework grants every
+  policy implicitly, so this list mostly serves to silence the
+  AndroidManifest meta-data requirement.
+-->
+<device-admin xmlns:android="http://schemas.android.com/apk/res/android"
+    android:visible="false">
+    <uses-policies>
+        <force-lock />
+    </uses-policies>
+</device-admin>

@@ -88,6 +88,8 @@ class Strings extends ChangeNotifier {
     },
     'cart': {'ru': 'Корзина', 'kk': 'Себет', 'en': 'Cart'},
     'cart_empty': {'ru': 'Корзина пуста', 'kk': 'Себет бос', 'en': 'Cart is empty'},
+    // Compact unit label after the cart count, e.g. "2 товара" / "2 öнім" / "2 items".
+    'items_short': {'ru': 'товара', 'kk': 'өнім', 'en': 'items'},
     'cart_total': {'ru': 'Итого', 'kk': 'Барлығы', 'en': 'Total'},
     'pay_btn': {'ru': 'Оплатить', 'kk': 'Төлеу', 'en': 'Pay'},
     'pay_via_kaspi': {'ru': 'Оплатить через Kaspi', 'kk': 'Kaspi арқылы төлеу', 'en': 'Pay with Kaspi'},
@@ -161,7 +163,29 @@ class Strings extends ChangeNotifier {
       'en': 'Refrigeration',
     },
     'service_unpair': {'ru': 'Сбросить пэйринг', 'kk': 'Қосылымды тастау', 'en': 'Reset pairing'},
+    'service_exit_kiosk': {
+      'ru': 'Выйти в Android',
+      'kk': 'Android-қа шығу',
+      'en': 'Exit to Android',
+    },
+    'service_exit_kiosk_confirm': {
+      'ru': 'Откроется системное меню Android. Приложение вернётся в '
+          'режим киоска при следующем открытии.',
+      'kk': 'Android жүйелік мәзірі ашылады. Қосымша келесі ашылғанда '
+          'қайтадан киоск режиміне көшеді.',
+      'en': 'The Android system menu will open. The app re-enters '
+          'kiosk mode the next time it is brought to the foreground.',
+    },
     'service_change_pin': {'ru': 'Сменить PIN', 'kk': 'PIN өзгерту', 'en': 'Change PIN'},
+    'service_m102_password': {
+      'ru': 'CRC-пароль M102',
+      'kk': 'M102 CRC құпиясөзі',
+      'en': 'M102 CRC password',
+    },
+    'service_board': {'ru': 'Плата', 'kk': 'Плата', 'en': 'Board'},
+    'board_disconnect': {'ru': 'Отключить', 'kk': 'Ажырату', 'en': 'Disconnect'},
+    'board_reconnect': {'ru': 'Подключить', 'kk': 'Қосу', 'en': 'Reconnect'},
+    'board_slave_addr': {'ru': 'Адрес', 'kk': 'Мекенжайы', 'en': 'Addr'},
     'service_machine_id': {'ru': 'Аппарат №', 'kk': 'Аппарат №', 'en': 'Machine #'},
     'service_inventory': {
       'ru': 'Товары и слоты',

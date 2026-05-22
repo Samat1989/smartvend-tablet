@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  USB-Serial adapters used to talk to the M102/M109E board:
+   • CH340 / CH341 — onboard chip (vid=0x1A86)
+   • FTDI FT232 family — common TTL dongle (vid=0x0403, various pids)
+   • Prolific PL2303 (vid=0x067B) — third common option
+  vendor-id / product-id are decimal per Android USB filter spec.
+-->
+<resources>
+    <!-- CH340 / CH341 0x1A86 / 0x7523 -->
+    <usb-device vendor-id="6790" product-id="29987"/>
+    <!-- FTDI 0x0403 — match any product id from this vendor -->
+    <usb-device vendor-id="1027"/>
+    <!-- Prolific 0x067B — match any product id -->
+    <usb-device vendor-id="1659"/>
+</resources>

@@ -4,6 +4,8 @@ import 'dart:typed_data';
 import 'package:flutter/foundation.dart';
 import 'package:usb_serial/usb_serial.dart';
 
+import '../services/device_storage.dart';
+
 class LogEntry {
   final DateTime time;
   final String dir; // TX | RX | INFO | ERR
@@ -126,10 +128,15 @@ class BoardClient extends ChangeNotifier {
   ];
 
   /// Whether to mix [m102Password] into outgoing CRC. Default `true` to
-  /// match the factory app's `IS_M102GOTOCODE = true` default. Disable
-  /// only when bench-testing with the BS board that ignores the password.
+  /// match the factory app's `IS_M102GOTOCODE = true` default. Overwritten
+  /// in the constructor by [DeviceStorage.useM102Password] when present,
+  /// then auto-detected on first connect (see [_autoDetectPassword]).
   bool _useM102Password = true;
   bool get useM102Password => _useM102Password;
+
+  /// Optional reference to persist the chosen [_useM102Password] across
+  /// launches. May be null in unit-tests / debug runs.
+  final DeviceStorage? _storage;
 
   void setUseM102Password(bool v) {
     _useM102Password = v;
@@ -168,7 +175,15 @@ class BoardClient extends ChangeNotifier {
   Stream<LogEntry> get logStream => _logCtrl.stream;
   List<LogEntry> get logHistory => List.unmodifiable(_logHistory);
 
-  BoardClient() {
+  /// Optional [storage] lets BoardClient (a) preload the last known
+  /// `useM102Password` value so the first post-connect Get ID hits
+  /// the right CRC formula immediately, and (b) persist the new
+  /// value after the auto-probe flips it. Pass null in tests / when
+  /// storage isn't available — we just won't remember the choice
+  /// across launches in that case.
+  BoardClient({DeviceStorage? storage}) : _storage = storage {
+    final pref = storage?.useM102Password;
+    if (pref != null) _useM102Password = pref;
     _usbEventSub = UsbSerial.usbEventStream?.listen((event) async {
       _info('USB event: ${event.event} ${event.device?.productName ?? ""}');
       // On any USB attach, refresh and try to auto-connect if we're not already.
@@ -296,6 +311,12 @@ class BoardClient extends ChangeNotifier {
 
   Future<void> _refreshFirmwareId() async {
     try {
+      // Auto-detect runs *before* the first Get ID — if it has to
+      // flip [_useM102Password], the very next request already uses
+      // the right CRC. On boards we've probed before, the stored
+      // value matches, the first probe succeeds, and we just save
+      // the same value back (no flip, no second request).
+      await _autoDetectPassword();
       final id = await getId();
       if (id != null && id != _firmwareId) {
         _firmwareId = id;
@@ -303,6 +324,44 @@ class BoardClient extends ChangeNotifier {
       }
     } catch (_) {
       // Probe failure is non-fatal; isHealthy will reflect comm status.
+    }
+  }
+
+  /// Probes Get ID with the current [_useM102Password] setting; if no
+  /// reply comes back, flips the flag and probes once more. Persists
+  /// whichever value actually elicited a response into [_storage] so
+  /// subsequent app launches start with the right CRC formula.
+  ///
+  /// Runs at most twice. If neither attempt gets a reply the method
+  /// is a no-op — the bus is dead for some other reason (no power,
+  /// wrong slave addr, wrong wiring) and we mustn't keep flipping
+  /// the saved value back and forth on every reconnect.
+  Future<void> _autoDetectPassword() async {
+    if (_port == null) return;
+    _info('auto-detect: probe Get ID with password '
+        '${_useM102Password ? "ON" : "OFF"}…');
+    final firstResp = await _sendAndReceive(0x01, List.filled(16, 0));
+    if (firstResp != null && firstResp.isNotEmpty) {
+      _info('auto-detect: got reply on first probe → keep password '
+          '${_useM102Password ? "ON" : "OFF"}, persist');
+      await _storage?.setUseM102Password(_useM102Password);
+      return;
+    }
+    // Flip and try again.
+    final original = _useM102Password;
+    _useM102Password = !_useM102Password;
+    _info('auto-detect: no reply, flipping to password '
+        '${_useM102Password ? "ON" : "OFF"} and re-probing…');
+    final secondResp = await _sendAndReceive(0x01, List.filled(16, 0));
+    if (secondResp != null && secondResp.isNotEmpty) {
+      _info('auto-detect: success on flipped probe → save password '
+          '${_useM102Password ? "ON" : "OFF"} (was ${original ? "ON" : "OFF"})');
+      await _storage?.setUseM102Password(_useM102Password);
+      notifyListeners();
+    } else {
+      _info('auto-detect: both variants silent → restoring '
+          '${original ? "ON" : "OFF"}, NOT persisting (dead bus)');
+      _useM102Password = original;
     }
   }
 
@@ -442,6 +501,18 @@ class BoardClient extends ChangeNotifier {
   }
 
   // ---------- high-level commands ----------
+
+  /// Quick "is the board alive *right now*" check. Sends Get ID (0x01)
+  /// with a shorter-than-normal timeout and returns true iff a frame
+  /// came back. Used by cart/pay flows so payment can't be initiated
+  /// against a dead bus. In debug builds always returns true so the
+  /// emulator UI flow stays unblocked.
+  Future<bool> ping({Duration timeout = const Duration(milliseconds: 600)}) async {
+    if (kDebugMode && _port == null) return true;
+    if (_port == null) return false;
+    final r = await _sendAndReceive(0x01, List.filled(16, 0), timeout: timeout);
+    return r != null && r.isNotEmpty;
+  }
 
   Future<String?> getId() async {
     final r = await _sendAndReceive(0x01, List.filled(16, 0));
@@ -625,6 +696,14 @@ class BoardClient extends ChangeNotifier {
       _logHistory.removeRange(0, _logHistory.length - 1000);
     }
     if (!_logCtrl.isClosed) _logCtrl.add(e);
+  }
+
+  /// Wipe the in-memory log buffer. Doesn't touch the live stream
+  /// (subscribers stay attached); just clears the history that the
+  /// service-mode "Board" screen renders.
+  void clearLog() {
+    _logHistory.clear();
+    notifyListeners();
   }
 
   void _tx(Uint8List data) => _addLog(LogEntry('TX', _hex(data)));

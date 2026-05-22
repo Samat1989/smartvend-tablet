@@ -11,9 +11,15 @@ class DeviceStorage extends ChangeNotifier {
   static const _kLanguage = 'language';
   static const _kGridColumns = 'grid_columns';
   static const _kDispenseSensorMode = 'dispense_sensor_mode';
+  static const _kClimateMode = 'climate_mode';
+  static const _kClimateSetpoint = 'climate_setpoint';
+  static const _kClimateLight = 'climate_light_always_on';
+  static const _kUseM102Password = 'use_m102_password';
   static const _defaultPin = '1234';
   static const _defaultGridColumns = 3;
   static const _defaultDispenseSensorMode = 1; // sensor required by default
+  static const _defaultClimateSetpoint = 6.0;
+  static const _defaultClimateLightOn = true;
   // — most installs have the IR curtain wired, so refund-on-no-drop is
   // the safer default for production. Operator can turn it off from the
   // inventory screen for machines without a sensor.
@@ -43,6 +49,39 @@ class DeviceStorage extends ChangeNotifier {
   /// machine's normal behaviour.
   int get dispenseSensorMode =>
       _prefs.getInt(_kDispenseSensorMode) ?? _defaultDispenseSensorMode;
+
+  // ─── Climate settings ───────────────────────────────────────────
+  // Stored as raw primitives so [DeviceStorage] doesn't have to
+  // depend on the climate model. [ClimateController] is responsible
+  // for translating to/from [ClimateConfig].
+
+  /// Name of the climate mode enum (`off`/`cooling`/`heating`) or
+  /// null if the operator has never picked one — caller substitutes
+  /// the model-side default.
+  String? get climateModeName => _prefs.getString(_kClimateMode);
+
+  /// Setpoint in °C. Default 6 °C — matches the factory cooler default.
+  double get climateSetpoint =>
+      _prefs.getDouble(_kClimateSetpoint) ?? _defaultClimateSetpoint;
+
+  /// Whether the LED strip stays on regardless of climate state.
+  bool get climateLightAlwaysOn =>
+      _prefs.getBool(_kClimateLight) ?? _defaultClimateLightOn;
+
+  /// Whether [BoardClient] should mix the 11-byte M102 "password" into
+  /// the outgoing CRC. `null` means "never probed yet" — BoardClient
+  /// will auto-detect on the first successful connect and persist the
+  /// winning value. Once set, BoardClient uses it as the starting
+  /// guess on every subsequent connect (skipping the slow probe).
+  bool? get useM102Password =>
+      _prefs.containsKey(_kUseM102Password)
+          ? _prefs.getBool(_kUseM102Password)
+          : null;
+
+  Future<void> setUseM102Password(bool v) async {
+    await _prefs.setBool(_kUseM102Password, v);
+    notifyListeners();
+  }
 
   bool get isPaired {
     final m = machid;
@@ -89,6 +128,17 @@ class DeviceStorage extends ChangeNotifier {
     // accidentally end up as the "all dispenses" default.
     final clamped = mode == 1 ? 1 : 0;
     await _prefs.setInt(_kDispenseSensorMode, clamped);
+    notifyListeners();
+  }
+
+  Future<void> setClimateConfig({
+    required String modeName,
+    required double setpointC,
+    required bool lightAlwaysOn,
+  }) async {
+    await _prefs.setString(_kClimateMode, modeName);
+    await _prefs.setDouble(_kClimateSetpoint, setpointC);
+    await _prefs.setBool(_kClimateLight, lightAlwaysOn);
     notifyListeners();
   }
 }

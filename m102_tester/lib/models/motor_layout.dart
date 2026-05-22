@@ -41,4 +41,21 @@ class MotorLayout {
       }
     }
   }
+
+  /// Motor IDs that live on a given shelf (1..6), top-to-bottom in the
+  /// physical machine. Shelf 1 = labels 001..006 = motors 99..94, shelf 2
+  /// = labels 011..016 = motors 89..84, and so on through shelf 6.
+  static List<int> motorsForShelf(int shelf) {
+    assert(shelf >= 1 && shelf <= rows, 'shelf out of 1..$rows range');
+    return [for (var col = 1; col <= cols; col++) coordsToMotor(shelf, col)];
+  }
+
+  /// Human-readable label range for a shelf header, e.g. shelf 1 →
+  /// "001 — 006". Mirrors the stickers on the cabinet door so customers
+  /// can match an on-screen card to a physical slot.
+  static String shelfLabelRange(int shelf) {
+    final first = motorToLabel(motorsForShelf(shelf).first);
+    final last = motorToLabel(motorsForShelf(shelf).last);
+    return '$first — $last';
+  }
 }

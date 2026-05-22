@@ -4,8 +4,10 @@ import 'package:provider/provider.dart';
 
 import '../board/board_client.dart';
 import '../services/device_storage.dart';
+import '../services/kiosk_bridge.dart';
 import '../services/strings.dart';
 import '../services/vending_service.dart';
+import 'board_diag_screen.dart';
 import 'climate_screen.dart';
 import 'inventory_edit_screen.dart';
 import 'tester_screen.dart';
@@ -87,6 +89,15 @@ class ServiceMenuScreen extends StatelessWidget {
                       onTap: () => _changePin(context),
                     ),
                     _Tile(
+                      icon: Icons.developer_board,
+                      label: s.t('service_board'),
+                      color: Colors.purple,
+                      onTap: () => Navigator.of(context).push(
+                        MaterialPageRoute(
+                            builder: (_) => const BoardDiagScreen()),
+                      ),
+                    ),
+                    _Tile(
                       icon: Icons.refresh,
                       label: s.t('reload'),
                       color: Colors.green,
@@ -98,6 +109,12 @@ class ServiceMenuScreen extends StatelessWidget {
                           );
                         }
                       },
+                    ),
+                    _Tile(
+                      icon: Icons.exit_to_app,
+                      label: s.t('service_exit_kiosk'),
+                      color: Colors.blueGrey,
+                      onTap: () => _exitToAndroid(context),
                     ),
                     _Tile(
                       icon: Icons.link_off,
@@ -169,6 +186,7 @@ class ServiceMenuScreen extends StatelessWidget {
     }
   }
 
+
   Future<void> _changePin(BuildContext context) async {
     final s = context.read<Strings>();
     final ctrl = TextEditingController();
@@ -199,6 +217,40 @@ class ServiceMenuScreen extends StatelessWidget {
     );
     if (ok == true && ctrl.text.trim().length >= 4 && context.mounted) {
       await context.read<DeviceStorage>().setServicePin(ctrl.text.trim());
+    }
+  }
+
+  /// Pops a confirmation, then calls into the Android side to stop lock
+  /// task and launch system Settings. The app reverts to kiosk on its
+  /// next resume — operator never has to "turn kiosk back on".
+  Future<void> _exitToAndroid(BuildContext context) async {
+    final s = context.read<Strings>();
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text(s.t('service_exit_kiosk')),
+        content: Text(s.t('service_exit_kiosk_confirm')),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(false),
+            child: Text(s.t('payment_cancel')),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(ctx).pop(true),
+            child: Text(s.t('service_exit_kiosk')),
+          ),
+        ],
+      ),
+    );
+    if (ok != true) return;
+    try {
+      await KioskBridge.exitToAndroid();
+    } catch (e) {
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('$e')),
+        );
+      }
     }
   }
 

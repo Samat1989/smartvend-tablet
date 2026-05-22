@@ -43,7 +43,7 @@ class VendingApp extends StatelessWidget {
         ChangeNotifierProvider<DeviceStorage>.value(value: storage),
         ChangeNotifierProvider<Strings>(create: (_) => Strings(storage)),
         ChangeNotifierProvider<BoardClient>(
-          create: (_) => BoardClient()..autoConnect(),
+          create: (_) => BoardClient(storage: storage)..autoConnect(),
         ),
         ChangeNotifierProxyProvider<BoardClient, VendingService>(
           create: (ctx) => VendingService(
@@ -54,8 +54,16 @@ class VendingApp extends StatelessWidget {
               prev ?? VendingService(board: board, storage: storage),
         ),
         ChangeNotifierProxyProvider<BoardClient, ClimateController>(
-          create: (ctx) => ClimateController(ctx.read<BoardClient>())..start(),
-          update: (_, board, prev) => prev ?? (ClimateController(board)..start()),
+          // lazy:false — without this the climate controller isn't
+          // constructed until the climate service screen reads it,
+          // which means the cooling/heating cycle never starts at
+          // app launch. We want the cooler running from the moment
+          // the tablet boots.
+          lazy: false,
+          create: (ctx) =>
+              ClimateController(ctx.read<BoardClient>(), storage)..start(),
+          update: (_, board, prev) =>
+              prev ?? (ClimateController(board, storage)..start()),
         ),
       ],
       child: MaterialApp(

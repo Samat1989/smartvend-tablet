@@ -133,9 +133,12 @@ class VendingService extends ChangeNotifier {
       // it on a transient Wi-Fi blip.
       return;
     }
+    // Hide sold-out items from the customer catalog — they still exist
+    // in inventory (owner can refill from the dashboard) but shouldn't
+    // appear in the shelf grid where they look tappable.
     _catalog
       ..clear()
-      ..addAll(invRes.data!);
+      ..addAll(invRes.data!.where((p) => p.stock > 0));
     _catalog.sort((a, b) => a.shelfLabel.compareTo(b.shelfLabel));
     _categories
       ..clear()

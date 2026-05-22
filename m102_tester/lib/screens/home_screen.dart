@@ -3,19 +3,32 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import '../board/board_client.dart';
+import '../models/motor_layout.dart';
 import '../models/product.dart';
 import '../services/device_storage.dart';
 import '../services/strings.dart';
 import '../services/vending_service.dart';
 import '../theme.dart';
+import '../widgets/action_pill.dart';
 import '../widgets/product_thumb.dart';
 import 'cart_screen.dart';
 import 'service_pin_screen.dart';
 
-/// Customer-facing home screen, ported in spirit and palette from
-/// `customer_web/src/App.jsx`: Kinetic Gourmet warm-orange theme,
-/// glass-style header, rounded chips, lifted product cards, and a
-/// gradient floating cart bar.
+/// Customer-facing catalog ported from the Figma file
+/// "MicroMart / Menu - Nothing Selected".
+///
+/// Layout (744 dp viewport, scales fluidly):
+///   • Vertical scroll on the left — one ProductGroup per physical
+///     shelf (six in total). Group header is an orange-numbered square
+///     plus the shelf label range (e.g. "001 — 006").
+///   • Right rail — vertical pill segmented selector 1..6. Tap a number
+///     to jump the list to that shelf; the tapped pill turns blue.
+///   • Bottom — gradient-faded "Main Action" bar with a back button and
+///     a wide cart pill that becomes opaque + bright when there are
+///     items in the cart.
+///
+/// kDebugMode still hides the maintenance overlay so the screen works
+/// in the emulator without USB hardware.
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
 
@@ -24,11 +37,62 @@ class HomeScreen extends StatefulWidget {
 }
 
 class _HomeScreenState extends State<HomeScreen> {
-  String? _selectedCategoryId;
-  // Hidden service entry: 5 quick taps on the machine-id corner badge
-  // within 2 seconds. The badge is intentionally tiny and at the bottom-
-  // right so customers don't discover it.
+  // One global key per shelf so tap-on-tab can use Scrollable.ensureVisible.
+  final List<GlobalKey> _shelfKeys = List.generate(
+    MotorLayout.rows,
+    (_) => GlobalKey(),
+  );
+
+  /// Currently-highlighted shelf in the right-rail selector. Tap-on-tab
+  /// sets it directly; scroll updates it via [_onScroll] so the rail
+  /// reflects whichever shelf header is at the top of the viewport.
+  int _selectedShelf = 1;
+
+  /// Owned here so the scroll listener and the SingleChildScrollView
+  /// share the same controller — passes down to [_ProductList].
+  final ScrollController _scrollController = ScrollController();
+
+  // Hidden service entry: 5 quick taps on the machid corner badge.
   final List<DateTime> _serviceTaps = [];
+
+  @override
+  void initState() {
+    super.initState();
+    _scrollController.addListener(_onScroll);
+  }
+
+  @override
+  void dispose() {
+    _scrollController.removeListener(_onScroll);
+    _scrollController.dispose();
+    super.dispose();
+  }
+
+  /// Re-evaluates which shelf the customer is currently looking at and
+  /// updates [_selectedShelf] so the right-rail tabs follow the scroll.
+  /// Strategy: walk the shelves bottom-up and pick the first one whose
+  /// header has scrolled to or above a "trigger line" near the top of
+  /// the viewport. The 24-dp threshold matches the list's top padding
+  /// so the rail flips the moment a shelf header lines up with the
+  /// catalog's natural top edge.
+  void _onScroll() {
+    const triggerDy = 24.0 + 80.0; // list top padding + a bit of slack
+    var detected = 1;
+    for (var i = MotorLayout.rows; i >= 1; i--) {
+      final ctx = _shelfKeys[i - 1].currentContext;
+      if (ctx == null) continue;
+      final box = ctx.findRenderObject() as RenderBox?;
+      if (box == null || !box.attached) continue;
+      final dy = box.localToGlobal(Offset.zero).dy;
+      if (dy <= triggerDy) {
+        detected = i;
+        break;
+      }
+    }
+    if (detected != _selectedShelf) {
+      setState(() => _selectedShelf = detected);
+    }
+  }
 
   void _onServiceTap() {
     final now = DateTime.now();
@@ -43,35 +107,53 @@ class _HomeScreenState extends State<HomeScreen> {
     }
   }
 
+  Future<void> _scrollToShelf(int shelf) async {
+    setState(() => _selectedShelf = shelf);
+    final ctx = _shelfKeys[shelf - 1].currentContext;
+    if (ctx == null) return;
+    await Scrollable.ensureVisible(
+      ctx,
+      duration: const Duration(milliseconds: 350),
+      curve: Curves.easeOutCubic,
+      alignment: 0,
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
-    final svc = context.watch<VendingService>();
     final board = context.watch<BoardClient>();
     final boardDown = !board.isHealthy && !kDebugMode;
     return Scaffold(
-      backgroundColor: AppColors.background,
+      backgroundColor: AppColors.iosBackground,
       body: SafeArea(
         child: Stack(
+          // Force the Stack to take the full SafeArea size so the
+          // Positioned(bottom: 0) action bar always sits at the
+          // screen bottom regardless of how short the catalog Row is.
+          fit: StackFit.expand,
           children: [
-            Column(
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                // No header, no search bar — categories chips sit at the
-                // very top, customer scrolls/filters via chips only.
-                const SizedBox(height: 8),
-                _CategoryChips(
-                  selectedId: _selectedCategoryId,
-                  onSelect: (id) =>
-                      setState(() => _selectedCategoryId = id),
-                ),
                 Expanded(
-                  child: _Body(categoryId: _selectedCategoryId),
+                  child: _ProductList(
+                    shelfKeys: _shelfKeys,
+                    scrollController: _scrollController,
+                  ),
+                ),
+                _ShelfSelector(
+                  selected: _selectedShelf,
+                  onSelect: _scrollToShelf,
                 ),
               ],
             ),
-            if (svc.cartCount > 0 && !boardDown) const _FloatingCartBar(),
+            const _BottomActionBar(),
             if (boardDown) _MaintenanceOverlay(onServiceTap: _onServiceTap),
-            const _LangCorner(),
+            // Order matters: MachidCorner first, LangCorner painted on top
+            // so its tap area isn't shadowed by the (also tappable) machid
+            // badge sitting above it.
             _MachidCorner(onTap: _onServiceTap),
+            const _LangCorner(),
           ],
         ),
       ),
@@ -79,247 +161,16 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 }
 
-/// Full-screen "out of service" curtain shown when the M102 board is
-/// either disconnected or hasn't responded to the last 4 commands.
-class _MaintenanceOverlay extends StatelessWidget {
-  const _MaintenanceOverlay({required this.onServiceTap});
+// ─────────────────────────── Product list ───────────────────────────
 
-  final VoidCallback onServiceTap;
-
-  @override
-  Widget build(BuildContext context) {
-    final s = context.watch<Strings>();
-    return Positioned.fill(
-      child: GestureDetector(
-        behavior: HitTestBehavior.opaque,
-        onTap: onServiceTap,
-        child: Container(
-          color: const Color(0xEB2F2E32),
-          alignment: Alignment.center,
-          padding: const EdgeInsets.all(40),
-          child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              Icon(Icons.build_circle,
-                  size: 96, color: AppColors.primaryContainer),
-              const SizedBox(height: 24),
-              Text(
-                s.t('maintenance_title'),
-                textAlign: TextAlign.center,
-                style: const TextStyle(
-                  color: Colors.white,
-                  fontSize: 32,
-                  fontWeight: FontWeight.w900,
-                  letterSpacing: -1,
-                ),
-              ),
-              const SizedBox(height: 16),
-              Text(
-                s.t('maintenance_subtitle'),
-                textAlign: TextAlign.center,
-                style: const TextStyle(
-                  color: Color(0xCCFFFFFF),
-                  fontSize: 16,
-                ),
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-// _Header removed entirely — its only remaining content (bag icon and
-// language switcher) is gone or relocated. Search bar now sits at the
-// top of the column, language goes into the bottom-left corner.
-
-/// Tiny machine number in the bottom-right. Doubles as the hidden
-/// 5-tap entry point to service mode (the round logo + bag-icon that
-/// used to host it was removed). It's small enough that customers
-/// ignore it and the operator knows where to tap.
-class _MachidCorner extends StatelessWidget {
-  const _MachidCorner({required this.onTap});
-
-  final VoidCallback onTap;
-
-  @override
-  Widget build(BuildContext context) {
-    final machid = context.watch<DeviceStorage>().machid;
-    if (machid == null) return const SizedBox.shrink();
-    return Positioned(
-      right: 8,
-      bottom: 6,
-      child: GestureDetector(
-        onTap: onTap,
-        behavior: HitTestBehavior.opaque,
-        // A bit of inflated padding makes the 10pt text easier to
-        // hit with a finger without making the visible label larger.
-        child: Padding(
-          padding: const EdgeInsets.all(8),
-          child: Text(
-            '№$machid',
-            style: const TextStyle(
-                fontSize: 10,
-                fontWeight: FontWeight.bold,
-                letterSpacing: 0.5,
-                color: Color(0x665D5B5F)),
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-/// Language toggle in the bottom-LEFT corner. One tap cycles through
-/// ru → kk → en → ru — no popup, no list. Visually mirrors the
-/// machid corner on the opposite side.
-class _LangCorner extends StatelessWidget {
-  const _LangCorner();
-
-  static const _cycle = ['ru', 'kk', 'en'];
-
-  @override
-  Widget build(BuildContext context) {
-    final s = context.watch<Strings>();
-    final i = _cycle.indexOf(s.lang);
-    final next = _cycle[(i + 1) % _cycle.length];
-    final display = s.lang == 'kk' ? 'KZ' : s.lang.toUpperCase();
-    return Positioned(
-      left: 8,
-      bottom: 6,
-      child: Material(
-        color: const Color(0xCCFFFFFF),
-        shape: const StadiumBorder(),
-        elevation: 1,
-        shadowColor: Colors.black12,
-        child: InkWell(
-          customBorder: const StadiumBorder(),
-          onTap: () => s.setLang(next),
-          child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                const Icon(Icons.language,
-                    size: 14, color: AppColors.primary),
-                const SizedBox(width: 4),
-                Text(
-                  display,
-                  style: const TextStyle(
-                    color: AppColors.primary,
-                    fontWeight: FontWeight.w900,
-                    fontSize: 11,
-                    letterSpacing: 0.5,
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-// _ClimateBadge removed — temperature is operator-only info, accessible
-// from service mode → "Холодильник". Customers don't need it.
-
-// _SearchBar removed — customers find products by category chips only.
-// Kept _Body without the `search` filter parameter accordingly.
-
-class _CategoryChips extends StatelessWidget {
-  const _CategoryChips({
-    required this.selectedId,
-    required this.onSelect,
+class _ProductList extends StatelessWidget {
+  const _ProductList({
+    required this.shelfKeys,
+    required this.scrollController,
   });
 
-  final String? selectedId;
-  final ValueChanged<String?> onSelect;
-
-  @override
-  Widget build(BuildContext context) {
-    final s = context.watch<Strings>();
-    return Consumer<VendingService>(
-      builder: (context, svc, _) {
-        final cats = svc.categories;
-        if (cats.isEmpty) return const SizedBox.shrink();
-        return SizedBox(
-          height: 56,
-          child: ListView(
-            scrollDirection: Axis.horizontal,
-            padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 8),
-            children: [
-              _Chip(
-                label: s.t('all_categories'),
-                selected: selectedId == null,
-                onTap: () => onSelect(null),
-              ),
-              for (final c in cats) ...[
-                const SizedBox(width: 10),
-                _Chip(
-                  label: c.localizedName(s.lang),
-                  selected: selectedId == c.id,
-                  onTap: () => onSelect(c.id),
-                ),
-              ],
-            ],
-          ),
-        );
-      },
-    );
-  }
-}
-
-class _Chip extends StatelessWidget {
-  const _Chip({
-    required this.label,
-    required this.selected,
-    required this.onTap,
-  });
-
-  final String label;
-  final bool selected;
-  final VoidCallback onTap;
-
-  @override
-  Widget build(BuildContext context) {
-    return AnimatedScale(
-      scale: selected ? 1.05 : 1.0,
-      duration: const Duration(milliseconds: 150),
-      child: Material(
-        color: selected
-            ? AppColors.primary
-            : AppColors.surfaceContainerHigh,
-        borderRadius: BorderRadius.circular(999),
-        child: InkWell(
-          borderRadius: BorderRadius.circular(999),
-          onTap: onTap,
-          child: Padding(
-            padding:
-                const EdgeInsets.symmetric(horizontal: 22, vertical: 10),
-            child: Text(
-              label,
-              style: TextStyle(
-                color: selected
-                    ? AppColors.onPrimary
-                    : AppColors.onSurfaceVariant,
-                fontSize: 13,
-                fontWeight: FontWeight.bold,
-                letterSpacing: 0.2,
-              ),
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-class _Body extends StatelessWidget {
-  const _Body({required this.categoryId});
-
-  final String? categoryId;
+  final List<GlobalKey> shelfKeys;
+  final ScrollController scrollController;
 
   @override
   Widget build(BuildContext context) {
@@ -333,47 +184,688 @@ class _Body extends StatelessWidget {
           case CatalogState.error:
             return _ErrorView(message: svc.error ?? '');
           case CatalogState.ready:
-            final filtered = svc.catalog.where((p) {
-              if (p.stock <= 0) return false;
-              if (categoryId != null && p.categoryId != categoryId) {
-                return false;
-              }
-              return true;
-            }).toList();
-            if (filtered.isEmpty) {
-              return Center(
-                child: Text(context.read<Strings>().t('no_products'),
-                    style: const TextStyle(
-                        color: AppColors.onSurfaceVariant,
-                        fontSize: 14)),
-              );
-            }
-            // The operator picks columns from the service menu; we only
-            // fall back to a width-based clamp when the chosen value is
-            // clearly impossible on this screen (e.g. 5 columns on a
-            // 320 px phone). 90 px per column is the absolute minimum
-            // before product names get unreadable.
-            final width = MediaQuery.of(context).size.width;
-            final stored = context.watch<DeviceStorage>().gridColumns;
-            final maxByWidth = (width / 90).floor().clamp(2, 5);
-            final cols = stored.clamp(2, maxByWidth);
-            return GridView.builder(
-              padding: const EdgeInsets.fromLTRB(16, 8, 16, 110),
-              gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
-                crossAxisCount: cols,
-                mainAxisSpacing: 14,
-                crossAxisSpacing: 14,
-                // Full-bleed image cards look balanced at ~3:4 portrait
-                // ratio — gives enough vertical room for the name+price
-                // overlay and the stepper without squashing the photo.
-                childAspectRatio: 0.78,
+            // Group catalog by shelf. A shelf can be empty (no rows in
+            // inventory yet) — we still render the header so the
+            // numbered shelf rail stays consistent.
+            //
+            // Using SingleChildScrollView + Column (not ListView) so all
+            // six shelf widgets exist in the render tree at once.
+            // `Scrollable.ensureVisible` from the right rail's tabs
+            // doesn't work with lazy `ListView` children — when shelf 6
+            // hasn't been built yet, the tap silently fails. With six
+            // shelves this is fine memory-wise (no virtualisation
+            // needed) and lets any tab → any tab jump work.
+            final byMotor = {for (final p in svc.catalog) p.motorId: p};
+            return SingleChildScrollView(
+              controller: scrollController,
+              padding: const EdgeInsets.fromLTRB(16, 16, 8, 120),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  for (var shelf = 1;
+                      shelf <= MotorLayout.rows;
+                      shelf++) ...[
+                    _ShelfGroup(
+                      key: shelfKeys[shelf - 1],
+                      shelfNumber: shelf,
+                      products: [
+                        for (final motor in MotorLayout.motorsForShelf(shelf))
+                          if (byMotor[motor] != null) byMotor[motor]!,
+                      ],
+                    ),
+                    if (shelf < MotorLayout.rows)
+                      const SizedBox(height: 56),
+                  ],
+                ],
               ),
-              itemCount: filtered.length,
-              itemBuilder: (_, i) => _ProductTile(product: filtered[i]),
             );
         }
       },
     );
+  }
+}
+
+class _ShelfGroup extends StatelessWidget {
+  const _ShelfGroup({
+    super.key,
+    required this.shelfNumber,
+    required this.products,
+  });
+
+  final int shelfNumber;
+  final List<Product> products;
+
+  @override
+  Widget build(BuildContext context) {
+    final s = context.watch<Strings>();
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        // Header row: muted 25-dp numbered square + 14-pt range label.
+        // Was orange/black; toned down to gray-on-gray so the shelf
+        // dividers don't compete with the product cards.
+        Row(
+          children: [
+            Container(
+              width: 25,
+              height: 25,
+              decoration: BoxDecoration(
+                color: AppColors.iosGray.withValues(alpha: 0.35),
+                borderRadius: BorderRadius.circular(8),
+              ),
+              alignment: Alignment.center,
+              child: Text(
+                '$shelfNumber',
+                style: const TextStyle(
+                  color: AppColors.iosGray,
+                  fontSize: 14,
+                  fontWeight: FontWeight.w800,
+                  letterSpacing: -0.3,
+                  height: 1,
+                ),
+              ),
+            ),
+            const SizedBox(width: 8),
+            Text(
+              MotorLayout.shelfLabelRange(shelfNumber),
+              style: const TextStyle(
+                color: AppColors.iosGray,
+                fontSize: 14,
+                fontWeight: FontWeight.w700,
+                letterSpacing: -0.3,
+                fontFeatures: [FontFeature.tabularFigures()],
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 18),
+        if (products.isEmpty)
+          Padding(
+            padding: const EdgeInsets.symmetric(vertical: 12),
+            child: Text(
+              s.t('no_products'),
+              style: const TextStyle(
+                  color: AppColors.iosGray, fontSize: 13),
+            ),
+          )
+        else
+          LayoutBuilder(
+            builder: (context, constraints) {
+              // Figma uses 2 columns; on very wide tablets (>= 720 dp
+              // available) bump to 3 so the right rail doesn't dominate.
+              final cols = constraints.maxWidth >= 720 ? 3 : 2;
+              return GridView.count(
+                shrinkWrap: true,
+                physics: const NeverScrollableScrollPhysics(),
+                crossAxisCount: cols,
+                mainAxisSpacing: 18,
+                crossAxisSpacing: 18,
+                // Was 0.85 (215 × 253). Bumped to 0.895 to lop ≈5 % off
+                // the card height so 3 rows × 2 cols of a single shelf
+                // (6 cards) all fit in the 533 × 853 dp viewport at once.
+                childAspectRatio: 0.895,
+                children: [
+                  for (final p in products) _ProductCard(product: p),
+                ],
+              );
+            },
+          ),
+      ],
+    );
+  }
+}
+
+// ─────────────────────────── Card ───────────────────────────
+
+class _ProductCard extends StatelessWidget {
+  const _ProductCard({required this.product});
+
+  final Product product;
+
+  /// Adds one to the cart, but only if the board is currently healthy.
+  /// We deliberately use the synchronous [BoardClient.isHealthy] flag
+  /// here (not an awaited ping) — every tap should feel instant. The
+  /// payment screen does the heavier "live ping" check before money
+  /// changes hands; here it's enough to refuse the add if the
+  /// recent-comm watchdog has already flagged the bus as broken.
+  void _tryAdd(BuildContext context) {
+    final svc = context.read<VendingService>();
+    final board = context.read<BoardClient>();
+    if (!board.isHealthy) {
+      final s = context.read<Strings>();
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(s.t('board_not_found')),
+          backgroundColor: const Color(0xFFB3261E),
+        ),
+      );
+      return;
+    }
+    svc.addToCart(product);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final svc = context.watch<VendingService>();
+    final cartItem = svc.cartItems
+        .where((i) => i.product.motorId == product.motorId)
+        .firstOrNull;
+    final count = cartItem?.quantity ?? 0;
+    final canAdd = count < product.stock;
+
+    // Default state — thin gray hairline border, no shadow. The
+    // shadow is reserved for the "selected" state (already in cart)
+    // so the customer can see at a glance which cards they've
+    // touched. Cards without a shadow read as flat content; the
+    // shadow makes the selected ones lift off the page.
+    final selected = count > 0;
+    return AnimatedContainer(
+      duration: const Duration(milliseconds: 180),
+      curve: Curves.easeOut,
+      // ShapeDecoration (not BoxDecoration) so the rounded clip is
+      // antialiased cleanly. No outline in either state — selection
+      // is communicated by the brighter [iosCardSelectedShadow] drop
+      // shadow alone.
+      decoration: ShapeDecoration(
+        color: Colors.white,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(20),
+        ),
+        shadows: selected ? iosCardSelectedShadow : null,
+      ),
+      clipBehavior: Clip.antiAlias,
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          onTap: canAdd ? () => _tryAdd(context) : null,
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              // ─── Image area (Figma: 200 dp of a 260 dp tall card ≈ 77 %).
+              Expanded(
+                flex: 200,
+                child: Stack(
+                  children: [
+                    Positioned.fill(
+                      child: ColoredBox(
+                        color: AppColors.iosBackground,
+                        child: ProductThumb(
+                          product: product,
+                          emojiSize: 56,
+                          fit: BoxFit.cover,
+                        ),
+                      ),
+                    ),
+                    // Counter pill on the left, blue plus on the right —
+                    // mirrors the Figma "Selected" Card state. Counter
+                    // pill is hidden until at least one is in the cart.
+                    if (count > 0)
+                      Positioned(
+                        top: 12,
+                        left: 12,
+                        child: _CounterPill(
+                          count: count,
+                          onRemove: () => svc.removeOne(product.motorId),
+                        ),
+                      ),
+                    Positioned(
+                      top: 12,
+                      right: 12,
+                      child: _AddButton(
+                        enabled: canAdd,
+                        onTap: canAdd ? () => _tryAdd(context) : null,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              // ─── Content area (name + price). Figma: 60-dp tall,
+              // 16-dp horizontal padding, 8 top / 16 bottom.
+              Expanded(
+                flex: 60,
+                child: Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
+                  child: Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Expanded(
+                        child: Text(
+                          product.name,
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(
+                            color: AppColors.iosBlack,
+                            fontSize: 14,
+                            fontWeight: FontWeight.w600,
+                            letterSpacing: -0.14,
+                            height: 1.2,
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      Text(
+                        '${product.priceTenge} ₸',
+                        style: const TextStyle(
+                          color: AppColors.iosOrange,
+                          fontSize: 18,
+                          fontWeight: FontWeight.w800,
+                          letterSpacing: -0.18,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// Round blue "+" button overlaid on the card's image — matches the
+/// Figma "Menu - Nothing Selected" spec: solid blue 44-dp circle, no
+/// white outline ring, soft drop shadow underneath.
+class _AddButton extends StatelessWidget {
+  const _AddButton({required this.enabled, required this.onTap});
+
+  final bool enabled;
+  final VoidCallback? onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return DecoratedBox(
+      decoration: const BoxDecoration(
+        shape: BoxShape.circle,
+        boxShadow: [
+          BoxShadow(
+            color: Color(0x33000000),
+            blurRadius: 6,
+            offset: Offset(0, 2),
+          ),
+        ],
+      ),
+      child: Material(
+        color: enabled
+            ? AppColors.iosBlue
+            : AppColors.iosGray.withValues(alpha: 0.6),
+        shape: const CircleBorder(),
+        child: InkWell(
+          customBorder: const CircleBorder(),
+          onTap: onTap,
+          child: const SizedBox(
+            width: 44,
+            height: 44,
+            child: Icon(Icons.add, color: Colors.white, size: 24),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// Red rounded pill shown on the top-left of a product's image once
+/// at least one is in the cart. The whole pill is a single tap target
+/// that removes one — the white minus circle inside is purely visual
+/// (no nested gesture). Operators on the kiosk preferred a bigger
+/// hit area to the tiny 28-dp minus circle.
+class _CounterPill extends StatelessWidget {
+  const _CounterPill({required this.count, required this.onRemove});
+
+  final int count;
+  final VoidCallback onRemove;
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      color: const Color(0xFFE53935),
+      shape: const StadiumBorder(),
+      elevation: 1,
+      shadowColor: const Color(0x14000000),
+      child: InkWell(
+        customBorder: const StadiumBorder(),
+        onTap: onRemove,
+        child: SizedBox(
+          height: 44,
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(16, 0, 6, 0),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  '$count',
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 18,
+                    fontWeight: FontWeight.w700,
+                    letterSpacing: -0.2,
+                    height: 1,
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Container(
+                  width: 28,
+                  height: 28,
+                  decoration: const BoxDecoration(
+                    color: Colors.white,
+                    shape: BoxShape.circle,
+                  ),
+                  child: const Icon(
+                    Icons.remove,
+                    color: Color(0xFFE53935),
+                    size: 18,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+// ─────────────────────────── Shelf rail ───────────────────────────
+
+class _ShelfSelector extends StatelessWidget {
+  const _ShelfSelector({required this.selected, required this.onSelect});
+
+  final int selected;
+  final ValueChanged<int> onSelect;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      // Tightened from 96 → 60. The pill itself is ~48 dp wide; we
+      // give a 4 dp gutter on each side so it doesn't hug the right
+      // edge of the screen. Bottom padding ≈ bottom-bar height so
+      // "center" lands in the customer-visible area rather than
+      // behind the action bar.
+      width: 60,
+      padding: const EdgeInsets.fromLTRB(0, 0, 10, 104),
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        mainAxisSize: MainAxisSize.max,
+        children: [
+          const Padding(
+            padding: EdgeInsets.only(bottom: 6),
+            child: Text(
+              'полки',
+              style: TextStyle(
+                color: AppColors.iosGray,
+                fontSize: 11,
+                fontWeight: FontWeight.w500,
+                letterSpacing: -0.1,
+              ),
+            ),
+          ),
+          Container(
+            decoration: BoxDecoration(
+              color: const Color(0xCCFFFFFF),
+              borderRadius: BorderRadius.circular(28),
+            ),
+            padding:
+                const EdgeInsets.symmetric(horizontal: 4, vertical: 6),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                for (var i = 1; i <= MotorLayout.rows; i++) ...[
+                  _ShelfTab(
+                    number: i,
+                    active: i == selected,
+                    onTap: () => onSelect(i),
+                  ),
+                  if (i < MotorLayout.rows)
+                    Container(
+                      width: 12,
+                      height: 1,
+                      margin: const EdgeInsets.symmetric(vertical: 12),
+                      color: AppColors.iosGray.withValues(alpha: 0.3),
+                    ),
+                ],
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _ShelfTab extends StatelessWidget {
+  const _ShelfTab({
+    required this.number,
+    required this.active,
+    required this.onTap,
+  });
+
+  final int number;
+  final bool active;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      color: active ? AppColors.iosBlue : Colors.transparent,
+      shape: const CircleBorder(),
+      child: InkWell(
+        customBorder: const CircleBorder(),
+        onTap: onTap,
+        child: SizedBox(
+          // Was 56 — now 40, matches the slimmer rail.
+          width: 40,
+          height: 40,
+          child: Center(
+            child: Text(
+              '$number',
+              style: TextStyle(
+                color: active ? Colors.white : AppColors.iosGray,
+                fontSize: 17,
+                fontWeight: FontWeight.w800,
+                letterSpacing: -0.2,
+                height: 1,
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+// ─────────────────────────── Bottom action ───────────────────────────
+
+/// Persistent action bar pinned to the bottom of the catalog. Layout:
+/// [round back button] [action pill] — both fixed sizes so the bar
+/// height never jumps between empty / filled / pay states (the home
+/// and cart screens share the same widgets to keep that promise).
+class _BottomActionBar extends StatelessWidget {
+  const _BottomActionBar();
+
+  @override
+  Widget build(BuildContext context) {
+    final s = context.watch<Strings>();
+    final svc = context.watch<VendingService>();
+    final hasCart = svc.cartCount > 0;
+    return Positioned(
+      left: 0,
+      right: 0,
+      bottom: 0,
+      // Solid bar with a gradient fade up top so scrolling cards
+      // dissolve into the bar instead of peeking through the gap
+      // between the back-button outline and the pill.
+      child: DecoratedBox(
+        decoration: const BoxDecoration(
+          gradient: LinearGradient(
+            begin: Alignment.topCenter,
+            end: Alignment.bottomCenter,
+            colors: [
+              Color(0x00F2F2F7),
+              Color(0xFFF2F2F7),
+              Color(0xFFF2F2F7),
+            ],
+            stops: [0.0, 0.45, 1.0],
+          ),
+        ),
+        child: Padding(
+        padding: const EdgeInsets.fromLTRB(16, 24, 16, 16),
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            RoundBackButton(
+              // No meaningful "back" on the home root — placeholder for
+              // a future screensaver / attract-loop screen.
+              onTap: () {},
+            ),
+            const SizedBox(width: 12),
+            ActionPill(
+              icon: Icons.shopping_cart_outlined,
+              label: s.t('cart'),
+              value: hasCart
+                  ? '${svc.cartCount} ${s.t('items_short')}'
+                  : s.t('cart_empty').toLowerCase(),
+              filled: hasCart,
+              onTap: hasCart
+                  ? () => Navigator.of(context).push(
+                        MaterialPageRoute(
+                            builder: (_) => const CartScreen()),
+                      )
+                  : null,
+            ),
+          ],
+        ),
+      ),
+      ),
+    );
+  }
+}
+
+// ─────────────────────────── Corners + overlay ───────────────────────
+
+class _MaintenanceOverlay extends StatelessWidget {
+  const _MaintenanceOverlay({required this.onServiceTap});
+
+  final VoidCallback onServiceTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final s = context.watch<Strings>();
+    return Positioned.fill(
+      child: GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onTap: onServiceTap,
+        child: Container(
+          color: const Color(0xEB1C1C1E),
+          alignment: Alignment.center,
+          padding: const EdgeInsets.all(40),
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              const Icon(Icons.build_circle,
+                  size: 96, color: AppColors.iosOrange),
+              const SizedBox(height: 24),
+              Text(
+                s.t('maintenance_title'),
+                textAlign: TextAlign.center,
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontSize: 28,
+                  fontWeight: FontWeight.w900,
+                  letterSpacing: -1,
+                ),
+              ),
+              const SizedBox(height: 14),
+              Text(
+                s.t('maintenance_subtitle'),
+                textAlign: TextAlign.center,
+                style: const TextStyle(
+                  color: Color(0xCCFFFFFF),
+                  fontSize: 15,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _MachidCorner extends StatelessWidget {
+  const _MachidCorner({required this.onTap});
+
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final machid = context.watch<DeviceStorage>().machid;
+    if (machid == null) return const SizedBox.shrink();
+    return Positioned(
+      right: 8,
+      top: 8,
+      child: GestureDetector(
+        onTap: onTap,
+        behavior: HitTestBehavior.opaque,
+        child: Padding(
+          padding: const EdgeInsets.all(4),
+          child: Text(
+            '№$machid',
+            style: const TextStyle(
+              fontSize: 10,
+              fontWeight: FontWeight.bold,
+              letterSpacing: 0.5,
+              color: Color.fromARGB(255, 162, 162, 175),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _LangCorner extends StatelessWidget {
+  const _LangCorner();
+
+  // Storage / messages use ISO 'kk' for Kazakh — using 'kz' here makes
+  // Strings.setLang() silently reject the call (containsKey check fails).
+  static const _cycle = ['ru', 'kk', 'en'];
+
+  @override
+  Widget build(BuildContext context) {
+    final s = context.watch<Strings>();
+    final i = _cycle.indexOf(s.lang);
+    final next = _cycle[(i + 1) % _cycle.length];
+    final display = s.lang == 'kk' ? 'KZ' : s.lang.toUpperCase();
+    return Positioned(
+  // Sits under the machid badge (top: 8 + ≈26 dp of badge + 4 dp gap).
+  right: 8,
+  top: 40,
+  child: GestureDetector(
+    behavior: HitTestBehavior.opaque,
+    onTap: () => s.setLang(next),
+    child: Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 15),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          const Icon(Icons.language,
+              size: 14, color: Color.fromARGB(255, 175, 188, 197)),
+          const SizedBox(width: 4),
+          Text(
+            display,
+            style: const TextStyle(
+              color: Color.fromARGB(255, 139, 151, 161),
+              fontWeight: FontWeight.w900,
+              fontSize: 11,
+              letterSpacing: 0.5,
+            ),
+          ),
+        ],
+      ),
+    ),
+  ),
+);
   }
 }
 
@@ -408,7 +900,7 @@ class _ErrorView extends StatelessWidget {
             Text(message,
                 textAlign: TextAlign.center,
                 style: const TextStyle(
-                    fontSize: 12, color: AppColors.onSurfaceVariant)),
+                    fontSize: 12, color: AppColors.iosGray)),
             const SizedBox(height: 20),
             FilledButton.icon(
               icon: const Icon(Icons.refresh),
@@ -416,314 +908,6 @@ class _ErrorView extends StatelessWidget {
               onPressed: () => context.read<VendingService>().reload(),
             ),
           ],
-        ),
-      ),
-    );
-  }
-}
-
-class _ProductTile extends StatelessWidget {
-  const _ProductTile({required this.product});
-  final Product product;
-
-  @override
-  Widget build(BuildContext context) {
-    final svc = context.watch<VendingService>();
-    final cartItem = svc.cartItems
-        .where((i) => i.product.motorId == product.motorId)
-        .firstOrNull;
-    final count = cartItem?.quantity ?? 0;
-    final canAdd = count < product.stock;
-
-    return Container(
-      decoration: BoxDecoration(
-        color: AppColors.surfaceContainerLow,
-        borderRadius: BorderRadius.circular(20),
-        boxShadow: const [appCardShadow],
-      ),
-      clipBehavior: Clip.antiAlias,
-      child: Material(
-        color: Colors.transparent,
-        child: InkWell(
-          // Whole card is tappable — first tap adds to cart, subsequent
-          // taps work too. Once count > 0 the inline stepper at the
-          // bottom takes over for fine control.
-          onTap: canAdd ? () => svc.addToCart(product) : null,
-          child: Stack(
-            fit: StackFit.expand,
-            children: [
-              // ---------- 1. Full-bleed image background ----------
-              // No padding — the image (or emoji fallback) fills the
-              // entire card edge-to-edge, like a food-delivery tile.
-              Positioned.fill(
-                child: ProductThumb(
-                  product: product,
-                  emojiSize: 72,
-                  fit: BoxFit.cover,
-                ),
-              ),
-              // ---------- 2. Dark gradient at the bottom ----------
-              // Keeps the name + price readable over any image content.
-              Positioned(
-                left: 0,
-                right: 0,
-                bottom: 0,
-                child: Container(
-                  height: 110,
-                  decoration: const BoxDecoration(
-                    gradient: LinearGradient(
-                      begin: Alignment.topCenter,
-                      end: Alignment.bottomCenter,
-                      colors: [
-                        Color(0x002F2E32),
-                        Color(0xCC2F2E32),
-                        Color(0xEE2F2E32),
-                      ],
-                      stops: [0.0, 0.55, 1.0],
-                    ),
-                  ),
-                ),
-              ),
-              // ---------- 3. Slot label badge top-left ----------
-              Positioned(
-                top: 8,
-                left: 8,
-                child: Container(
-                  padding: const EdgeInsets.symmetric(
-                      horizontal: 8, vertical: 4),
-                  decoration: BoxDecoration(
-                    color: const Color(0xCC2F2E32),
-                    borderRadius: BorderRadius.circular(8),
-                  ),
-                  child: Text(
-                    product.shelfLabel,
-                    style: const TextStyle(
-                      color: Colors.white,
-                      fontSize: 10,
-                      fontWeight: FontWeight.w900,
-                      letterSpacing: 0.6,
-                      fontFeatures: [FontFeature.tabularFigures()],
-                    ),
-                  ),
-                ),
-              ),
-              // ---------- 4. Name + price overlay at bottom ----------
-              Positioned(
-                left: 10,
-                right: 10,
-                bottom: count > 0 ? 50 : 10,
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Text(
-                      product.name,
-                      maxLines: 2,
-                      overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(
-                        color: Colors.white,
-                        fontSize: 14,
-                        fontWeight: FontWeight.w900,
-                        letterSpacing: -0.3,
-                        height: 1.1,
-                      ),
-                    ),
-                    const SizedBox(height: 4),
-                    RichText(
-                      text: TextSpan(
-                        children: [
-                          TextSpan(
-                            text: '${product.priceTenge} ',
-                            style: const TextStyle(
-                              fontSize: 18,
-                              fontWeight: FontWeight.w900,
-                              color: Colors.white,
-                              letterSpacing: -0.5,
-                            ),
-                          ),
-                          const TextSpan(
-                            text: '₸',
-                            style: TextStyle(
-                              fontSize: 12,
-                              color: Color(0xCCFFFFFF),
-                              fontWeight: FontWeight.bold,
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-              // ---------- 5. Inline stepper at bottom when in cart ----
-              if (count > 0)
-                Positioned(
-                  left: 10,
-                  right: 10,
-                  bottom: 8,
-                  child: _InlineStepper(
-                    count: count,
-                    canAdd: canAdd,
-                    onMinus: () => svc.removeOne(product.motorId),
-                    onPlus: () => svc.addToCart(product),
-                  ),
-                ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-/// Compact `[-]  count  [+]` pill that replaces the static add-button
-/// once a product is already in the cart. Wrapped in its own InkWell so
-/// stepper taps don't bubble up to the card-level addToCart handler.
-class _InlineStepper extends StatelessWidget {
-  const _InlineStepper({
-    required this.count,
-    required this.canAdd,
-    required this.onMinus,
-    required this.onPlus,
-  });
-
-  final int count;
-  final bool canAdd;
-  final VoidCallback onMinus;
-  final VoidCallback onPlus;
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      height: 32,
-      decoration: BoxDecoration(
-        color: AppColors.surfaceContainerLow,
-        borderRadius: BorderRadius.circular(999),
-      ),
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-        children: [
-          _StepperButton(
-            icon: Icons.remove,
-            onTap: onMinus,
-            filled: false,
-          ),
-          Text(
-            '$count',
-            style: const TextStyle(
-                fontSize: 14,
-                fontWeight: FontWeight.w900,
-                color: AppColors.primary,
-                letterSpacing: -0.3),
-          ),
-          _StepperButton(
-            icon: Icons.add,
-            onTap: canAdd ? onPlus : null,
-            filled: true,
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class _StepperButton extends StatelessWidget {
-  const _StepperButton({
-    required this.icon,
-    required this.onTap,
-    required this.filled,
-  });
-
-  final IconData icon;
-  final VoidCallback? onTap;
-  final bool filled;
-
-  @override
-  Widget build(BuildContext context) {
-    final disabled = onTap == null;
-    return Material(
-      color: filled
-          ? (disabled
-              ? AppColors.surfaceContainerHigh
-              : AppColors.primary)
-          : AppColors.surfaceContainerLowest,
-      shape: const CircleBorder(),
-      child: InkWell(
-        customBorder: const CircleBorder(),
-        onTap: onTap,
-        child: SizedBox(
-          width: 28,
-          height: 28,
-          child: Icon(
-            icon,
-            size: 14,
-            color: filled
-                ? Colors.white
-                : AppColors.onSurfaceVariant,
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-class _FloatingCartBar extends StatelessWidget {
-  const _FloatingCartBar();
-
-  @override
-  Widget build(BuildContext context) {
-    final s = context.watch<Strings>();
-    final svc = context.watch<VendingService>();
-    return Positioned(
-      left: 16,
-      right: 16,
-      bottom: 16,
-      child: Material(
-        elevation: 10,
-        shadowColor: const Color(0x339C3F00),
-        borderRadius: BorderRadius.circular(999),
-        child: Ink(
-          decoration: BoxDecoration(
-            gradient: signatureGradient,
-            borderRadius: BorderRadius.circular(999),
-          ),
-          child: InkWell(
-            borderRadius: BorderRadius.circular(999),
-            onTap: () => Navigator.of(context).push(
-              MaterialPageRoute(builder: (_) => const CartScreen()),
-            ),
-            child: Padding(
-              padding:
-                  const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
-              child: Row(
-                children: [
-                  const Icon(Icons.shopping_bag_outlined,
-                      color: Colors.white, size: 20),
-                  const SizedBox(width: 10),
-                  Text(
-                    '${svc.cartCount} ${s.t('pcs')}',
-                    style: const TextStyle(
-                        color: Colors.white,
-                        fontWeight: FontWeight.bold,
-                        fontSize: 14,
-                        letterSpacing: 0.3),
-                  ),
-                  const Spacer(),
-                  Text(
-                    '${svc.cartTotalTenge} ₸',
-                    style: const TextStyle(
-                        color: Colors.white,
-                        fontWeight: FontWeight.w900,
-                        fontSize: 20,
-                        letterSpacing: -0.5),
-                  ),
-                  const SizedBox(width: 8),
-                  const Icon(Icons.chevron_right,
-                      color: Colors.white, size: 22),
-                ],
-              ),
-            ),
-          ),
         ),
       ),
     );
