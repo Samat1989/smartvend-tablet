@@ -1,18 +1,25 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
-import '../models/motor_layout.dart';
+import '../models/machine_layout.dart';
 import '../models/product.dart';
 import '../services/device_storage.dart';
 import '../services/strings.dart';
 import '../services/vending_service.dart';
 import '../theme.dart';
+import 'layout_editor_screen.dart';
 import 'product_edit_screen.dart';
 
-/// Service-mode tool: vertical list of all 36 motor slots, one row per slot.
-/// Each row exposes every per-slot setting at a glance (name, price, stock,
-/// motor type, drop-sensor mode) so the operator doesn't need to open the
-/// detail form just to check what's configured.
+/// Service-mode tool: vertical list of every slot in the operator-built
+/// [MachineLayout], grouped by shelf. Each row exposes every per-slot
+/// setting at a glance (name, price, stock, motor type, drop-sensor
+/// mode) so the operator doesn't need to open the detail form just to
+/// check what's configured.
+///
+/// Products are still keyed in the catalog by single motor id
+/// ([Product.motorId]), so we look each row's product up via the
+/// slot's [Slot.primaryMotorId]. Twin/wide-spiral slots show every
+/// motor id in the badge.
 class InventoryEditScreen extends StatelessWidget {
   const InventoryEditScreen({super.key});
 
@@ -40,25 +47,126 @@ class InventoryEditScreen extends StatelessWidget {
             return const Center(child: CircularProgressIndicator());
           }
           final byMotor = {for (final p in svc.catalog) p.motorId: p};
-          final motors = MotorLayout.allMotors().toList();
+          final layout = svc.layout;
+          if (layout.isEmpty) {
+            return const _EmptyLayoutHint();
+          }
           return Column(
             children: [
               const _SensorModeHeader(),
               Expanded(
-                child: ListView.separated(
-                  padding: const EdgeInsets.all(12),
-                  itemCount: motors.length,
-                  separatorBuilder: (_, _) => const SizedBox(height: 8),
+                child: ListView.builder(
+                  padding: const EdgeInsets.fromLTRB(12, 12, 12, 24),
+                  itemCount: layout.shelves.length,
                   itemBuilder: (_, i) {
-                    final motorId = motors[i];
-                    final product = byMotor[motorId];
-                    return _ProductRow(motorId: motorId, product: product);
+                    final shelf = layout.shelves[i];
+                    return _ShelfBlock(shelf: shelf, byMotor: byMotor);
                   },
                 ),
               ),
             ],
           );
         },
+      ),
+    );
+  }
+}
+
+class _EmptyLayoutHint extends StatelessWidget {
+  const _EmptyLayoutHint();
+
+  @override
+  Widget build(BuildContext context) {
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.all(32),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(Icons.grid_off, size: 56, color: Colors.grey.shade500),
+            const SizedBox(height: 16),
+            const Text(
+              'Раскладка не настроена',
+              style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700),
+            ),
+            const SizedBox(height: 8),
+            const Text(
+              'Сначала откройте редактор раскладки и выберите шаблон '
+              '— после этого здесь появятся строки на каждый слот.',
+              textAlign: TextAlign.center,
+              style: TextStyle(fontSize: 13, color: Colors.black54),
+            ),
+            const SizedBox(height: 16),
+            FilledButton.icon(
+              icon: const Icon(Icons.dashboard_customize),
+              label: const Text('Открыть редактор'),
+              onPressed: () => Navigator.of(context).push(
+                MaterialPageRoute(
+                  builder: (_) => const LayoutEditorScreen(),
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _ShelfBlock extends StatelessWidget {
+  const _ShelfBlock({required this.shelf, required this.byMotor});
+
+  final Shelf shelf;
+  final Map<int, Product> byMotor;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 14),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(4, 4, 4, 8),
+            child: Row(
+              children: [
+                Text(
+                  shelf.label,
+                  style: const TextStyle(
+                    fontSize: 13,
+                    fontWeight: FontWeight.w800,
+                    letterSpacing: 1.5,
+                    color: Colors.black87,
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Text(
+                  '× ${shelf.slots.length}',
+                  style: const TextStyle(
+                      fontSize: 11,
+                      fontWeight: FontWeight.w600,
+                      color: Colors.black54),
+                ),
+              ],
+            ),
+          ),
+          if (shelf.slots.isEmpty)
+            const Padding(
+              padding: EdgeInsets.symmetric(horizontal: 4, vertical: 6),
+              child: Text(
+                'нет слотов',
+                style: TextStyle(fontSize: 12, color: Colors.black45),
+              ),
+            )
+          else
+            for (var i = 0; i < shelf.slots.length; i++) ...[
+              _ProductRow(
+                slot: shelf.slots[i],
+                product: byMotor[shelf.slots[i].primaryMotorId],
+              ),
+              if (i != shelf.slots.length - 1) const SizedBox(height: 8),
+            ],
+        ],
       ),
     );
   }
@@ -129,15 +237,14 @@ class _SensorModeHeader extends StatelessWidget {
 }
 
 class _ProductRow extends StatelessWidget {
-  const _ProductRow({required this.motorId, required this.product});
+  const _ProductRow({required this.slot, required this.product});
 
-  final int motorId;
+  final Slot slot;
   final Product? product;
 
   @override
   Widget build(BuildContext context) {
     final s = context.watch<Strings>();
-    final shelf = MotorLayout.motorToLabel(motorId);
     final empty = product == null;
     return Material(
       color: Colors.white,
@@ -150,7 +257,7 @@ class _ProductRow extends StatelessWidget {
           await Navigator.of(context).push(
             MaterialPageRoute(
               builder: (_) => ProductEditScreen(
-                motorId: motorId,
+                motorId: slot.primaryMotorId,
                 existing: product,
               ),
             ),
@@ -164,7 +271,7 @@ class _ProductRow extends StatelessWidget {
           child: Row(
             crossAxisAlignment: CrossAxisAlignment.center,
             children: [
-              _slotBadge(shelf, motorId),
+              _slotBadge(slot),
               const SizedBox(width: 12),
               _thumb(),
               const SizedBox(width: 12),
@@ -182,31 +289,58 @@ class _ProductRow extends StatelessWidget {
     );
   }
 
-  Widget _slotBadge(String shelf, int motor) {
+  Widget _slotBadge(Slot slot) {
+    final motorsLabel = slot.motorIds.map((m) => 'M$m').join('+');
     return Container(
-      width: 56,
-      padding: const EdgeInsets.symmetric(vertical: 8),
+      width: 76,
+      padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 4),
       decoration: BoxDecoration(
         color: Colors.indigo.shade50,
         borderRadius: BorderRadius.circular(10),
       ),
       child: Column(
+        mainAxisSize: MainAxisSize.min,
         children: [
           Text(
-            shelf,
+            slot.label,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
             style: TextStyle(
               fontSize: 14,
               fontWeight: FontWeight.bold,
               color: Colors.indigo.shade700,
             ),
           ),
+          const SizedBox(height: 2),
           Text(
-            'M$motor',
+            motorsLabel,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
             style: TextStyle(
               fontSize: 10,
-              color: Colors.grey.shade500,
+              color: Colors.grey.shade600,
+              fontFamily: 'monospace',
             ),
           ),
+          if (slot.isTwin) ...[
+            const SizedBox(height: 2),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
+              decoration: BoxDecoration(
+                color: AppColors.iosOrange.withValues(alpha: 0.2),
+                borderRadius: BorderRadius.circular(4),
+              ),
+              child: const Text(
+                'TWIN',
+                style: TextStyle(
+                  color: AppColors.iosOrange,
+                  fontSize: 8,
+                  fontWeight: FontWeight.w900,
+                  letterSpacing: 1.0,
+                ),
+              ),
+            ),
+          ],
         ],
       ),
     );

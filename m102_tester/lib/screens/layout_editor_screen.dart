@@ -48,6 +48,79 @@ class _LayoutEditorScreenState extends State<LayoutEditorScreen> {
     if (mounted) Navigator.of(context).pop();
   }
 
+  /// Opens a sheet listing [LayoutTemplate.all]. Tapping a template
+  /// confirms (current draft will be overwritten) and replaces `_draft`
+  /// with a freshly-built copy. Labels and motor ids stay editable
+  /// afterwards via the normal slot picker.
+  Future<void> _pickTemplate() async {
+    final chosen = await showModalBottomSheet<LayoutTemplate>(
+      context: context,
+      backgroundColor: Colors.grey.shade900,
+      isScrollControlled: true,
+      builder: (ctx) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Padding(
+              padding: EdgeInsets.fromLTRB(20, 16, 20, 8),
+              child: Align(
+                alignment: Alignment.centerLeft,
+                child: Text(
+                  'Выберите шаблон',
+                  style: TextStyle(
+                    color: Colors.white,
+                    fontSize: 18,
+                    fontWeight: FontWeight.w800,
+                  ),
+                ),
+              ),
+            ),
+            for (final tpl in LayoutTemplate.all)
+              ListTile(
+                leading: const Icon(Icons.grid_view, color: Colors.white70),
+                title: Text(tpl.name,
+                    style: const TextStyle(
+                        color: Colors.white, fontWeight: FontWeight.w700)),
+                subtitle: Text(tpl.description,
+                    style: const TextStyle(color: Colors.white60)),
+                onTap: () => Navigator.of(ctx).pop(tpl),
+              ),
+            const SizedBox(height: 8),
+          ],
+        ),
+      ),
+    );
+    if (chosen == null || !mounted) return;
+
+    if (_draft.shelves.isNotEmpty) {
+      final ok = await showDialog<bool>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: const Text('Перезаписать раскладку?'),
+          content: Text(
+              'Текущая раскладка будет заменена на «${chosen.name}». '
+              'Подписи и моторы можно будет править после применения.'),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(ctx).pop(false),
+              child: const Text('Отмена'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.of(ctx).pop(true),
+              child: const Text('Применить'),
+            ),
+          ],
+        ),
+      );
+      if (ok != true || !mounted) return;
+    }
+
+    setState(() {
+      _draft = chosen.build();
+      _selectedShelf = _draft.shelves.isEmpty ? -1 : 0;
+    });
+  }
+
   void _addShelf() {
     final nextLabel = 'Полка ${_draft.shelves.length + 1}';
     setState(() {
@@ -310,6 +383,11 @@ class _LayoutEditorScreenState extends State<LayoutEditorScreen> {
         title: Text(s.t('service_layout_editor'),
             style: const TextStyle(fontWeight: FontWeight.bold)),
         actions: [
+          IconButton(
+            tooltip: 'Шаблоны раскладки',
+            icon: const Icon(Icons.dashboard_customize),
+            onPressed: _pickTemplate,
+          ),
           IconButton(
             tooltip: 'Сохранить',
             icon: const Icon(Icons.check),

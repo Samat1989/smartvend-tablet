@@ -102,6 +102,102 @@ class Shelf {
       );
 }
 
+/// Pre-baked starter layouts the operator can pick in the editor as a
+/// one-tap reset. After applying, every label and motor mapping is
+/// still freely editable per slot — the template only seeds the grid.
+class LayoutTemplate {
+  const LayoutTemplate({
+    required this.id,
+    required this.name,
+    required this.description,
+    required this.builder,
+  });
+
+  final String id;
+  final String name;
+  final String description;
+  final MachineLayout Function() builder;
+
+  MachineLayout build() => builder();
+
+  /// Original kiosk wiring: 6 shelves × 6 slots, motor ids 99..44
+  /// (top-left to bottom-right, row-major, decade per shelf).
+  static const LayoutTemplate factory6x6 = LayoutTemplate(
+    id: 'factory_6x6',
+    name: 'Заводская 6×6',
+    description: '6 полок × 6 слотов, моторы 99..44, ярлыки 001..036',
+    builder: _buildFactory6x6,
+  );
+
+  /// MP2404 board kiosk: 1 short top shelf with 5 twin-spiral slots
+  /// (motors 99..95) followed by 5 regular shelves of 10 slots each
+  /// (motors 89..40, ярлыки 11..60).
+  static const LayoutTemplate mp2404_5_50 = LayoutTemplate(
+    id: 'mp2404_5_50',
+    name: 'MP2404 (5 + 5×10)',
+    description: '1×5 сдвоенных слотов сверху + 5×10 обычных снизу',
+    builder: _buildMp2404,
+  );
+
+  static const List<LayoutTemplate> all = [factory6x6, mp2404_5_50];
+}
+
+MachineLayout _buildFactory6x6() {
+  final shelves = <Shelf>[];
+  for (var s = 1; s <= 6; s++) {
+    final slots = <Slot>[];
+    for (var j = 1; j <= 6; j++) {
+      final motor = (10 - s) * 10 + (10 - j);
+      final num = (s - 1) * 6 + j;
+      slots.add(Slot(
+        label: num.toString().padLeft(3, '0'),
+        motorIds: [motor],
+      ));
+    }
+    final first = (s - 1) * 6 + 1;
+    final last = s * 6;
+    shelves.add(Shelf(
+      label: '${first.toString().padLeft(3, '0')} — '
+          '${last.toString().padLeft(3, '0')}',
+      slots: slots,
+    ));
+  }
+  return MachineLayout(shelves: shelves);
+}
+
+MachineLayout _buildMp2404() {
+  final shelves = <Shelf>[];
+
+  // Top shelf: 5 twin-spiral slots. Each "logical" slot drives one
+  // double spiral; on this cabinet the operator wires the pair into a
+  // single channel so we seed it as a single-motor slot. Easy to flip
+  // to TWIN later via the slot picker.
+  final topSlots = <Slot>[
+    for (var j = 1; j <= 5; j++)
+      Slot(
+        label: j.toString().padLeft(2, '0'),
+        motorIds: [100 - j],
+      ),
+  ];
+  shelves.add(Shelf(label: '01 — 05', slots: topSlots));
+
+  // Shelves 2..6 — 10 slots each, decade-per-shelf.
+  for (var s = 2; s <= 6; s++) {
+    final slots = <Slot>[
+      for (var j = 1; j <= 10; j++)
+        Slot(
+          label: ((s - 1) * 10 + j).toString(),
+          motorIds: [(11 - s) * 10 - j],
+        ),
+    ];
+    final first = (s - 1) * 10 + 1;
+    final last = s * 10;
+    shelves.add(Shelf(label: '$first — $last', slots: slots));
+  }
+
+  return MachineLayout(shelves: shelves);
+}
+
 class Slot {
   Slot({required this.label, required this.motorIds});
 
