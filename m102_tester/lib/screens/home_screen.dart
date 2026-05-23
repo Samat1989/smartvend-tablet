@@ -8,6 +8,7 @@ import '../board/board_client.dart';
 import '../models/motor_layout.dart';
 import '../models/product.dart';
 import '../services/device_storage.dart';
+import '../services/idle_service.dart';
 import '../services/strings.dart';
 import '../services/vending_service.dart';
 import '../theme.dart';
@@ -72,11 +73,11 @@ class _HomeScreenState extends State<HomeScreen> {
   /// Both timers reset on any pointer event via [_resetIdle]. While
   /// the cart has items the auto-cycle pauses — the customer is
   /// clearly mid-pick and we mustn't steal their place in the catalog.
-  static const Duration _shelfCycleAfter = Duration(seconds: 30);
-  static const Duration _shelfCycleStep = Duration(seconds: 5);
+  static const Duration _shelfCycleAfter = Duration(seconds: 5);
+  static const Duration _shelfCycleStep = Duration(seconds: 10);
+  static const Duration _cartAbandonAfter = Duration(minutes: 2);
   static const Duration _screensaverAfter = Duration(minutes: 5);
   Timer? _idleTick;
-  DateTime _lastTouchAt = DateTime.now();
   DateTime? _lastShelfAdvanceAt;
   bool _screensaverOpen = false;
 
@@ -96,18 +97,38 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   void _resetIdle() {
+    // Pointer events at the global builder Listener already bump
+    // [IdleService.instance.lastTouchAt]; this just clears our own
+    // per-step state so a finger-down restarts the auto-cycle cadence
+    // cleanly.
     if (_screensaverOpen) return;
-    _lastTouchAt = DateTime.now();
     _lastShelfAdvanceAt = null;
   }
 
   Future<void> _onTick() async {
     if (!mounted || _screensaverOpen) return;
+
+    final svc = context.read<VendingService>();
+    final idleFor =
+        DateTime.now().difference(IdleService.instance.lastTouchAt);
+
+    // Stage 0 — abandoned cart. Runs from any route so we can pop the
+    // customer back to home if they walked away on the cart / pay
+    // screen without checking out. Reset the idle clock afterwards so
+    // the auto-cycle / screensaver stages start fresh from "home".
+    if (svc.cartCount > 0 && idleFor >= _cartAbandonAfter) {
+      svc.clearCart();
+      Navigator.of(context).popUntil((r) => r.isFirst);
+      IdleService.instance.touched();
+      _lastShelfAdvanceAt = null;
+      return;
+    }
+
+    // Below stages only apply when HomeScreen is the visible route.
     final route = ModalRoute.of(context);
     if (route == null || !route.isCurrent) return;
-    if (context.read<VendingService>().cartCount > 0) return;
-
-    final idleFor = DateTime.now().difference(_lastTouchAt);
+    // Don't interrupt a customer who's actively curating a cart.
+    if (svc.cartCount > 0) return;
 
     if (idleFor >= _screensaverAfter) {
       _screensaverOpen = true;
@@ -119,12 +140,12 @@ class _HomeScreenState extends State<HomeScreen> {
       ));
       if (!mounted) return;
       _screensaverOpen = false;
-      _lastTouchAt = DateTime.now();
+      IdleService.instance.touched();
       return;
     }
 
     if (idleFor >= _shelfCycleAfter) {
-      final lastStep = _lastShelfAdvanceAt ?? _lastTouchAt;
+      final lastStep = _lastShelfAdvanceAt ?? IdleService.instance.lastTouchAt;
       if (DateTime.now().difference(lastStep) >= _shelfCycleStep) {
         await _autoAdvanceShelf();
         _lastShelfAdvanceAt = DateTime.now();

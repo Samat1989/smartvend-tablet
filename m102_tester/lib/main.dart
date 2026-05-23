@@ -8,6 +8,7 @@ import 'screens/home_screen.dart';
 import 'screens/pairing_screen.dart';
 import 'services/climate_controller.dart';
 import 'services/device_storage.dart';
+import 'services/idle_service.dart';
 import 'services/media_service.dart';
 import 'services/strings.dart';
 import 'services/vending_service.dart';
@@ -82,6 +83,18 @@ class VendingApp extends StatelessWidget {
           Locale('kk'),
           Locale('en'),
         ],
+        // Global activity tracker — every pointer event on any route
+        // updates [IdleService.lastTouchAt]. Lets the catalog screen
+        // detect "customer walked away with stuff in the cart" even
+        // when the user is on a deeper screen.
+        builder: (context, child) {
+          return Listener(
+            behavior: HitTestBehavior.translucent,
+            onPointerDown: (_) => IdleService.instance.touched(),
+            onPointerMove: (_) => IdleService.instance.touched(),
+            child: child!,
+          );
+        },
         home: const _Router(),
       ),
     );
