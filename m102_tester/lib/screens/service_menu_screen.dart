@@ -152,58 +152,29 @@ class ServiceMenuScreen extends StatelessWidget {
     );
   }
 
-  /// Lets the operator pick how many product tiles fit per row in the
-  /// customer catalog. Persisted via [DeviceStorage.setGridColumns]; the
-  /// home screen rebuilds automatically thanks to the `notifyListeners`.
+  /// Placeholder while the catalog layout editor is being reworked.
+  /// The old "columns per row" picker has been retired in favour of a
+  /// per-machine layout editor (see [LayoutEditorScreen]); this tile
+  /// will eventually hand the operator a richer view chooser.
   Future<void> _changeLayout(BuildContext context) async {
-    final s = context.read<Strings>();
-    final storage = context.read<DeviceStorage>();
-    final picked = await showDialog<int>(
+    await showDialog<void>(
       context: context,
-      builder: (ctx) {
-        int current = storage.gridColumns;
-        return StatefulBuilder(
-          builder: (ctx, setState) => AlertDialog(
-            title: Text(s.t('service_layout')),
-            content: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  s.t('layout_columns'),
-                  style: const TextStyle(fontSize: 13),
-                ),
-                const SizedBox(height: 12),
-                SegmentedButton<int>(
-                  segments: const [
-                    ButtonSegment(value: 2, label: Text('2')),
-                    ButtonSegment(value: 3, label: Text('3')),
-                    ButtonSegment(value: 4, label: Text('4')),
-                    ButtonSegment(value: 5, label: Text('5')),
-                  ],
-                  selected: {current},
-                  onSelectionChanged: (set) =>
-                      setState(() => current = set.first),
-                ),
-              ],
-            ),
-            actions: [
-              TextButton(
-                onPressed: () => Navigator.of(ctx).pop(),
-                child: Text(s.t('payment_cancel')),
-              ),
-              FilledButton(
-                onPressed: () => Navigator.of(ctx).pop(current),
-                child: Text(s.t('btn_save')),
-              ),
-            ],
+      builder: (ctx) => AlertDialog(
+        title: const Text('Раскладка каталога'),
+        content: const Text(
+          'Раздел в разработке — скоро будет.\n\n'
+          'Для настройки слотов используйте «Редактор раскладки» — '
+          'там сейчас задаётся структура полок и моторов.',
+          style: TextStyle(height: 1.4),
+        ),
+        actions: [
+          FilledButton(
+            onPressed: () => Navigator.of(ctx).pop(),
+            child: const Text('OK'),
           ),
-        );
-      },
+        ],
+      ),
     );
-    if (picked != null) {
-      await storage.setGridColumns(picked);
-    }
   }
 
 

@@ -471,6 +471,69 @@ class SupabaseApi {
     }
   }
 
+  /// PATCH only the wiring-related columns of an inventory row.
+  /// Used by the motor-setup screen so the operator can change motor
+  /// type / drop-sensor mode per slot without going through the full
+  /// product editor.
+  Future<bool> updateInventoryWiring({
+    required String inventoryId,
+    int? motorType,
+    int? curtainMode,
+  }) async {
+    final body = <String, dynamic>{
+      'motor_type': ?motorType,
+      'curtain_mode': ?curtainMode,
+    };
+    if (body.isEmpty) return true;
+    try {
+      final resp = await _client.patch(
+        _rest('inventory', {'id': 'eq.$inventoryId'}),
+        headers: _headers,
+        body: jsonEncode(body),
+      ).timeout(const Duration(seconds: 8));
+      return resp.statusCode >= 200 && resp.statusCode < 300;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  /// Bulk update of curtain_mode across many inventory rows. Returns
+  /// the number of rows that succeeded (best-effort — the server
+  /// commits each PATCH independently). Used by the "apply to all"
+  /// affordance in motor setup.
+  Future<int> bulkUpdateCurtain({
+    required List<String> inventoryIds,
+    required int curtainMode,
+  }) async {
+    var ok = 0;
+    for (final id in inventoryIds) {
+      if (await updateInventoryWiring(inventoryId: id, curtainMode: curtainMode)) {
+        ok++;
+      }
+    }
+    return ok;
+  }
+
+  /// Bulk price update across many inventory rows. Used by the
+  /// "apply price to other slots" affordance in the product editor.
+  Future<int> bulkUpdatePrice({
+    required List<String> inventoryIds,
+    required int priceTenge,
+  }) async {
+    var ok = 0;
+    for (final id in inventoryIds) {
+      try {
+        final resp = await _client.patch(
+          _rest('inventory', {'id': 'eq.$id'}),
+          headers: _headers,
+          body: jsonEncode({'price': priceTenge}),
+        ).timeout(const Duration(seconds: 8));
+        if (resp.statusCode >= 200 && resp.statusCode < 300) ok++;
+      } catch (_) {}
+    }
+    return ok;
+  }
+
   /// Delete a product row by id.
   Future<bool> deleteProduct(String productId) async {
     try {

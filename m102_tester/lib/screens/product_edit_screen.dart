@@ -2,8 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 
-import '../board/board_client.dart';
 import '../models/catalog_product.dart';
+import '../models/machine_layout.dart';
 import '../models/product.dart';
 import '../services/device_storage.dart';
 import '../services/strings.dart';
@@ -40,8 +40,6 @@ class _ProductEditScreenState extends State<ProductEditScreen> {
   int _curtain = 0;
   String? _categoryId;
   bool _saving = false;
-  bool _testing = false;
-  bool _testingCurtain = false;
 
   /// FK into `products`. Set when the operator picks from the catalog,
   /// inherited from the existing inventory row if editing, or `null`
@@ -120,45 +118,78 @@ class _ProductEditScreenState extends State<ProductEditScreen> {
     super.dispose();
   }
 
+  String _resolveSlotLabel() {
+    final layout = context.read<VendingService>().layout;
+    final slot = layout.slotForMotor(widget.motorId);
+    return slot?.label ?? widget.motorId.toString().padLeft(3, '0');
+  }
+
   Future<void> _save() async {
     final s = context.read<Strings>();
     if (!(_formKey.currentState?.validate() ?? false)) return;
+    if (_catalogProductId == null) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+        content: Text('Сначала выберите товар из каталога'),
+        backgroundColor: Colors.redAccent,
+      ));
+      return;
+    }
+    final price = int.tryParse(_priceCtrl.text.trim()) ?? 0;
+    final stock = int.tryParse(_stockCtrl.text.trim()) ?? 0;
+
+    // Confirmation step — the operator just bound a product to a
+    // physical slot, double-check before committing so a misread label
+    // doesn't turn into a 200 ₸ Coca-Cola on the spiral that actually
+    // holds water bottles.
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Сохранить?'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text('Слот ${_resolveSlotLabel()} · M${widget.motorId}',
+                style: const TextStyle(
+                    fontSize: 12,
+                    fontWeight: FontWeight.w700,
+                    color: Colors.indigo)),
+            const SizedBox(height: 8),
+            Text(_nameCtrl.text.trim(),
+                style: const TextStyle(
+                    fontSize: 16, fontWeight: FontWeight.w800)),
+            const SizedBox(height: 6),
+            Text('Цена: $price ₸'),
+            Text('Остаток: $stock шт'),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(false),
+            child: const Text('Отмена'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(ctx).pop(true),
+            child: const Text('Сохранить'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+
     final storage = context.read<DeviceStorage>();
     final machid = storage.machid;
     if (machid == null) return;
     setState(() => _saving = true);
 
-    // inventory.product_id is NOT NULL — if the operator typed a name
-    // freehand without picking from the catalog, create a draft SKU
-    // first so admin can review it later. Editing an existing row
-    // keeps its current link.
-    var catalogId = _catalogProductId;
-    if (catalogId == null) {
-      catalogId = await _api.createDraftProduct(
-        name: _nameCtrl.text.trim(),
-        imageUrl: _imageCtrl.text.trim(),
-        emoji: _emojiCtrl.text.trim(),
-        categoryId: _categoryId,
-      );
-      if (catalogId == null) {
-        if (!mounted) return;
-        setState(() => _saving = false);
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-          content: Text(s.t('save_failed')),
-          backgroundColor: Colors.redAccent,
-        ));
-        return;
-      }
-    }
-
     final id = await _api.upsertProduct(
       inventoryId: widget.existing?.id,
-      catalogProductId: catalogId,
+      catalogProductId: _catalogProductId!,
       machid: machid,
       motorId: widget.motorId,
       name: _nameCtrl.text.trim(),
-      priceTenge: int.tryParse(_priceCtrl.text.trim()) ?? 0,
-      stock: int.tryParse(_stockCtrl.text.trim()) ?? 0,
+      priceTenge: price,
+      stock: stock,
       motorType: _motorType,
       curtainMode: _curtain,
       imageUrl: _imageCtrl.text.trim(),
@@ -207,93 +238,68 @@ class _ProductEditScreenState extends State<ProductEditScreen> {
     if (deleted) Navigator.of(context).pop();
   }
 
-  Future<void> _testMotor() async {
-    final s = context.read<Strings>();
-    final board = context.read<BoardClient>();
-    if (!board.isConnected) {
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-        content: Text(s.t('board_not_found')),
-        backgroundColor: Colors.redAccent,
-      ));
-      return;
-    }
-    setState(() => _testing = true);
-    // Use the global "real dispense" sensor mode so this button mirrors
-    // what an actual paying customer would trigger. The dedicated
-    // "Test drop sensor" button below forces curtain=1 for diagnostics.
-    final curtain = context.read<DeviceStorage>().dispenseSensorMode;
-    final r = await board.dispense(
-      widget.motorId,
-      type: _motorType,
-      curtain: curtain,
+  /// Bulk-apply this slot's bound product + current price (and stock
+  /// optionally) to other inventory rows. Operator picks the target
+  /// slots from a checklist — settings are written via the same
+  /// upsertProduct API, then the local catalog refreshes.
+  Future<void> _openBulkApply() async {
+    if (_catalogProductId == null) return;
+    final svc = context.read<VendingService>();
+    final storage = context.read<DeviceStorage>();
+    final machid = storage.machid;
+    if (machid == null) return;
+
+    final price = int.tryParse(_priceCtrl.text.trim()) ?? 0;
+    final stock = int.tryParse(_stockCtrl.text.trim()) ?? 0;
+    final candidates = svc.catalog
+        .where((p) => p.id != widget.existing?.id)
+        .toList()
+      ..sort((a, b) => a.motorId.compareTo(b.motorId));
+
+    final result = await showModalBottomSheet<_BulkApplyResult>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.white,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+      ),
+      builder: (_) => _BulkApplySheet(
+        candidates: candidates,
+        currentName: _nameCtrl.text.trim(),
+        currentPrice: price,
+        currentStock: stock,
+        layout: svc.layout,
+      ),
     );
-    if (!mounted) return;
-    setState(() => _testing = false);
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-      content: Text(r.message),
-      backgroundColor: r.success ? Colors.green : Colors.redAccent,
-    ));
-  }
+    if (result == null || result.targets.isEmpty || !mounted) return;
 
-  /// Force-runs the motor with curtain mode `1` regardless of the saved
-  /// product setting, to specifically exercise the drop-sensor wiring.
-  ///
-  /// Per `c:\m109e\api_docsM109E.txt` §6.4: V1 (sensor power) is **only**
-  /// driven during a RUN command with curtain ≠ 0. There's no standalone
-  /// "power the sensor" opcode, so the only way to verify the IR curtain
-  /// is to actually start a motor with curtain on. The result tells us
-  /// which physical layer is broken:
-  ///   - `result=4`            → board powered V1 but got no SIG response
-  ///                              (broken sensor / wiring / no 24V)
-  ///   - `result=0, ms == 0`   → motor finished, sensor never tripped
-  ///                              (empty slot / misalignment / nothing fell)
-  ///   - `result=0, ms > 0`    → sensor confirmed a drop — fully working
-  ///   - other result codes    → motor-side fault, sensor inconclusive
-  Future<void> _testCurtain() async {
-    final s = context.read<Strings>();
-    final board = context.read<BoardClient>();
-    if (!board.isConnected) {
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-        content: Text(s.t('board_not_found')),
-        backgroundColor: Colors.redAccent,
-      ));
-      return;
+    setState(() => _saving = true);
+    var ok = 0;
+    for (final target in result.targets) {
+      final id = await _api.upsertProduct(
+        inventoryId: target.id,
+        catalogProductId: _catalogProductId!,
+        machid: machid,
+        motorId: target.motorId,
+        name: _nameCtrl.text.trim(),
+        priceTenge: result.applyPrice ? price : target.priceTenge,
+        stock: result.applyStock ? stock : target.stock,
+        motorType: target.motorType,
+        curtainMode: target.curtainMode,
+        imageUrl: _imageCtrl.text.trim(),
+        emoji: _emojiCtrl.text.trim(),
+        categoryId: _categoryId,
+      );
+      if (id != null) ok++;
     }
-    setState(() => _testingCurtain = true);
-    final r = await board.dispense(
-      widget.motorId,
-      type: _motorType,
-      curtain: 1,
-    );
     if (!mounted) return;
-    setState(() => _testingCurtain = false);
-
-    final code = r.finalStatus?.result;
-    final ms = r.finalStatus?.curtainMs ?? 0;
-
-    String message;
-    Color color;
-    if (code == 4) {
-      message = s.t('sensor_self_test_fail');
-      color = Colors.redAccent;
-    } else if (code == 0 && ms > 0) {
-      message = '${s.t('sensor_ok')} ($ms ${s.t('pcs') == 'pcs' ? 'ms' : 'мс'})';
-      color = Colors.green;
-    } else if (code == 0 && ms == 0) {
-      message = s.t('sensor_no_drop');
-      color = Colors.orange;
-    } else {
-      // Some other motor-side failure — fall back to localized poll label
-      // so the operator at least sees what went wrong with the motor.
-      final label = code != null ? s.pollResult(code) : r.message;
-      message = label;
-      color = Colors.redAccent;
-    }
-
+    await svc.reload(silent: true);
+    if (!mounted) return;
+    setState(() => _saving = false);
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-      content: Text(message),
-      backgroundColor: color,
-      duration: const Duration(seconds: 8),
+      content: Text('Применено к $ok из ${result.targets.length} слотов'),
+      backgroundColor:
+          ok == result.targets.length ? Colors.green : Colors.orange,
     ));
   }
 
@@ -332,19 +338,20 @@ class _ProductEditScreenState extends State<ProductEditScreen> {
             _slotHeader(s, shelf),
             const SizedBox(height: 12),
             _catalogCard(),
-            const SizedBox(height: 16),
-            TextFormField(
-              controller: _nameCtrl,
-              decoration: InputDecoration(
-                labelText: s.t('field_name'),
-                filled: true,
-                fillColor: Colors.white,
+            const SizedBox(height: 20),
+            // Hidden name field — required by the Form to validate
+            // before save (creating drafts uses _nameCtrl text). Kept
+            // out of the visual flow now that catalog picker drives
+            // every name change.
+            Offstage(
+              child: TextFormField(
+                controller: _nameCtrl,
+                validator: (v) => (v == null || v.trim().isEmpty)
+                    ? s.t('name_required')
+                    : null,
               ),
-              textCapitalization: TextCapitalization.sentences,
-              validator: (v) =>
-                  (v == null || v.trim().isEmpty) ? s.t('name_required') : null,
             ),
-            const SizedBox(height: 12),
+            _sectionLabel('ВИТРИНА'),
             Row(
               children: [
                 Expanded(
@@ -354,11 +361,10 @@ class _ProductEditScreenState extends State<ProductEditScreen> {
                       labelText: s.t('field_price'),
                       filled: true,
                       fillColor: Colors.white,
+                      border: const OutlineInputBorder(),
                     ),
                     keyboardType: TextInputType.number,
-                    inputFormatters: [
-                      FilteringTextInputFormatter.digitsOnly,
-                    ],
+                    inputFormatters: [FilteringTextInputFormatter.digitsOnly],
                   ),
                 ),
                 const SizedBox(width: 12),
@@ -369,92 +375,35 @@ class _ProductEditScreenState extends State<ProductEditScreen> {
                       labelText: s.t('field_stock'),
                       filled: true,
                       fillColor: Colors.white,
+                      border: const OutlineInputBorder(),
                     ),
                     keyboardType: TextInputType.number,
-                    inputFormatters: [
-                      FilteringTextInputFormatter.digitsOnly,
-                    ],
+                    inputFormatters: [FilteringTextInputFormatter.digitsOnly],
                   ),
                 ),
               ],
             ),
-            const SizedBox(height: 12),
-            TextFormField(
-              controller: _emojiCtrl,
-              decoration: InputDecoration(
-                labelText: s.t('field_emoji'),
-                hintText: '🥤',
-                filled: true,
-                fillColor: Colors.white,
-              ),
-              maxLength: 4,
-            ),
-            TextFormField(
-              controller: _imageCtrl,
-              decoration: InputDecoration(
-                labelText: s.t('field_image_url'),
-                hintText: 'https://…',
-                filled: true,
-                fillColor: Colors.white,
-              ),
-              keyboardType: TextInputType.url,
-            ),
             const SizedBox(height: 16),
-            _sectionLabel(s.t('field_category')),
-            _CategoryPicker(
-              selectedId: _categoryId,
-              onChanged: (id) => setState(() => _categoryId = id),
-            ),
-            const SizedBox(height: 16),
-            _sectionLabel(s.t('field_motor_type')),
-            SegmentedButton<int>(
-              segments: [
-                ButtonSegment(value: 2, label: Text(s.t('motor_type_2'))),
-                ButtonSegment(value: 3, label: Text(s.t('motor_type_3'))),
-              ],
-              selected: {_motorType},
-              onSelectionChanged: (set) =>
-                  setState(() => _motorType = set.first),
-            ),
-            // Per-product drop-sensor setting was removed — the global
-            // sensor mode in service menu → «Режим выдачи» now applies
-            // to every slot. We still keep the field on the Product model
-            // (DB column stays) so the operator can override via SQL if
-            // an exotic edge-case ever needs it.
-            const SizedBox(height: 24),
+            // Bulk-apply CTA: copy this slot's current product + price
+            // onto other inventory rows in one move. Settings like
+            // motor wiring stay per-slot (those live in Motor Setup).
             OutlinedButton.icon(
-              icon: _testing
-                  ? const SizedBox(
-                      width: 16,
-                      height: 16,
-                      child: CircularProgressIndicator(strokeWidth: 2),
-                    )
-                  : const Icon(Icons.precision_manufacturing),
-              label: Text(s.t('btn_test_motor')),
+              icon: const Icon(Icons.copy_all_outlined, size: 18),
+              label: const Text('Применить к другим слотам'),
               style: OutlinedButton.styleFrom(
-                padding: const EdgeInsets.symmetric(vertical: 14),
+                padding: const EdgeInsets.symmetric(vertical: 12),
               ),
-              onPressed: _testing || _testingCurtain || _saving ? null : _testMotor,
+              onPressed: _catalogProductId == null || _saving
+                  ? null
+                  : _openBulkApply,
             ),
             const SizedBox(height: 8),
-            OutlinedButton.icon(
-              icon: _testingCurtain
-                  ? const SizedBox(
-                      width: 16,
-                      height: 16,
-                      child: CircularProgressIndicator(strokeWidth: 2),
-                    )
-                  : const Icon(Icons.sensors),
-              label: Text(s.t('btn_test_sensor')),
-              style: OutlinedButton.styleFrom(
-                padding: const EdgeInsets.symmetric(vertical: 14),
-                foregroundColor: Colors.lightBlue.shade700,
-                side: BorderSide(color: Colors.lightBlue.shade300),
-              ),
-              onPressed:
-                  _testing || _testingCurtain || _saving ? null : _testCurtain,
+            const Text(
+              'Тип мотора и режим выдачи задаются в разделе '
+              '«Настройка моторов».',
+              style: TextStyle(fontSize: 11, color: Colors.black54),
             ),
-            const SizedBox(height: 12),
+            const SizedBox(height: 24),
             FilledButton.icon(
               icon: _saving
                   ? const SizedBox(
@@ -663,47 +612,6 @@ class _ProductEditScreenState extends State<ProductEditScreen> {
           ),
         ),
       );
-}
-
-/// Dropdown for picking the product's category. Reads the master list
-/// from [VendingService.categories] (loaded once on app start). Includes
-/// a "Без категории" sentinel (`null`) for unsetting the FK.
-class _CategoryPicker extends StatelessWidget {
-  const _CategoryPicker({
-    required this.selectedId,
-    required this.onChanged,
-  });
-
-  final String? selectedId;
-  final ValueChanged<String?> onChanged;
-
-  @override
-  Widget build(BuildContext context) {
-    final s = context.watch<Strings>();
-    final cats = context.watch<VendingService>().categories;
-    return DropdownButtonFormField<String?>(
-      initialValue: selectedId,
-      decoration: const InputDecoration(
-        filled: true,
-        fillColor: Colors.white,
-      ),
-      items: [
-        DropdownMenuItem<String?>(
-          value: null,
-          child: Text(
-            s.t('no_category'),
-            style: const TextStyle(fontStyle: FontStyle.italic),
-          ),
-        ),
-        for (final c in cats)
-          DropdownMenuItem<String?>(
-            value: c.id,
-            child: Text(c.localizedName(s.lang)),
-          ),
-      ],
-      onChanged: onChanged,
-    );
-  }
 }
 
 /// Bottom-sheet that lists active `products` rows from Supabase with a
@@ -925,4 +833,214 @@ class _CatalogTile extends StatelessWidget {
           style: const TextStyle(fontSize: 22),
         ),
       );
+}
+
+/// Result returned by [_BulkApplySheet]: selected target inventory
+/// rows + flags for which source-slot fields to copy. Settings tied to
+/// physical wiring (motor_type, curtain_mode) are intentionally never
+/// in the toggle list — those belong to Motor Setup.
+class _BulkApplyResult {
+  _BulkApplyResult({
+    required this.targets,
+    required this.applyPrice,
+    required this.applyStock,
+  });
+  final List<Product> targets;
+  final bool applyPrice;
+  final bool applyStock;
+}
+
+class _BulkApplySheet extends StatefulWidget {
+  const _BulkApplySheet({
+    required this.candidates,
+    required this.currentName,
+    required this.currentPrice,
+    required this.currentStock,
+    required this.layout,
+  });
+
+  final List<Product> candidates;
+  final String currentName;
+  final int currentPrice;
+  final int currentStock;
+  final MachineLayout layout;
+
+  @override
+  State<_BulkApplySheet> createState() => _BulkApplySheetState();
+}
+
+class _BulkApplySheetState extends State<_BulkApplySheet> {
+  final Set<String> _selected = {};
+  bool _applyPrice = true;
+  bool _applyStock = false;
+
+  String _labelFor(int motorId) =>
+      widget.layout.slotForMotor(motorId)?.label ??
+      motorId.toString().padLeft(3, '0');
+
+  @override
+  Widget build(BuildContext context) {
+    return DraggableScrollableSheet(
+      expand: false,
+      initialChildSize: 0.85,
+      minChildSize: 0.4,
+      maxChildSize: 0.95,
+      builder: (context, scrollCtrl) {
+        return Column(
+          children: [
+            Container(
+              margin: const EdgeInsets.only(top: 8),
+              width: 40,
+              height: 4,
+              decoration: BoxDecoration(
+                color: Colors.grey.shade300,
+                borderRadius: BorderRadius.circular(2),
+              ),
+            ),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text('Применить к другим слотам',
+                      style: TextStyle(
+                          fontSize: 18, fontWeight: FontWeight.w800)),
+                  const SizedBox(height: 4),
+                  Text(
+                    'Скопирует «${widget.currentName}» на выбранные '
+                    'слоты с привязкой к каталогу.',
+                    style: const TextStyle(
+                        fontSize: 12, color: Colors.black54),
+                  ),
+                ],
+              ),
+            ),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 8, 16, 4),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: FilterChip(
+                      selected: _applyPrice,
+                      label: Text('Цена ${widget.currentPrice} ₸'),
+                      onSelected: (v) => setState(() => _applyPrice = v),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: FilterChip(
+                      selected: _applyStock,
+                      label: Text('Остаток ${widget.currentStock}'),
+                      onSelected: (v) => setState(() => _applyStock = v),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 8, 16, 4),
+              child: Row(
+                children: [
+                  Text(
+                    'Выбрано: ${_selected.length}',
+                    style: const TextStyle(
+                        fontWeight: FontWeight.w700, fontSize: 13),
+                  ),
+                  const Spacer(),
+                  TextButton(
+                    onPressed: _selected.length == widget.candidates.length
+                        ? () => setState(() => _selected.clear())
+                        : () => setState(() {
+                              _selected
+                                ..clear()
+                                ..addAll(widget.candidates.map((p) => p.id!));
+                            }),
+                    child: Text(
+                      _selected.length == widget.candidates.length
+                          ? 'Снять'
+                          : 'Все',
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            Expanded(
+              child: ListView.builder(
+                controller: scrollCtrl,
+                padding: const EdgeInsets.fromLTRB(8, 0, 8, 8),
+                itemCount: widget.candidates.length,
+                itemBuilder: (_, i) {
+                  final p = widget.candidates[i];
+                  final id = p.id;
+                  if (id == null) return const SizedBox.shrink();
+                  final picked = _selected.contains(id);
+                  return CheckboxListTile(
+                    dense: true,
+                    value: picked,
+                    onChanged: (v) {
+                      setState(() {
+                        if (v == true) {
+                          _selected.add(id);
+                        } else {
+                          _selected.remove(id);
+                        }
+                      });
+                    },
+                    title: Text(
+                      p.name,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(fontWeight: FontWeight.w600),
+                    ),
+                    subtitle: Text(
+                      'Слот ${_labelFor(p.motorId)} · M${p.motorId} · '
+                      '${p.priceTenge} ₸ · ×${p.stock}',
+                      style: const TextStyle(fontSize: 11),
+                    ),
+                  );
+                },
+              ),
+            ),
+            SafeArea(
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(16, 8, 16, 12),
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: OutlinedButton(
+                        onPressed: () => Navigator.of(context).pop(),
+                        child: const Text('Отмена'),
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      flex: 2,
+                      child: FilledButton.icon(
+                        icon: const Icon(Icons.done_all, size: 18),
+                        label: Text('Применить (${_selected.length})'),
+                        onPressed: _selected.isEmpty ||
+                                (!_applyPrice && !_applyStock)
+                            ? null
+                            : () {
+                                final targets = widget.candidates
+                                    .where((p) =>
+                                        p.id != null && _selected.contains(p.id))
+                                    .toList();
+                                Navigator.of(context).pop(_BulkApplyResult(
+                                  targets: targets,
+                                  applyPrice: _applyPrice,
+                                  applyStock: _applyStock,
+                                ));
+                              },
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ],
+        );
+      },
+    );
+  }
 }

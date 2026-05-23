@@ -153,9 +153,9 @@ class Strings extends ChangeNotifier {
     'enter_pin': {'ru': 'Введите PIN', 'kk': 'PIN енгізіңіз', 'en': 'Enter PIN'},
     'wrong_pin': {'ru': 'Неверный PIN', 'kk': 'Қате PIN', 'en': 'Wrong PIN'},
     'service_test_motors': {
-      'ru': 'Тест моторов',
-      'kk': 'Моторларды тексеру',
-      'en': 'Test motors',
+      'ru': 'Настройка моторов',
+      'kk': 'Моторларды баптау',
+      'en': 'Motor setup',
     },
     'service_climate': {
       'ru': 'Холодильник',
@@ -198,9 +198,9 @@ class Strings extends ChangeNotifier {
     'board_slave_addr': {'ru': 'Адрес', 'kk': 'Мекенжайы', 'en': 'Addr'},
     'service_machine_id': {'ru': 'Аппарат №', 'kk': 'Аппарат №', 'en': 'Machine #'},
     'service_inventory': {
-      'ru': 'Товары и слоты',
-      'kk': 'Тауарлар мен слоттар',
-      'en': 'Products & slots',
+      'ru': 'Товары',
+      'kk': 'Тауарлар',
+      'en': 'Products',
     },
     'service_layout': {
       'ru': 'Раскладка каталога',
