@@ -4,11 +4,11 @@ import 'package:flutter/material.dart';
 /// `c:\micromarket\customer_web\src\index.css` so the vending kiosk and
 /// the customer-web product feel like the same brand.
 class AppColors {
-  static const primary = Color(0xFF9C3F00);
-  static const primaryDim = Color(0xFF893600);
-  static const primaryContainer = Color(0xFFFF7A2F);
-  static const onPrimary = Color(0xFFFFF0EA);
-  static const onPrimaryFixedVariant = Color(0xFF4F1C00);
+  static const primary = Color(0xFF0088FF);
+  static const primaryDim = Color(0xFF0070D6);
+  static const primaryContainer = Color(0xFF66B8FF);
+  static const onPrimary = Color(0xFFFFFFFF);
+  static const onPrimaryFixedVariant = Color(0xFF002A4F);
 
   static const secondary = Color(0xFF904800);
   static const secondaryContainer = Color(0xFFFFC69F);
