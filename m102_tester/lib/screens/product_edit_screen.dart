@@ -238,10 +238,10 @@ class _ProductEditScreenState extends State<ProductEditScreen> {
     if (deleted) Navigator.of(context).pop();
   }
 
-  /// Bulk-apply this slot's bound product + current price (and stock
-  /// optionally) to other inventory rows. Operator picks the target
-  /// slots from a checklist — settings are written via the same
-  /// upsertProduct API, then the local catalog refreshes.
+  /// Bulk-apply this slot's bound product to other slots in the layout.
+  /// Targets include empty slots — applying to an empty slot creates
+  /// a new inventory row keyed by the slot's primary motor id. The
+  /// source slot is excluded from the candidate list.
   Future<void> _openBulkApply() async {
     if (_catalogProductId == null) return;
     final svc = context.read<VendingService>();
@@ -251,10 +251,23 @@ class _ProductEditScreenState extends State<ProductEditScreen> {
 
     final price = int.tryParse(_priceCtrl.text.trim()) ?? 0;
     final stock = int.tryParse(_stockCtrl.text.trim()) ?? 0;
-    final candidates = svc.catalog
-        .where((p) => p.id != widget.existing?.id)
-        .toList()
-      ..sort((a, b) => a.motorId.compareTo(b.motorId));
+    final byMotor = {for (final p in svc.catalog) p.motorId: p};
+
+    // Walk every slot in the layout (preserves the operator's shelf
+    // order) and tag it with the inventory row it currently points at,
+    // or null when the slot is empty. Skip the source slot itself.
+    final candidates = <_BulkTarget>[];
+    for (final shelf in svc.layout.shelves) {
+      for (final slot in shelf.slots) {
+        final motor = slot.primaryMotorId;
+        if (motor == widget.motorId) continue;
+        candidates.add(_BulkTarget(
+          slot: slot,
+          shelfLabel: shelf.label,
+          product: byMotor[motor],
+        ));
+      }
+    }
 
     final result = await showModalBottomSheet<_BulkApplyResult>(
       context: context,
@@ -268,7 +281,6 @@ class _ProductEditScreenState extends State<ProductEditScreen> {
         currentName: _nameCtrl.text.trim(),
         currentPrice: price,
         currentStock: stock,
-        layout: svc.layout,
       ),
     );
     if (result == null || result.targets.isEmpty || !mounted) return;
@@ -276,16 +288,20 @@ class _ProductEditScreenState extends State<ProductEditScreen> {
     setState(() => _saving = true);
     var ok = 0;
     for (final target in result.targets) {
+      final existing = target.product;
       final id = await _api.upsertProduct(
-        inventoryId: target.id,
+        inventoryId: existing?.id,
         catalogProductId: _catalogProductId!,
         machid: machid,
-        motorId: target.motorId,
+        motorId: target.slot.primaryMotorId,
         name: _nameCtrl.text.trim(),
-        priceTenge: result.applyPrice ? price : target.priceTenge,
-        stock: result.applyStock ? stock : target.stock,
-        motorType: target.motorType,
-        curtainMode: target.curtainMode,
+        priceTenge:
+            result.applyPrice || existing == null ? price : existing.priceTenge,
+        stock: result.applyStock || existing == null ? stock : existing.stock,
+        // Keep wiring as-is for existing rows; new rows inherit
+        // source defaults (operator tunes per-slot in Motor Setup).
+        motorType: existing?.motorType ?? _motorType,
+        curtainMode: existing?.curtainMode ?? _curtain,
         imageUrl: _imageCtrl.text.trim(),
         emoji: _emojiCtrl.text.trim(),
         categoryId: _categoryId,
@@ -835,17 +851,35 @@ class _CatalogTile extends StatelessWidget {
       );
 }
 
-/// Result returned by [_BulkApplySheet]: selected target inventory
-/// rows + flags for which source-slot fields to copy. Settings tied to
-/// physical wiring (motor_type, curtain_mode) are intentionally never
-/// in the toggle list — those belong to Motor Setup.
+/// One row in the bulk-apply sheet: a slot from the layout + the
+/// inventory row it currently points at (null when the slot is empty).
+class _BulkTarget {
+  _BulkTarget({
+    required this.slot,
+    required this.shelfLabel,
+    required this.product,
+  });
+  final Slot slot;
+  final String shelfLabel;
+  final Product? product;
+
+  /// Unique key for selection state — slots are identified by their
+  /// primary motor id in the layout.
+  String get key => 'M${slot.primaryMotorId}';
+  bool get isEmpty => product == null;
+}
+
+/// Result returned by [_BulkApplySheet]: selected targets + flags for
+/// which source-slot fields to copy. Wiring fields (motor_type /
+/// curtain_mode) are never in the toggle list — they belong to Motor
+/// Setup.
 class _BulkApplyResult {
   _BulkApplyResult({
     required this.targets,
     required this.applyPrice,
     required this.applyStock,
   });
-  final List<Product> targets;
+  final List<_BulkTarget> targets;
   final bool applyPrice;
   final bool applyStock;
 }
@@ -856,14 +890,12 @@ class _BulkApplySheet extends StatefulWidget {
     required this.currentName,
     required this.currentPrice,
     required this.currentStock,
-    required this.layout,
   });
 
-  final List<Product> candidates;
+  final List<_BulkTarget> candidates;
   final String currentName;
   final int currentPrice;
   final int currentStock;
-  final MachineLayout layout;
 
   @override
   State<_BulkApplySheet> createState() => _BulkApplySheetState();
@@ -873,10 +905,6 @@ class _BulkApplySheetState extends State<_BulkApplySheet> {
   final Set<String> _selected = {};
   bool _applyPrice = true;
   bool _applyStock = false;
-
-  String _labelFor(int motorId) =>
-      widget.layout.slotForMotor(motorId)?.label ??
-      motorId.toString().padLeft(3, '0');
 
   @override
   Widget build(BuildContext context) {
@@ -953,7 +981,7 @@ class _BulkApplySheetState extends State<_BulkApplySheet> {
                         : () => setState(() {
                               _selected
                                 ..clear()
-                                ..addAll(widget.candidates.map((p) => p.id!));
+                                ..addAll(widget.candidates.map((t) => t.key));
                             }),
                     child: Text(
                       _selected.length == widget.candidates.length
@@ -970,31 +998,73 @@ class _BulkApplySheetState extends State<_BulkApplySheet> {
                 padding: const EdgeInsets.fromLTRB(8, 0, 8, 8),
                 itemCount: widget.candidates.length,
                 itemBuilder: (_, i) {
-                  final p = widget.candidates[i];
-                  final id = p.id;
-                  if (id == null) return const SizedBox.shrink();
-                  final picked = _selected.contains(id);
+                  final target = widget.candidates[i];
+                  final picked = _selected.contains(target.key);
+                  final p = target.product;
                   return CheckboxListTile(
                     dense: true,
                     value: picked,
                     onChanged: (v) {
                       setState(() {
                         if (v == true) {
-                          _selected.add(id);
+                          _selected.add(target.key);
                         } else {
-                          _selected.remove(id);
+                          _selected.remove(target.key);
                         }
                       });
                     },
-                    title: Text(
-                      p.name,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(fontWeight: FontWeight.w600),
+                    title: Row(
+                      children: [
+                        Container(
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 6, vertical: 2),
+                          decoration: BoxDecoration(
+                            color: target.isEmpty
+                                ? Colors.grey.shade300
+                                : Colors.indigo.shade100,
+                            borderRadius: BorderRadius.circular(4),
+                          ),
+                          child: Text(
+                            target.slot.label,
+                            style: TextStyle(
+                              fontWeight: FontWeight.w800,
+                              fontSize: 11,
+                              color: target.isEmpty
+                                  ? Colors.grey.shade700
+                                  : Colors.indigo.shade900,
+                              fontFeatures: const [
+                                FontFeature.tabularFigures()
+                              ],
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: Text(
+                            target.isEmpty
+                                ? 'Слот пуст'
+                                : (p?.name ?? '—'),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: TextStyle(
+                              fontWeight: FontWeight.w600,
+                              fontStyle: target.isEmpty
+                                  ? FontStyle.italic
+                                  : FontStyle.normal,
+                              color: target.isEmpty
+                                  ? Colors.grey.shade600
+                                  : Colors.black87,
+                            ),
+                          ),
+                        ),
+                      ],
                     ),
                     subtitle: Text(
-                      'Слот ${_labelFor(p.motorId)} · M${p.motorId} · '
-                      '${p.priceTenge} ₸ · ×${p.stock}',
+                      target.isEmpty
+                          ? 'M${target.slot.primaryMotorId} · '
+                              '${target.shelfLabel}'
+                          : 'M${target.slot.primaryMotorId} · '
+                              '${p!.priceTenge} ₸ · ×${p.stock}',
                       style: const TextStyle(fontSize: 11),
                     ),
                   );
@@ -1019,12 +1089,15 @@ class _BulkApplySheetState extends State<_BulkApplySheet> {
                         icon: const Icon(Icons.done_all, size: 18),
                         label: Text('Применить (${_selected.length})'),
                         onPressed: _selected.isEmpty ||
-                                (!_applyPrice && !_applyStock)
+                                (!_applyPrice &&
+                                    !_applyStock &&
+                                    !_selected.any((k) => widget.candidates
+                                        .firstWhere((t) => t.key == k)
+                                        .isEmpty))
                             ? null
                             : () {
                                 final targets = widget.candidates
-                                    .where((p) =>
-                                        p.id != null && _selected.contains(p.id))
+                                    .where((t) => _selected.contains(t.key))
                                     .toList();
                                 Navigator.of(context).pop(_BulkApplyResult(
                                   targets: targets,
