@@ -38,6 +38,13 @@ class VendingService extends ChangeNotifier {
     if (_storage.isPaired) {
       reload();
       _startAutoRefresh();
+      // Push the locally-stored layout on every boot. Cheap (single
+      // RPC), idempotent server-side, and ensures admin always shows
+      // the same shelf shape the operator sees on the tablet without
+      // requiring them to re-save in the editor.
+      if (_layout.isNotEmpty) {
+        unawaited(_pushLayoutToCloud(_layout.encode()));
+      }
     } else {
       _state = CatalogState.unpaired;
     }
@@ -53,10 +60,29 @@ class VendingService extends ChangeNotifier {
 
   /// Replace the layout, persist it, and notify listeners so the
   /// catalog re-renders against the new shelf/slot structure.
+  ///
+  /// Also pushes the layout to Supabase so admin (customer_web) can
+  /// render the cabinet view the same way the operator sees it. Push
+  /// is fire-and-forget — local persistence is the source of truth on
+  /// the tablet, and the sync happens best-effort in the background.
   Future<void> setLayout(MachineLayout next) async {
     _layout = next;
-    await _storage.setMachineLayoutJson(next.encode());
+    final encoded = next.encode();
+    await _storage.setMachineLayoutJson(encoded);
     notifyListeners();
+
+    unawaited(_pushLayoutToCloud(encoded));
+  }
+
+  Future<void> _pushLayoutToCloud(String layoutJson) async {
+    final machid = _storage.machid;
+    final secret = _storage.secret;
+    if (machid == null || secret == null) return;
+    await _api.pushMachineLayout(
+      machid: machid,
+      secret: secret,
+      layoutJson: layoutJson,
+    );
   }
 
   void _startAutoRefresh() {
@@ -104,6 +130,9 @@ class VendingService extends ChangeNotifier {
     if (_storage.isPaired && _state == CatalogState.unpaired) {
       reload();
       _startAutoRefresh();
+      if (_layout.isNotEmpty) {
+        unawaited(_pushLayoutToCloud(_layout.encode()));
+      }
     } else if (!_storage.isPaired && _state != CatalogState.unpaired) {
       _catalog.clear();
       _cart.clear();

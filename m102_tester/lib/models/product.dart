@@ -16,6 +16,10 @@ class Product {
   /// Optional FK to `public.categories.id` — drives the catalog filter
   /// chips and is editable from the product form.
   final String? categoryId;
+  /// FK to `public.products.id` — the catalog SKU this slot serves.
+  /// NULL only for placeholder rows before they hit the DB; real
+  /// inventory rows always have this set (DB constraint).
+  final String? catalogProductId;
 
   const Product({
     this.id,
@@ -29,6 +33,7 @@ class Product {
     this.emoji,
     this.imageUrl,
     this.categoryId,
+    this.catalogProductId,
   });
 
   Product copyWith({
@@ -41,6 +46,7 @@ class Product {
     String? emoji,
     String? imageUrl,
     String? categoryId,
+    String? catalogProductId,
   }) =>
       Product(
         id: id ?? this.id,
@@ -54,6 +60,7 @@ class Product {
         emoji: emoji ?? this.emoji,
         imageUrl: imageUrl ?? this.imageUrl,
         categoryId: categoryId ?? this.categoryId,
+        catalogProductId: catalogProductId ?? this.catalogProductId,
       );
 
   bool get inStock => stock > 0;

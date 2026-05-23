@@ -3,7 +3,7 @@ import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 
 import '../board/board_client.dart';
-import '../models/motor_layout.dart';
+import '../models/catalog_product.dart';
 import '../models/product.dart';
 import '../services/device_storage.dart';
 import '../services/strings.dart';
@@ -43,6 +43,17 @@ class _ProductEditScreenState extends State<ProductEditScreen> {
   bool _testing = false;
   bool _testingCurtain = false;
 
+  /// FK into `products`. Set when the operator picks from the catalog,
+  /// inherited from the existing inventory row if editing, or `null`
+  /// when the operator is typing a new SKU freehand (we create a draft
+  /// product row on save).
+  String? _catalogProductId;
+
+  /// Display name of the linked catalog row, shown in the picker
+  /// summary card. Tracked separately from `_nameCtrl` so renaming the
+  /// inventory row's display name doesn't break the link.
+  String? _catalogProductName;
+
   @override
   void initState() {
     super.initState();
@@ -56,9 +67,47 @@ class _ProductEditScreenState extends State<ProductEditScreen> {
       _motorType = p.motorType;
       _curtain = p.curtainMode;
       _categoryId = p.categoryId;
+      _catalogProductId = p.catalogProductId;
+      _catalogProductName = p.name; // best guess until we fetch the row
     } else {
       _stockCtrl.text = '0';
     }
+  }
+
+  /// Apply a catalog selection: prefill the form's name / image / emoji
+  /// / category from the SKU so the operator only has to type price +
+  /// stock. The original FK is stashed in [_catalogProductId] for the
+  /// save call.
+  void _applyCatalog(CatalogProduct cp) {
+    setState(() {
+      _catalogProductId = cp.id;
+      _catalogProductName = cp.name;
+      _nameCtrl.text = cp.name;
+      _emojiCtrl.text = cp.emoji ?? '';
+      _imageCtrl.text = cp.imageUrl ?? '';
+      _categoryId = cp.categoryId;
+    });
+  }
+
+  void _clearCatalogLink() {
+    setState(() {
+      _catalogProductId = null;
+      _catalogProductName = null;
+    });
+  }
+
+  Future<void> _openCatalogPicker() async {
+    final picked = await showModalBottomSheet<CatalogProduct>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.white,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+      ),
+      builder: (_) => const _CatalogPickerSheet(),
+    );
+    if (picked == null || !mounted) return;
+    _applyCatalog(picked);
   }
 
   @override
@@ -78,8 +127,33 @@ class _ProductEditScreenState extends State<ProductEditScreen> {
     final machid = storage.machid;
     if (machid == null) return;
     setState(() => _saving = true);
+
+    // inventory.product_id is NOT NULL — if the operator typed a name
+    // freehand without picking from the catalog, create a draft SKU
+    // first so admin can review it later. Editing an existing row
+    // keeps its current link.
+    var catalogId = _catalogProductId;
+    if (catalogId == null) {
+      catalogId = await _api.createDraftProduct(
+        name: _nameCtrl.text.trim(),
+        imageUrl: _imageCtrl.text.trim(),
+        emoji: _emojiCtrl.text.trim(),
+        categoryId: _categoryId,
+      );
+      if (catalogId == null) {
+        if (!mounted) return;
+        setState(() => _saving = false);
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text(s.t('save_failed')),
+          backgroundColor: Colors.redAccent,
+        ));
+        return;
+      }
+    }
+
     final id = await _api.upsertProduct(
-      productId: widget.existing?.id,
+      inventoryId: widget.existing?.id,
+      catalogProductId: catalogId,
       machid: machid,
       motorId: widget.motorId,
       name: _nameCtrl.text.trim(),
@@ -226,7 +300,13 @@ class _ProductEditScreenState extends State<ProductEditScreen> {
   @override
   Widget build(BuildContext context) {
     final s = context.watch<Strings>();
-    final shelf = MotorLayout.motorToLabel(widget.motorId);
+    // Resolve the label from the operator-built layout when available
+    // so badge text matches what the editor shows (e.g. "11" on MP2404,
+    // "001" on factory 6×6). Falls back to the bare motor id when the
+    // motor isn't mapped to any slot yet.
+    final layout = context.watch<VendingService>().layout;
+    final slot = layout.slotForMotor(widget.motorId);
+    final shelf = slot?.label ?? widget.motorId.toString().padLeft(3, '0');
     final isNew = widget.existing == null;
     return Scaffold(
       backgroundColor: const Color(0xFFF5F6FA),
@@ -250,6 +330,8 @@ class _ProductEditScreenState extends State<ProductEditScreen> {
           padding: const EdgeInsets.all(16),
           children: [
             _slotHeader(s, shelf),
+            const SizedBox(height: 12),
+            _catalogCard(),
             const SizedBox(height: 16),
             TextFormField(
               controller: _nameCtrl,
@@ -395,6 +477,144 @@ class _ProductEditScreenState extends State<ProductEditScreen> {
     );
   }
 
+  /// "Pick from catalog" affordance shown above the form. Two states:
+  ///   • Linked  — shows the catalog SKU's thumbnail + name + a button
+  ///               to swap or unlink. Editing operator can still tweak
+  ///               name/image/category on the inventory row.
+  ///   • Unlinked — shows just a "Выбрать из каталога" CTA. Saving in
+  ///               this state will create a draft `products` row
+  ///               (admin can promote it later).
+  Widget _catalogCard() {
+    final linked = _catalogProductId != null;
+    if (!linked) {
+      return Material(
+        color: Colors.indigo.shade50,
+        borderRadius: BorderRadius.circular(12),
+        child: InkWell(
+          borderRadius: BorderRadius.circular(12),
+          onTap: _openCatalogPicker,
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
+            child: Row(
+              children: [
+                Icon(Icons.menu_book, color: Colors.indigo.shade700),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        'Выбрать из каталога',
+                        style: TextStyle(
+                          fontWeight: FontWeight.w700,
+                          color: Colors.indigo.shade900,
+                        ),
+                      ),
+                      const SizedBox(height: 2),
+                      Text(
+                        'Подтянуть фото и название из готового товара',
+                        style: TextStyle(
+                          fontSize: 12,
+                          color: Colors.indigo.shade400,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                Icon(Icons.chevron_right, color: Colors.indigo.shade300),
+              ],
+            ),
+          ),
+        ),
+      );
+    }
+    final img = _imageCtrl.text.trim();
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      decoration: BoxDecoration(
+        color: Colors.green.shade50,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: Colors.green.shade200),
+      ),
+      child: Row(
+        children: [
+          ClipRRect(
+            borderRadius: BorderRadius.circular(8),
+            child: img.isEmpty
+                ? Container(
+                    width: 40,
+                    height: 40,
+                    color: Colors.green.shade100,
+                    alignment: Alignment.center,
+                    child: Text(
+                      _emojiCtrl.text.trim().isEmpty
+                          ? '📦'
+                          : _emojiCtrl.text.trim(),
+                      style: const TextStyle(fontSize: 20),
+                    ),
+                  )
+                : Image.network(
+                    img,
+                    width: 40,
+                    height: 40,
+                    fit: BoxFit.cover,
+                    errorBuilder: (_, _, _) => Container(
+                      width: 40,
+                      height: 40,
+                      color: Colors.green.shade100,
+                      alignment: Alignment.center,
+                      child: const Text('📦',
+                          style: TextStyle(fontSize: 20)),
+                    ),
+                  ),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Icon(Icons.check_circle,
+                        color: Colors.green.shade700, size: 14),
+                    const SizedBox(width: 4),
+                    Text(
+                      'Из каталога',
+                      style: TextStyle(
+                        fontSize: 11,
+                        fontWeight: FontWeight.w700,
+                        color: Colors.green.shade800,
+                        letterSpacing: 1.0,
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  _catalogProductName ?? _nameCtrl.text,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                      fontSize: 14, fontWeight: FontWeight.w700),
+                ),
+              ],
+            ),
+          ),
+          IconButton(
+            tooltip: 'Сменить',
+            icon: const Icon(Icons.swap_horiz),
+            onPressed: _openCatalogPicker,
+          ),
+          IconButton(
+            tooltip: 'Отвязать',
+            icon: const Icon(Icons.link_off, color: Colors.redAccent),
+            onPressed: _clearCatalogLink,
+          ),
+        ],
+      ),
+    );
+  }
+
   Widget _slotHeader(Strings s, String shelf) {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
@@ -484,4 +704,225 @@ class _CategoryPicker extends StatelessWidget {
       onChanged: onChanged,
     );
   }
+}
+
+/// Bottom-sheet that lists active `products` rows from Supabase with a
+/// search box. Pops the selected [CatalogProduct] so the parent screen
+/// can prefill the form.
+class _CatalogPickerSheet extends StatefulWidget {
+  const _CatalogPickerSheet();
+
+  @override
+  State<_CatalogPickerSheet> createState() => _CatalogPickerSheetState();
+}
+
+class _CatalogPickerSheetState extends State<_CatalogPickerSheet> {
+  final _api = SupabaseApi();
+  final _searchCtrl = TextEditingController();
+  List<CatalogProduct>? _all;
+  String? _error;
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<void> _load() async {
+    final r = await _api.fetchProducts();
+    if (!mounted) return;
+    setState(() {
+      if (r.isOk) {
+        _all = r.data;
+      } else {
+        _error = r.error;
+      }
+    });
+  }
+
+  @override
+  void dispose() {
+    _searchCtrl.dispose();
+    super.dispose();
+  }
+
+  List<CatalogProduct> get _filtered {
+    final list = _all ?? const <CatalogProduct>[];
+    final q = _searchCtrl.text.trim().toLowerCase();
+    if (q.isEmpty) return list;
+    return list
+        .where((p) => p.name.toLowerCase().contains(q))
+        .toList(growable: false);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return DraggableScrollableSheet(
+      expand: false,
+      initialChildSize: 0.85,
+      minChildSize: 0.4,
+      maxChildSize: 0.95,
+      builder: (context, scrollCtrl) {
+        return Column(
+          children: [
+            Container(
+              margin: const EdgeInsets.only(top: 8),
+              width: 40,
+              height: 4,
+              decoration: BoxDecoration(
+                color: Colors.grey.shade300,
+                borderRadius: BorderRadius.circular(2),
+              ),
+            ),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
+              child: Row(
+                children: [
+                  const Expanded(
+                    child: Text(
+                      'Каталог товаров',
+                      style: TextStyle(
+                          fontSize: 18, fontWeight: FontWeight.w800),
+                    ),
+                  ),
+                  if (_all != null)
+                    Text(
+                      '${_filtered.length} / ${_all!.length}',
+                      style: TextStyle(
+                          fontSize: 12, color: Colors.grey.shade600),
+                    ),
+                ],
+              ),
+            ),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
+              child: TextField(
+                controller: _searchCtrl,
+                decoration: InputDecoration(
+                  prefixIcon: const Icon(Icons.search),
+                  hintText: 'Поиск',
+                  filled: true,
+                  fillColor: Colors.grey.shade100,
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(10),
+                    borderSide: BorderSide.none,
+                  ),
+                ),
+                onChanged: (_) => setState(() {}),
+              ),
+            ),
+            Expanded(child: _buildBody(scrollCtrl)),
+          ],
+        );
+      },
+    );
+  }
+
+  Widget _buildBody(ScrollController scrollCtrl) {
+    if (_error != null) {
+      return Center(
+        child: Padding(
+          padding: const EdgeInsets.all(24),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(Icons.error_outline,
+                  size: 40, color: Colors.red.shade400),
+              const SizedBox(height: 8),
+              Text(_error!,
+                  textAlign: TextAlign.center,
+                  style: const TextStyle(color: Colors.black54)),
+              const SizedBox(height: 12),
+              FilledButton(
+                onPressed: () {
+                  setState(() {
+                    _error = null;
+                    _all = null;
+                  });
+                  _load();
+                },
+                child: const Text('Повторить'),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+    if (_all == null) {
+      return const Center(child: CircularProgressIndicator());
+    }
+    final items = _filtered;
+    if (items.isEmpty) {
+      return Center(
+        child: Padding(
+          padding: const EdgeInsets.all(24),
+          child: Text(
+            _searchCtrl.text.isEmpty
+                ? 'Каталог пуст. Добавьте товары в admin-панели.'
+                : 'Ничего не найдено',
+            textAlign: TextAlign.center,
+            style: TextStyle(color: Colors.grey.shade600),
+          ),
+        ),
+      );
+    }
+    return ListView.builder(
+      controller: scrollCtrl,
+      padding: const EdgeInsets.fromLTRB(8, 0, 8, 16),
+      itemCount: items.length,
+      itemBuilder: (_, i) => _CatalogTile(
+        product: items[i],
+        onTap: () => Navigator.of(context).pop(items[i]),
+      ),
+    );
+  }
+}
+
+class _CatalogTile extends StatelessWidget {
+  const _CatalogTile({required this.product, required this.onTap});
+
+  final CatalogProduct product;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return ListTile(
+      contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+      leading: ClipRRect(
+        borderRadius: BorderRadius.circular(8),
+        child: product.imageUrl != null && product.imageUrl!.isNotEmpty
+            ? Image.network(
+                product.imageUrl!,
+                width: 48,
+                height: 48,
+                fit: BoxFit.cover,
+                errorBuilder: (_, _, _) => _emojiBox(product.emoji),
+                loadingBuilder: (_, child, p) =>
+                    p == null ? child : _emojiBox(product.emoji),
+              )
+            : _emojiBox(product.emoji),
+      ),
+      title: Text(
+        product.name,
+        style: const TextStyle(fontWeight: FontWeight.w600),
+      ),
+      subtitle: product.volumeMl != null
+          ? Text('${product.volumeMl} мл',
+              style: TextStyle(color: Colors.grey.shade600, fontSize: 12))
+          : null,
+      trailing: const Icon(Icons.chevron_right),
+      onTap: onTap,
+    );
+  }
+
+  Widget _emojiBox(String? emoji) => Container(
+        width: 48,
+        height: 48,
+        color: Colors.indigo.shade50,
+        alignment: Alignment.center,
+        child: Text(
+          emoji?.isNotEmpty == true ? emoji! : '📦',
+          style: const TextStyle(fontSize: 22),
+        ),
+      );
 }

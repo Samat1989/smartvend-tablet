@@ -7,6 +7,7 @@ import 'package:flutter/foundation.dart' hide Category;
 import 'package:http/http.dart' as http;
 
 import '../models/cart.dart';
+import '../models/catalog_product.dart';
 import '../models/category.dart';
 import '../models/product.dart';
 
@@ -83,6 +84,37 @@ class SupabaseApi {
     }
   }
 
+  // ---------- machine layout ----------
+
+  /// Push the current [MachineLayout] JSON to Supabase via the
+  /// `set_machine_layout` RPC. Gated by the machine secret (same one
+  /// used in [verifyPairing]) so anon tablets can write only their
+  /// own layout. Admin reads `micromarkets.layout_json` to render the
+  /// same cabinet view the operator sees on-device.
+  Future<bool> pushMachineLayout({
+    required String machid,
+    required String secret,
+    required String layoutJson,
+  }) async {
+    try {
+      final resp = await _client.post(
+        _rest('rpc/set_machine_layout'),
+        headers: _headers,
+        body: jsonEncode({
+          'p_machid': int.tryParse(machid) ?? machid,
+          'p_secret': secret,
+          'p_layout': jsonDecode(layoutJson),
+        }),
+      ).timeout(const Duration(seconds: 10));
+      if (resp.statusCode >= 200 && resp.statusCode < 300) return true;
+      debugPrint('[pushMachineLayout] HTTP ${resp.statusCode} ${resp.body}');
+      return false;
+    } catch (e) {
+      debugPrint('[pushMachineLayout] exception: $e');
+      return false;
+    }
+  }
+
   // ---------- inventory ----------
 
   /// Load all inventory rows for [machid]. Maps to [Product] objects keyed
@@ -93,7 +125,7 @@ class SupabaseApi {
         _rest('inventory', {
           'micromarket_id': 'eq.$machid',
           'select':
-              'id,name,price,stock,image_url,motor_id,motor_type,curtain_mode,emoji,category_id',
+              'id,name,price,stock,image_url,motor_id,motor_type,curtain_mode,emoji,category_id,product_id',
         }),
         headers: _headers,
       ).timeout(const Duration(seconds: 15));
@@ -119,11 +151,90 @@ class SupabaseApi {
           emoji: row['emoji']?.toString(),
           imageUrl: row['image_url']?.toString(),
           categoryId: row['category_id']?.toString(),
+          catalogProductId: row['product_id']?.toString(),
         ));
       }
       return FetchResult.ok(products);
     } catch (e) {
       return FetchResult.err('Сеть: $e');
+    }
+  }
+
+  /// Load the catalog of SKUs (`products` table). Used by the tablet's
+  /// "Выбрать из каталога" picker — operators don't type names by hand
+  /// when a matching product already exists. Archived and draft rows
+  /// are excluded by default so the picker stays clean.
+  Future<FetchResult<List<CatalogProduct>>> fetchProducts({
+    bool includeArchived = false,
+    bool includeDrafts = false,
+  }) async {
+    try {
+      final query = <String, String>{
+        'select':
+            'id,name,image_url,emoji,category_id,volume_ml,description,is_draft,is_archived',
+        'order': 'name.asc',
+      };
+      // PostgREST: combine filters via and=(...) so both can be active.
+      final filters = <String>[];
+      if (!includeArchived) filters.add('is_archived.eq.false');
+      if (!includeDrafts) filters.add('is_draft.eq.false');
+      if (filters.isNotEmpty) {
+        query['and'] = '(${filters.join(',')})';
+      }
+      final r = await _client.get(
+        _rest('products', query),
+        headers: _headers,
+      ).timeout(const Duration(seconds: 15));
+      if (r.statusCode < 200 || r.statusCode >= 300) {
+        return FetchResult.err('HTTP ${r.statusCode}: ${r.body}');
+      }
+      final list = jsonDecode(r.body) as List;
+      final products = <CatalogProduct>[
+        for (final raw in list)
+          CatalogProduct.fromJson(raw as Map<String, dynamic>),
+      ];
+      return FetchResult.ok(products);
+    } catch (e) {
+      return FetchResult.err('Сеть: $e');
+    }
+  }
+
+  /// Insert a draft `products` row from the tablet's manual-entry path
+  /// (operator typed a name but didn't pick from the catalog). RLS
+  /// allows this only with `is_draft=true`, so admin can later review
+  /// and promote it from customer_web.
+  ///
+  /// Returns the new product id, or null on failure.
+  Future<String?> createDraftProduct({
+    required String name,
+    String? imageUrl,
+    String? emoji,
+    String? categoryId,
+  }) async {
+    try {
+      final resp = await _client.post(
+        _rest('products'),
+        headers: {..._headers, 'Prefer': 'return=representation'},
+        body: jsonEncode({
+          'name': name,
+          if (imageUrl != null && imageUrl.isNotEmpty) 'image_url': imageUrl,
+          if (emoji != null && emoji.isNotEmpty) 'emoji': emoji,
+          'category_id': ?categoryId,
+          'is_draft': true,
+        }),
+      ).timeout(const Duration(seconds: 10));
+      if (resp.statusCode < 200 || resp.statusCode >= 300) {
+        debugPrint('[createDraftProduct] HTTP ${resp.statusCode} ${resp.body}');
+        return null;
+      }
+      final list = jsonDecode(resp.body);
+      if (list is List && list.isNotEmpty) {
+        return list.first['id'] as String?;
+      }
+      return null;
+    } catch (e) {
+      debugPrint('[createDraftProduct] exception: $e');
+      return null;
     }
   }
 
@@ -290,10 +401,22 @@ class SupabaseApi {
 
   // ---------- inventory editing ----------
 
-  /// Insert (when [productId] is null) or update an inventory row.
+  /// Insert (when [inventoryId] is null) or update an inventory row.
   /// Returns the row id on success, or null on failure.
+  ///
+  /// [catalogProductId] is the FK into `products` — required for new
+  /// inserts (the DB has a NOT NULL constraint). Callers who let the
+  /// operator type a product name freehand should first invoke
+  /// [createDraftProduct] and pass the returned id here.
+  ///
+  /// `name`, `imageUrl`, `emoji`, `categoryId` are still written to
+  /// `inventory` for backwards-compat with the customer_web build that
+  /// hasn't been migrated to read from `products` yet. They mirror the
+  /// fields on the linked product so the catalog stays the source of
+  /// truth.
   Future<String?> upsertProduct({
-    String? productId,
+    String? inventoryId,
+    required String catalogProductId,
     required String machid,
     required int motorId,
     required String name,
@@ -310,6 +433,7 @@ class SupabaseApi {
     final body = <String, dynamic>{
       'micromarket_id': int.tryParse(machid) ?? machid,
       'motor_id': motorId,
+      'product_id': catalogProductId,
       'name': name,
       'price': priceTenge,
       'stock': stock,
@@ -323,7 +447,7 @@ class SupabaseApi {
     };
     try {
       final http.Response resp;
-      if (productId == null) {
+      if (inventoryId == null) {
         resp = await _client.post(
           _rest('inventory'),
           headers: {..._headers, 'Prefer': 'return=representation'},
@@ -331,7 +455,7 @@ class SupabaseApi {
         ).timeout(const Duration(seconds: 10));
       } else {
         resp = await _client.patch(
-          _rest('inventory', {'id': 'eq.$productId'}),
+          _rest('inventory', {'id': 'eq.$inventoryId'}),
           headers: {..._headers, 'Prefer': 'return=representation'},
           body: jsonEncode(body),
         ).timeout(const Duration(seconds: 10));
@@ -341,7 +465,7 @@ class SupabaseApi {
       if (list is List && list.isNotEmpty) {
         return list.first['id'] as String?;
       }
-      return productId;
+      return inventoryId;
     } catch (_) {
       return null;
     }
