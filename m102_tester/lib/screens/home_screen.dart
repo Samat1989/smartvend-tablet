@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
@@ -12,6 +14,7 @@ import '../theme.dart';
 import '../widgets/action_pill.dart';
 import '../widgets/product_thumb.dart';
 import 'cart_screen.dart';
+import 'screensaver_screen.dart';
 import 'service_pin_screen.dart';
 
 /// Customer-facing catalog ported from the Figma file
@@ -56,17 +59,60 @@ class _HomeScreenState extends State<HomeScreen> {
   // Hidden service entry: 5 quick taps on the machid corner badge.
   final List<DateTime> _serviceTaps = [];
 
+  /// Idle screensaver: after [_idleThreshold] without any touch on the
+  /// catalog, push [ScreensaverScreen]. Reset on every Listener event.
+  /// Pre-emptively cancelled if HomeScreen isn't the current top route
+  /// (the customer is mid-checkout / mid-pay / in service mode) so the
+  /// attract loop doesn't interrupt active flows.
+  static const Duration _idleThreshold = Duration(minutes: 5);
+  Timer? _idleTimer;
+  bool _screensaverOpen = false;
+
   @override
   void initState() {
     super.initState();
     _scrollController.addListener(_onScroll);
+    _scheduleIdle();
   }
 
   @override
   void dispose() {
     _scrollController.removeListener(_onScroll);
     _scrollController.dispose();
+    _idleTimer?.cancel();
     super.dispose();
+  }
+
+  void _scheduleIdle() {
+    _idleTimer?.cancel();
+    _idleTimer = Timer(_idleThreshold, _onIdleFired);
+  }
+
+  void _resetIdle() {
+    if (_screensaverOpen) return;
+    _scheduleIdle();
+  }
+
+  Future<void> _onIdleFired() async {
+    if (!mounted || _screensaverOpen) return;
+    final route = ModalRoute.of(context);
+    if (route == null || !route.isCurrent) {
+      _scheduleIdle();
+      return;
+    }
+    if (context.read<VendingService>().cartCount > 0) {
+      // Customer is mid-pick — don't interrupt them with attract loop.
+      _scheduleIdle();
+      return;
+    }
+    _screensaverOpen = true;
+    await Navigator.of(context).push(MaterialPageRoute<void>(
+      builder: (_) => const ScreensaverScreen(),
+      fullscreenDialog: true,
+    ));
+    if (!mounted) return;
+    _screensaverOpen = false;
+    _scheduleIdle();
   }
 
   /// Re-evaluates which shelf the customer is currently looking at and
@@ -130,7 +176,15 @@ class _HomeScreenState extends State<HomeScreen> {
     final boardDown = !board.isHealthy && !kDebugMode;
     return Scaffold(
       backgroundColor: AppColors.iosBackground,
-      body: SafeArea(
+      body: Listener(
+        // Any touch resets the idle countdown — pointer events fire on
+        // EVERY tap/scroll regardless of whether the underlying widget
+        // handled it, which is exactly what we want for activity
+        // detection.
+        behavior: HitTestBehavior.translucent,
+        onPointerDown: (_) => _resetIdle(),
+        onPointerMove: (_) => _resetIdle(),
+        child: SafeArea(
         child: Stack(
           // Force the Stack to take the full SafeArea size so the
           // Positioned(bottom: 0) action bar always sits at the
@@ -168,6 +222,7 @@ class _HomeScreenState extends State<HomeScreen> {
             const _LangCorner(),
           ],
         ),
+      ),
       ),
     );
   }

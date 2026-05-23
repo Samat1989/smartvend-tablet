@@ -8,6 +8,7 @@ import 'screens/home_screen.dart';
 import 'screens/pairing_screen.dart';
 import 'services/climate_controller.dart';
 import 'services/device_storage.dart';
+import 'services/media_service.dart';
 import 'services/strings.dart';
 import 'services/vending_service.dart';
 import 'theme.dart';
@@ -42,6 +43,7 @@ class VendingApp extends StatelessWidget {
       providers: [
         ChangeNotifierProvider<DeviceStorage>.value(value: storage),
         ChangeNotifierProvider<Strings>(create: (_) => Strings(storage)),
+        ChangeNotifierProvider<MediaService>(create: (_) => MediaService()),
         ChangeNotifierProvider<BoardClient>(
           create: (_) => BoardClient(storage: storage)..autoConnect(),
         ),
