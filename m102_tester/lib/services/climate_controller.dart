@@ -116,13 +116,21 @@ class ClimateController extends ChangeNotifier {
 
   void updateConfig(ClimateConfig next) {
     final modeChanged = _config.mode != next.mode;
-    _config = next;
+    // Clamp setpoint to the active mode's allowed range so a flip
+    // from cooling (-5..18 °C) to heating (15..35 °C), or vice
+    // versa, can never leave a value outside the slider's bounds
+    // (the UI Slider asserts on out-of-range value and crashes the
+    // climate screen). Same ranges as climate_screen.dart's slider.
+    final clamped = next.copyWith(
+      setpointC: _clampSetpoint(next.mode, next.setpointC),
+    );
+    _config = clamped;
     // Persist without awaiting — SharedPreferences writes return quickly
     // and the controller mustn't block on disk before responding.
     _storage.setClimateConfig(
-      modeName: next.mode.name,
-      setpointC: next.setpointC,
-      lightAlwaysOn: next.lightAlwaysOn,
+      modeName: clamped.mode.name,
+      setpointC: clamped.setpointC,
+      lightAlwaysOn: clamped.lightAlwaysOn,
     );
     notifyListeners();
     if (modeChanged) {
@@ -134,6 +142,20 @@ class ClimateController extends ChangeNotifier {
       _phase = CompressorPhase.idle;
     }
     _evaluate();
+  }
+
+  /// Per-mode setpoint window (must match the Slider in
+  /// climate_screen.dart). Cooling: -5..18 °C, heating: 15..35 °C,
+  /// off: any (we still clamp into the cooling window so a later
+  /// flip to heating doesn't surprise the UI).
+  static double _clampSetpoint(ClimateMode mode, double v) {
+    switch (mode) {
+      case ClimateMode.heating:
+        return v.clamp(15.0, 35.0);
+      case ClimateMode.cooling:
+      case ClimateMode.off:
+        return v.clamp(-5.0, 18.0);
+    }
   }
 
   /// Start the climate loop — auto-called on app launch.

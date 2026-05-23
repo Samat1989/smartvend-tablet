@@ -1,6 +1,5 @@
 import 'dart:async';
 
-import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
@@ -31,8 +30,10 @@ import 'service_pin_screen.dart';
 ///     a wide cart pill that becomes opaque + bright when there are
 ///     items in the cart.
 ///
-/// kDebugMode still hides the maintenance overlay so the screen works
-/// in the emulator without USB hardware.
+/// Maintenance overlay shows whenever the board is unhealthy — the
+/// previous debug-mode mask is gone, so on the emulator without a
+/// real M102 you'll see "техническая проблема". Plug in real hardware
+/// (or a USB-Serial dongle) before exercising customer flows.
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
 
@@ -73,7 +74,7 @@ class _HomeScreenState extends State<HomeScreen> {
   /// Both timers reset on any pointer event via [_resetIdle]. While
   /// the cart has items the auto-cycle pauses — the customer is
   /// clearly mid-pick and we mustn't steal their place in the catalog.
-  static const Duration _shelfCycleAfter = Duration(seconds: 5);
+  static const Duration _shelfCycleAfter = Duration(seconds: 30);
   static const Duration _shelfCycleStep = Duration(seconds: 10);
   static const Duration _cartAbandonAfter = Duration(minutes: 2);
   static const Duration _screensaverAfter = Duration(minutes: 5);
@@ -222,7 +223,7 @@ class _HomeScreenState extends State<HomeScreen> {
   @override
   Widget build(BuildContext context) {
     final board = context.watch<BoardClient>();
-    final boardDown = !board.isHealthy && !kDebugMode;
+    final boardDown = !board.isHealthy;
     return Scaffold(
       backgroundColor: AppColors.iosBackground,
       body: Listener(
@@ -906,47 +907,66 @@ class _BottomActionBar extends StatelessWidget {
 class _MaintenanceOverlay extends StatelessWidget {
   const _MaintenanceOverlay({required this.onServiceTap});
 
+  /// Forwarded to a small hidden hit-area in the top-right corner.
+  /// Used to be the whole overlay — but customers were triggering
+  /// 5-tap-to-service-mode by accident while complaining about the
+  /// dead screen. Now only that corner counts.
   final VoidCallback onServiceTap;
 
   @override
   Widget build(BuildContext context) {
     final s = context.watch<Strings>();
     return Positioned.fill(
-      child: GestureDetector(
-        behavior: HitTestBehavior.opaque,
-        onTap: onServiceTap,
-        child: Container(
-          color: const Color(0xEB1C1C1E),
-          alignment: Alignment.center,
-          padding: const EdgeInsets.all(40),
-          child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              const Icon(Icons.build_circle,
-                  size: 96, color: AppColors.iosOrange),
-              const SizedBox(height: 24),
-              Text(
-                s.t('maintenance_title'),
-                textAlign: TextAlign.center,
-                style: const TextStyle(
-                  color: Colors.white,
-                  fontSize: 28,
-                  fontWeight: FontWeight.w900,
-                  letterSpacing: -1,
+      // No outer GestureDetector — the overlay itself swallows hits via
+      // its opaque Container colour, customers can't accidentally
+      // dismiss / trigger anything by tapping the body. The 5-tap
+      // service-entry shortcut lives in a 96-dp invisible square in
+      // the top-right corner (sized so the operator can hit it
+      // confidently with a finger).
+      child: Stack(
+        children: [
+          Container(
+            color: const Color(0xEB1C1C1E),
+            alignment: Alignment.center,
+            padding: const EdgeInsets.all(40),
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                const Icon(Icons.build_circle,
+                    size: 96, color: AppColors.iosOrange),
+                const SizedBox(height: 24),
+                Text(
+                  s.t('maintenance_title'),
+                  textAlign: TextAlign.center,
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 28,
+                    fontWeight: FontWeight.w900,
+                    letterSpacing: -1,
+                  ),
                 ),
-              ),
-              const SizedBox(height: 14),
-              Text(
-                s.t('maintenance_subtitle'),
-                textAlign: TextAlign.center,
-                style: const TextStyle(
-                  color: Color(0xCCFFFFFF),
-                  fontSize: 15,
+                const SizedBox(height: 14),
+                Text(
+                  s.t('maintenance_subtitle'),
+                  textAlign: TextAlign.center,
+                  style: const TextStyle(
+                    color: Color(0xCCFFFFFF),
+                    fontSize: 15,
+                  ),
                 ),
-              ),
-            ],
+              ],
+            ),
           ),
-        ),
+          Positioned(
+            top: 0,
+            right: 0,
+            child: GestureDetector(
+              behavior: HitTestBehavior.opaque,
+              onTap: onServiceTap,
+              child: const SizedBox(width: 96, height: 96),
+            ),
+          ),
+        ],
       ),
     );
   }

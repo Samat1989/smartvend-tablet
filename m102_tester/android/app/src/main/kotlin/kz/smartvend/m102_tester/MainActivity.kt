@@ -1,10 +1,15 @@
 package kz.smartvend.m102_tester
 
+import android.app.AlarmManager
+import android.app.PendingIntent
 import android.app.admin.DevicePolicyManager
 import android.content.Context
 import android.content.Intent
 import android.os.Build
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
+import android.os.Process
 import android.provider.Settings
 import android.view.View
 import android.view.WindowManager
@@ -14,6 +19,7 @@ import androidx.core.view.WindowInsetsControllerCompat
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
+import kotlin.system.exitProcess
 
 /**
  * Kiosk-mode host activity.
@@ -65,6 +71,36 @@ class MainActivity : FlutterActivity() {
                             result.success(null)
                         } catch (t: Throwable) {
                             result.error("settings_unavailable", t.message, null)
+                        }
+                    }
+                    "restartApp" -> {
+                        // Schedule a relaunch via AlarmManager, then kill
+                        // our own process. The factory app uses this same
+                        // pattern to clear stuck CH340 / USB-driver state
+                        // when the board has been silent too long.
+                        result.success(null)
+                        scheduleRelaunchAndKill()
+                    }
+                    "rebootDevice" -> {
+                        // Whole-tablet reboot via DevicePolicyManager.
+                        // Requires the app to be device-owner (which we
+                        // already need for the silent kiosk pinning).
+                        val dpm = getSystemService(Context.DEVICE_POLICY_SERVICE)
+                            as? DevicePolicyManager
+                        if (dpm == null || !dpm.isDeviceOwnerApp(packageName)) {
+                            result.error(
+                                "not_device_owner",
+                                "App is not provisioned as device owner",
+                                null,
+                            )
+                            return@setMethodCallHandler
+                        }
+                        try {
+                            val admin = KioskAdminReceiver.componentName(this)
+                            dpm.reboot(admin)
+                            result.success(null)
+                        } catch (t: Throwable) {
+                            result.error("reboot_failed", t.message, null)
                         }
                     }
                     else -> result.notImplemented()
@@ -161,6 +197,46 @@ class MainActivity : FlutterActivity() {
                 // base lock-task still applies.
             }
         }
+    }
+
+    /**
+     * Schedule [MainActivity] to launch ~250 ms from now via the
+     * system [AlarmManager], then [Process.killProcess] ourselves so
+     * Android tears down the old process. The launch intent is
+     * exactly what the launcher icon would do — single-instance, no
+     * special flags — so the relaunch goes through the same boot
+     * sequence as a normal start.
+     *
+     * Used by the BoardClient escalation when the bus has been
+     * unrecoverable for several reconnect cycles and the most likely
+     * culprit is stuck USB-Serial driver state inside our own
+     * process that a fresh process erases.
+     */
+    private fun scheduleRelaunchAndKill() {
+        val launchIntent = packageManager.getLaunchIntentForPackage(packageName)
+            ?: return
+        launchIntent.addFlags(
+            Intent.FLAG_ACTIVITY_NEW_TASK or
+                Intent.FLAG_ACTIVITY_CLEAR_TASK,
+        )
+        val pendingFlags = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            PendingIntent.FLAG_CANCEL_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        } else {
+            PendingIntent.FLAG_CANCEL_CURRENT
+        }
+        val pendingIntent = PendingIntent.getActivity(
+            this, 0, launchIntent, pendingFlags,
+        )
+        val alarmManager = getSystemService(Context.ALARM_SERVICE) as AlarmManager
+        alarmManager.set(
+            AlarmManager.RTC,
+            System.currentTimeMillis() + 250,
+            pendingIntent,
+        )
+        Handler(Looper.getMainLooper()).postDelayed({
+            Process.killProcess(Process.myPid())
+            exitProcess(0)
+        }, 80)
     }
 
     companion object {

@@ -2,9 +2,11 @@ import 'dart:async';
 import 'dart:typed_data';
 
 import 'package:flutter/foundation.dart';
+import 'package:flutter/services.dart';
 import 'package:usb_serial/usb_serial.dart';
 
 import '../services/device_storage.dart';
+import '../services/kiosk_bridge.dart';
 
 class LogEntry {
   final DateTime time;
@@ -128,9 +130,11 @@ class BoardClient extends ChangeNotifier {
   ];
 
   /// Whether to mix [m102Password] into outgoing CRC. Default `true` to
-  /// match the factory app's `IS_M102GOTOCODE = true` default. Overwritten
-  /// in the constructor by [DeviceStorage.useM102Password] when present,
-  /// then auto-detected on first connect (see [_autoDetectPassword]).
+  /// match the factory app's `IS_M102GOTOCODE = true` default. Loaded
+  /// from [DeviceStorage.useM102Password] in the constructor when
+  /// present. Operator flips it manually in the "Плата" service-mode
+  /// tab — there is no runtime auto-detect (the factory app doesn't
+  /// either; it's set once in the driver-board setup dialog).
   bool _useM102Password = true;
   bool get useM102Password => _useM102Password;
 
@@ -138,8 +142,15 @@ class BoardClient extends ChangeNotifier {
   /// launches. May be null in unit-tests / debug runs.
   final DeviceStorage? _storage;
 
+  /// Flip the CRC-password flag and persist it via [_storage] so the
+  /// next launch starts with the same setting. Mirrors how the
+  /// factory app's SN setup dialog writes IS_M102GOTOCODE once and
+  /// then trusts it forever — no auto-detect, no flip-on-reconnect.
   void setUseM102Password(bool v) {
     _useM102Password = v;
+    // ignore: unawaited_futures — fire-and-forget; SharedPreferences
+    // writes are quick and we don't want to block the UI on disk.
+    _storage?.setUseM102Password(v);
     notifyListeners();
   }
 
@@ -165,11 +176,7 @@ class BoardClient extends ChangeNotifier {
 
   List<UsbDevice> get devices => List.unmodifiable(_devices);
   UsbDevice? get selectedDevice => _selected;
-  /// In debug builds (`flutter run` on emulator or any non-release sideload)
-  /// pretend the M102 is connected even when no real USB port is open, so
-  /// the UI doesn't spam "board disconnected" while you exercise the
-  /// payment/sale flow without hardware. Release builds report the truth.
-  bool get isConnected => _port != null || kDebugMode;
+  bool get isConnected => _port != null;
   int get baud => _baud;
   int get slaveAddr => _slaveAddr;
   Stream<LogEntry> get logStream => _logCtrl.stream;
@@ -197,6 +204,114 @@ class BoardClient extends ChangeNotifier {
         await disconnect();
       }
     });
+    _startHealthWatchdog();
+  }
+
+  /// Force a clean disconnect → autoConnect cycle. Same effect as the
+  /// operator hitting "Disconnect" then "Connect" in service mode,
+  /// just done by the [_healthWatchdog] when comms have been silently
+  /// dead long enough that we suspect the USB-Serial chip / OS driver
+  /// is stuck rather than the board itself.
+  Future<void> forceReconnect() async {
+    _info('Forcing reconnect (close + reopen port)');
+    await disconnect();
+    await Future.delayed(const Duration(milliseconds: 400));
+    await autoConnect();
+  }
+
+  /// Self-heal: USB autosuspend, a stuck CH340/FTDI driver, or a
+  /// flaky cable can leave the port "open" from Dart's view but with
+  /// every TX silently going nowhere. The board client never sees a
+  /// USB detach, so the usbEventStream-based reconnect doesn't fire.
+  ///
+  /// This watchdog ticks every 10 s and, if [isConnected] but
+  /// [isHealthy] has been false for at least [_unhealthyGracePeriod],
+  /// runs the same close+open cycle the operator would do manually.
+  static const Duration _unhealthyGracePeriod = Duration(seconds: 30);
+  Timer? _healthWatchdog;
+  DateTime? _unhealthySince;
+  bool _selfHealing = false;
+
+  /// Counter mirroring the factory app's `numTr30ReconUSBCOMUSB`
+  /// (`UsbUtil.java:216`): how many times in a row the watchdog has
+  /// had to force-reconnect without the bus coming back healthy.
+  /// Reset to 0 on the next successful exchange in [_sendAndReceive].
+  /// Surfaced via [reconnectAttempts] so the service-mode log can
+  /// show 3-of-5 etc., and we escalate the message at the factory
+  /// thresholds (2 = restart USB, 5 = would-restart-app, 10 = would-
+  /// reboot-mainboard). We only log — the app-restart and mainboard-
+  /// reboot are factory-specific and need device-owner privileges we
+  /// don't have here.
+  int _reconnectAttempts = 0;
+  int get reconnectAttempts => _reconnectAttempts;
+
+  void _startHealthWatchdog() {
+    _healthWatchdog?.cancel();
+    _healthWatchdog = Timer.periodic(
+      const Duration(seconds: 10),
+      (_) async {
+        if (_port == null || _selfHealing) {
+          _unhealthySince = null;
+          return;
+        }
+        if (isHealthy) {
+          _unhealthySince = null;
+          return;
+        }
+        _unhealthySince ??= DateTime.now();
+        final unhealthyFor = DateTime.now().difference(_unhealthySince!);
+        if (unhealthyFor < _unhealthyGracePeriod) return;
+        _selfHealing = true;
+        try {
+          _reconnectAttempts++;
+          _info('Health watchdog: ${unhealthyFor.inSeconds}s unhealthy '
+              '→ auto-reconnect #$_reconnectAttempts');
+
+          // Escalation ladder modelled on factory app
+          // (UsbUtil.isRestartApp / m933reboot):
+          //   • #5 reconnects in a row  → restart the app to clear any
+          //     stuck USB-Serial driver state inside our own process
+          //   • #10 reconnects in a row → reboot the whole tablet
+          //     (DevicePolicyManager.reboot, device-owner only;
+          //     silent no-op if we haven't been provisioned).
+          // We *also* trigger forceReconnect() in the same tick for
+          // the in-process attempts — the escalation just adds a
+          // hammer on top once we've established the soft path isn't
+          // enough.
+          if (_reconnectAttempts == 5) {
+            _err('Reconnect #5 — restarting app to clear stuck '
+                'USB-driver state (factory pattern)');
+            // ignore: unawaited_futures
+            KioskBridge.restartApp();
+            return; // process is about to die, no point continuing
+          }
+          if (_reconnectAttempts >= 10) {
+            _err('Reconnect #$_reconnectAttempts — rebooting device '
+                '(factory pattern; needs device-owner)');
+            try {
+              await KioskBridge.rebootDevice();
+              return; // device is rebooting
+            } on PlatformException catch (e) {
+              if (e.code == 'not_device_owner') {
+                _err('Cannot reboot device — app is not device-owner. '
+                    'Provision with `adb shell dpm set-device-owner '
+                    'kz.smartvend.m102_tester/.KioskAdminReceiver`.');
+              } else {
+                _err('Reboot failed: ${e.message}');
+              }
+            }
+          }
+          if (_reconnectAttempts == 2) {
+            _err('Reconnect #2 — board still silent after one full '
+                'close+open cycle');
+          }
+          await forceReconnect();
+        } finally {
+          _selfHealing = false;
+          _unhealthySince = null;
+        }
+      },
+    );
   }
 
   Future<void> refreshDevices() async {
@@ -298,6 +413,11 @@ class BoardClient extends ChangeNotifier {
       _rxSub = port.inputStream!.listen(_onRx, onError: (e) => _err('rx: $e'));
       _info('Opened ${dev.productName ?? "device"} @ $_baud 8N1');
       notifyListeners();
+      // Mirror the factory app's 900 ms 0x03 poll thread — keeps the
+      // CH340 / RS-485 bus warm (out of USB autosuspend), gives the
+      // health watchdog something to measure against, and surfaces a
+      // stuck board quickly. Started here, stopped in [disconnect].
+      _startPollHeartbeat();
       // Best-effort firmware probe so service mode can show it. Don't await —
       // a missing reply here shouldn't delay the UI's "connected" state.
       // ignore: unawaited_futures
@@ -309,14 +429,61 @@ class BoardClient extends ChangeNotifier {
     }
   }
 
+  // ─── 900 ms Poll (0x03) heartbeat ───────────────────────────────
+  //
+  // Factory app's `C0082ThreadADH.java:97` is a forever-loop:
+  //   while (true) { sleep(900); for (addr in 1..N) sendM102Order("03"); }
+  //
+  // That cadence is what keeps the M102 / MP2404 / clone boards happy:
+  // USB-Serial chips on Android Go tablets autosuspend after ~few
+  // seconds of TX silence (we hit this on MP2404), and some firmware
+  // revisions also have their own bus-silence watchdog that drops the
+  // CH340. A poll-per-second cleanly avoids both. We use Dart's
+  // Timer.periodic instead of a dedicated thread.
+  //
+  // The tick skips itself if (a) another request is still in flight
+  // (climate read, dispense, manual op from service mode), or (b) the
+  // health watchdog is mid-reconnect — so the heartbeat never collides
+  // with real work or self-healing.
+  static const Duration _heartbeatInterval = Duration(milliseconds: 900);
+  Timer? _heartbeatTimer;
+
+  void _startPollHeartbeat() {
+    _heartbeatTimer?.cancel();
+    _heartbeatTimer = Timer.periodic(_heartbeatInterval, (_) {
+      if (_port == null) return;
+      if (_selfHealing) return;
+      if (_pendingResponse != null && !_pendingResponse!.isCompleted) {
+        return;
+      }
+      // ignore: unawaited_futures
+      poll();
+    });
+  }
+
+  void _stopPollHeartbeat() {
+    _heartbeatTimer?.cancel();
+    _heartbeatTimer = null;
+  }
+
+  /// Set while [_refreshFirmwareId] is already running so the recovery
+  /// path in [_sendAndReceive] doesn't kick off a second concurrent
+  /// probe-and-detect cycle.
+  bool _firmwareRefreshInFlight = false;
+
   Future<void> _refreshFirmwareId() async {
+    if (_firmwareRefreshInFlight) return;
+    _firmwareRefreshInFlight = true;
     try {
-      // Auto-detect runs *before* the first Get ID — if it has to
-      // flip [_useM102Password], the very next request already uses
-      // the right CRC. On boards we've probed before, the stored
-      // value matches, the first probe succeeds, and we just save
-      // the same value back (no flip, no second request).
-      await _autoDetectPassword();
+      // CRC password is now a manual operator setting (mirrors the
+      // factory app's `IS_M102GOTOCODE` SharedPreference, which is
+      // set once during the SN/driver-board setup dialog and never
+      // probed at runtime). Auto-detect used to live here — it ran
+      // a flip-and-retry on every reconnect and could land on the
+      // wrong setting under timing pressure, then persist it. Now we
+      // just trust the stored flag and let the operator flip it in
+      // the "Плата" service-mode tab if a different board needs the
+      // other variant.
       final id = await getId();
       if (id != null && id != _firmwareId) {
         _firmwareId = id;
@@ -324,57 +491,44 @@ class BoardClient extends ChangeNotifier {
       }
     } catch (_) {
       // Probe failure is non-fatal; isHealthy will reflect comm status.
-    }
-  }
-
-  /// Probes Get ID with the current [_useM102Password] setting; if no
-  /// reply comes back, flips the flag and probes once more. Persists
-  /// whichever value actually elicited a response into [_storage] so
-  /// subsequent app launches start with the right CRC formula.
-  ///
-  /// Runs at most twice. If neither attempt gets a reply the method
-  /// is a no-op — the bus is dead for some other reason (no power,
-  /// wrong slave addr, wrong wiring) and we mustn't keep flipping
-  /// the saved value back and forth on every reconnect.
-  Future<void> _autoDetectPassword() async {
-    if (_port == null) return;
-    _info('auto-detect: probe Get ID with password '
-        '${_useM102Password ? "ON" : "OFF"}…');
-    final firstResp = await _sendAndReceive(0x01, List.filled(16, 0));
-    if (firstResp != null && firstResp.isNotEmpty) {
-      _info('auto-detect: got reply on first probe → keep password '
-          '${_useM102Password ? "ON" : "OFF"}, persist');
-      await _storage?.setUseM102Password(_useM102Password);
-      return;
-    }
-    // Flip and try again.
-    final original = _useM102Password;
-    _useM102Password = !_useM102Password;
-    _info('auto-detect: no reply, flipping to password '
-        '${_useM102Password ? "ON" : "OFF"} and re-probing…');
-    final secondResp = await _sendAndReceive(0x01, List.filled(16, 0));
-    if (secondResp != null && secondResp.isNotEmpty) {
-      _info('auto-detect: success on flipped probe → save password '
-          '${_useM102Password ? "ON" : "OFF"} (was ${original ? "ON" : "OFF"})');
-      await _storage?.setUseM102Password(_useM102Password);
-      notifyListeners();
-    } else {
-      _info('auto-detect: both variants silent → restoring '
-          '${original ? "ON" : "OFF"}, NOT persisting (dead bus)');
-      _useM102Password = original;
+    } finally {
+      _firmwareRefreshInFlight = false;
     }
   }
 
   Future<void> disconnect() async {
+    // CRITICAL: clear Dart-side state synchronously *before* trying
+    // to close the underlying handles. If the USB chip died /
+    // autosuspended, [_rxSub.cancel] or [_port.close] may hang
+    // indefinitely or throw — the old code awaited those calls first,
+    // so on a stuck driver `_port` stayed non-null and `isConnected`
+    // stayed `true`. That made the service-mode buttons useless: the
+    // user reported "disconnect не реагирует, connect не реагирует,
+    // только перезагрузка приложения помогает". Now the listeners
+    // already see `isConnected == false` (so they can re-render and
+    // [autoConnect] doesn't bail on the early `if (isConnected)`),
+    // and we tear down the actual port in the background with a
+    // 2-second timeout.
+    _stopPollHeartbeat();
     _failPending('disconnected');
-    await _rxSub?.cancel();
+    final oldRx = _rxSub;
+    final oldPort = _port;
     _rxSub = null;
-    await _port?.close();
     _port = null;
     _rxBuffer.clear();
     _firmwareId = null;
     _consecutiveFailures = 0;
     notifyListeners();
+    try {
+      await oldRx?.cancel();
+    } catch (e) {
+      _err('rxSub.cancel during disconnect: $e');
+    }
+    try {
+      await oldPort?.close().timeout(const Duration(seconds: 2));
+    } catch (e) {
+      _err('port.close during disconnect: $e (handle abandoned)');
+    }
   }
 
   // ---------- protocol ----------
@@ -461,6 +615,26 @@ class BoardClient extends ChangeNotifier {
       _consecutiveFailures = 0;
       notifyListeners();
     }
+    // Bus is back: reset the watchdog's escalation counter so the
+    // next outage starts fresh from "reconnect #1" rather than
+    // continuing whatever total survived from the previous one.
+    if (_reconnectAttempts > 0) {
+      _info('Bus recovered after $_reconnectAttempts reconnect attempts');
+      _reconnectAttempts = 0;
+    }
+    // Recovery hook: if firmware ID was never determined (cold boot
+    // when the board was off) or got lost (USB detach / disconnect),
+    // the comms guard above tells us the bus is back online. Re-run
+    // Get ID once so the operator no longer has to hit
+    // "Disconnect → Connect" manually in service mode to bring the
+    // firmware string back. The opcode guard prevents recursion
+    // because [_refreshFirmwareId] itself sends 0x01 via getId().
+    if (_firmwareId == null &&
+        opcode != 0x01 && // 0x01 = Get ID — guard against recursion
+        !_firmwareRefreshInFlight) {
+      // ignore: unawaited_futures
+      _refreshFirmwareId();
+    }
     return resp;
   }
 
@@ -505,10 +679,8 @@ class BoardClient extends ChangeNotifier {
   /// Quick "is the board alive *right now*" check. Sends Get ID (0x01)
   /// with a shorter-than-normal timeout and returns true iff a frame
   /// came back. Used by cart/pay flows so payment can't be initiated
-  /// against a dead bus. In debug builds always returns true so the
-  /// emulator UI flow stays unblocked.
+  /// against a dead bus.
   Future<bool> ping({Duration timeout = const Duration(milliseconds: 600)}) async {
-    if (kDebugMode && _port == null) return true;
     if (_port == null) return false;
     final r = await _sendAndReceive(0x01, List.filled(16, 0), timeout: timeout);
     return r != null && r.isNotEmpty;
@@ -617,26 +789,6 @@ class BoardClient extends ChangeNotifier {
     Duration overallTimeout = const Duration(seconds: 20),
   }) async {
     if (!isConnected) {
-      // Debug-only fake-success path so the full payment → sale → stock
-      // pipeline can be exercised on the emulator without USB hardware.
-      // Release builds skip this and surface the real "no board" failure.
-      if (kDebugMode) {
-        _info('--- FAKE DISPENSE motor=$motorIdx (debug, no board attached) ---');
-        await Future.delayed(const Duration(milliseconds: 800));
-        return DispenseResult(
-          success: true,
-          message: 'OK (demo, нет реальной платы)',
-          finalStatus: PollStatus(
-            state: 2,
-            motor: motorIdx,
-            result: 0,
-            peakMa: 0,
-            avgMa: 0,
-            timeMs: 800,
-            curtainMs: curtain == 0 ? 0 : 250,
-          ),
-        );
-      }
       return DispenseResult(success: false, message: 'Нет связи с платой');
     }
 
@@ -761,6 +913,8 @@ class BoardClient extends ChangeNotifier {
     _rxSub?.cancel();
     _port?.close();
     _usbEventSub?.cancel();
+    _healthWatchdog?.cancel();
+    _heartbeatTimer?.cancel();
     _logCtrl.close();
     super.dispose();
   }

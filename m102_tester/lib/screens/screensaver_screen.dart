@@ -30,7 +30,7 @@ class ScreensaverScreen extends StatefulWidget {
 }
 
 class _ScreensaverScreenState extends State<ScreensaverScreen> {
-  static const Duration _slideDwell = Duration(seconds: 7);
+  static const Duration _slideDwell = Duration(seconds: 3);
 
   Timer? _timer;
   int _currentIndex = 0;

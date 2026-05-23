@@ -147,14 +147,23 @@ class ClimateScreen extends StatelessWidget {
                 ),
               ],
             ),
-            Slider(
-              min: isCooling ? -5 : 15,
-              max: isCooling ? 18 : 35,
-              divisions: isCooling ? 46 : 40,
-              value: cfg.setpointC,
-              label: '${cfg.setpointC.toStringAsFixed(1)} °C',
-              onChanged: (v) => ctrl.updateConfig(cfg.copyWith(setpointC: v)),
-            ),
+            Builder(builder: (_) {
+              final double min = isCooling ? -5 : 15;
+              final double max = isCooling ? 18 : 35;
+              // Defensive clamp — ClimateController.updateConfig also
+              // clamps when mode changes, but if a stale persisted
+              // value lands here before that runs we don't want the
+              // Slider to assert and bring the screen down.
+              final double v = cfg.setpointC.clamp(min, max);
+              return Slider(
+                min: min,
+                max: max,
+                divisions: isCooling ? 46 : 40,
+                value: v,
+                label: '${v.toStringAsFixed(1)} °C',
+                onChanged: (n) => ctrl.updateConfig(cfg.copyWith(setpointC: n)),
+              );
+            }),
             Text(
               isCooling
                   ? 'Компрессор включится при ${(cfg.setpointC + 4).toStringAsFixed(1)} °C, '
