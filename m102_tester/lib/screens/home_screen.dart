@@ -59,60 +59,88 @@ class _HomeScreenState extends State<HomeScreen> {
   // Hidden service entry: 5 quick taps on the machid corner badge.
   final List<DateTime> _serviceTaps = [];
 
-  /// Idle screensaver: after [_idleThreshold] without any touch on the
-  /// catalog, push [ScreensaverScreen]. Reset on every Listener event.
-  /// Pre-emptively cancelled if HomeScreen isn't the current top route
-  /// (the customer is mid-checkout / mid-pay / in service mode) so the
-  /// attract loop doesn't interrupt active flows.
-  static const Duration _idleThreshold = Duration(minutes: 5);
-  Timer? _idleTimer;
+  /// Two-stage idle behaviour:
+  ///
+  ///  • After [_shelfCycleAfter] without a touch, the catalog starts
+  ///    auto-advancing its right-rail selection 1 → 2 → … → N → 1 →
+  ///    … so passers-by see the whole inventory without us having to
+  ///    leave the catalog screen.
+  ///  • After [_screensaverAfter] (longer) the full-screen attract
+  ///    loop (shelves + media slideshow) takes over until the next
+  ///    touch.
+  ///
+  /// Both timers reset on any pointer event via [_resetIdle]. While
+  /// the cart has items the auto-cycle pauses — the customer is
+  /// clearly mid-pick and we mustn't steal their place in the catalog.
+  static const Duration _shelfCycleAfter = Duration(seconds: 30);
+  static const Duration _shelfCycleStep = Duration(seconds: 5);
+  static const Duration _screensaverAfter = Duration(minutes: 5);
+  Timer? _idleTick;
+  DateTime _lastTouchAt = DateTime.now();
+  DateTime? _lastShelfAdvanceAt;
   bool _screensaverOpen = false;
 
   @override
   void initState() {
     super.initState();
     _scrollController.addListener(_onScroll);
-    _scheduleIdle();
+    _idleTick = Timer.periodic(const Duration(seconds: 1), (_) => _onTick());
   }
 
   @override
   void dispose() {
     _scrollController.removeListener(_onScroll);
     _scrollController.dispose();
-    _idleTimer?.cancel();
+    _idleTick?.cancel();
     super.dispose();
-  }
-
-  void _scheduleIdle() {
-    _idleTimer?.cancel();
-    _idleTimer = Timer(_idleThreshold, _onIdleFired);
   }
 
   void _resetIdle() {
     if (_screensaverOpen) return;
-    _scheduleIdle();
+    _lastTouchAt = DateTime.now();
+    _lastShelfAdvanceAt = null;
   }
 
-  Future<void> _onIdleFired() async {
+  Future<void> _onTick() async {
     if (!mounted || _screensaverOpen) return;
     final route = ModalRoute.of(context);
-    if (route == null || !route.isCurrent) {
-      _scheduleIdle();
+    if (route == null || !route.isCurrent) return;
+    if (context.read<VendingService>().cartCount > 0) return;
+
+    final idleFor = DateTime.now().difference(_lastTouchAt);
+
+    if (idleFor >= _screensaverAfter) {
+      _screensaverOpen = true;
+      _lastShelfAdvanceAt = null;
+      final nav = Navigator.of(context);
+      await nav.push(MaterialPageRoute<void>(
+        builder: (_) => const ScreensaverScreen(),
+        fullscreenDialog: true,
+      ));
+      if (!mounted) return;
+      _screensaverOpen = false;
+      _lastTouchAt = DateTime.now();
       return;
     }
-    if (context.read<VendingService>().cartCount > 0) {
-      // Customer is mid-pick — don't interrupt them with attract loop.
-      _scheduleIdle();
-      return;
+
+    if (idleFor >= _shelfCycleAfter) {
+      final lastStep = _lastShelfAdvanceAt ?? _lastTouchAt;
+      if (DateTime.now().difference(lastStep) >= _shelfCycleStep) {
+        await _autoAdvanceShelf();
+        _lastShelfAdvanceAt = DateTime.now();
+      }
     }
-    _screensaverOpen = true;
-    await Navigator.of(context).push(MaterialPageRoute<void>(
-      builder: (_) => const ScreensaverScreen(),
-      fullscreenDialog: true,
-    ));
+  }
+
+  Future<void> _autoAdvanceShelf() async {
     if (!mounted) return;
-    _screensaverOpen = false;
-    _scheduleIdle();
+    final svc = context.read<VendingService>();
+    final shelfCount = svc.layout.isNotEmpty
+        ? svc.layout.shelves.length
+        : MotorLayout.rows;
+    if (shelfCount == 0) return;
+    final next = _selectedShelf >= shelfCount ? 1 : _selectedShelf + 1;
+    await _scrollToShelf(next);
   }
 
   /// Re-evaluates which shelf the customer is currently looking at and
