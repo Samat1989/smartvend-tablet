@@ -15,6 +15,14 @@ _patch_tmp/
 *.apk
 *.apk.idsig
 
+# --- Signing material (NEVER commit) ------------------------------------
+# Release keystore + per-environment credentials. Production releases
+# are signed in CI from GitHub Secrets, locally from a dev's own copy.
+*.jks
+*.keystore
+key.properties
+**/android/key.properties
+
 # Third-party tooling jars (downloaded separately when needed).
 apktool*.jar
 uber-apk-signer*.jar
