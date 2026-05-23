@@ -1,0 +1,89 @@
+name: Release APK
+
+# Trigger: push a tag like `v1.0.5+1005` and CI builds the release
+# APK split, signs it with the production keystore (injected from
+# repo secrets), and attaches `app-armeabi-v7a-release.apk` to a new
+# GitHub Release. The tablet's in-app updater polls the Releases API
+# and picks the asset by name (see lib/services/update_service.dart).
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write  # required to create the Release + upload assets
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: m102_tester
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          # Pin to the same minor version range used locally so the
+          # CI build doesn't regress against an SDK we haven't tested.
+          flutter-version: '3.x'
+          cache: true
+
+      - name: Decode release keystore
+        # The keystore is stored as a base64 string in the
+        # ANDROID_KEYSTORE_BASE64 secret. We decode it into the
+        # checkout so build.gradle.kts finds it via the relative
+        # storeFile path in key.properties.
+        run: |
+          echo "$ANDROID_KEYSTORE_BASE64" | base64 -d > android/release.jks
+          ls -la android/release.jks
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+
+      - name: Write key.properties
+        run: |
+          cat > android/key.properties <<EOF
+          storePassword=${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          keyPassword=${{ secrets.ANDROID_KEY_PASSWORD }}
+          keyAlias=${{ secrets.ANDROID_KEY_ALIAS }}
+          storeFile=../release.jks
+          EOF
+
+      - name: Flutter pub get
+        run: flutter pub get
+
+      - name: Build split APKs (release)
+        run: flutter build apk --release --split-per-abi
+
+      - name: Compute SHA-256 of armeabi-v7a APK
+        id: sha
+        run: |
+          file=build/app/outputs/flutter-apk/app-armeabi-v7a-release.apk
+          echo "sha=$(sha256sum "$file" | awk '{print $1}')" >> "$GITHUB_OUTPUT"
+          echo "size=$(stat -c%s "$file")" >> "$GITHUB_OUTPUT"
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: ${{ github.ref_name }}
+          generate_release_notes: true
+          fail_on_unmatched_files: true
+          body: |
+            ### Smartvend Tablet ${{ github.ref_name }}
+
+            APK: `app-armeabi-v7a-release.apk`
+            Size: ${{ steps.sha.outputs.size }} bytes
+            SHA-256: `${{ steps.sha.outputs.sha }}`
+
+            Installs automatically on tablets via service-mode → Обновление.
+          files: |
+            m102_tester/build/app/outputs/flutter-apk/app-armeabi-v7a-release.apk

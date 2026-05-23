@@ -32,4 +32,14 @@ class KioskBridge {
   static Future<void> rebootDevice() async {
     await _channel.invokeMethod<void>('rebootDevice');
   }
+
+  /// Install the APK at [path] via PackageInstaller. Device-owner
+  /// kiosks (our default) install silently; non-owners see Android's
+  /// "Allow this app to install unknown apps?" dialog once.
+  ///
+  /// Returns when the session is committed — actual install runs in
+  /// the background and the app is killed + relaunched on success.
+  static Future<void> installApk(String path) async {
+    await _channel.invokeMethod<void>('installApk', {'path': path});
+  }
 }

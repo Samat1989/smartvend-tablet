@@ -1,0 +1,12 @@
+# Copy this file to `key.properties` (same dir) and fill in the password
+# you set when running `keytool -genkeypair … -keystore release.jks`.
+# `key.properties` is gitignored — never commit your real password.
+#
+# In CI (GitHub Actions) we inject the same values from repo secrets, so
+# the keystore + properties file are generated on the runner at build
+# time and discarded after the APK is signed.
+
+storePassword=YOUR_PASSWORD_HERE
+keyPassword=YOUR_PASSWORD_HERE
+keyAlias=smartvend
+storeFile=../release.jks

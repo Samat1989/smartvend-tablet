@@ -5,6 +5,8 @@ import android.app.PendingIntent
 import android.app.admin.DevicePolicyManager
 import android.content.Context
 import android.content.Intent
+import android.content.IntentSender
+import android.content.pm.PackageInstaller
 import android.os.Build
 import android.os.Bundle
 import android.os.Handler
@@ -19,6 +21,8 @@ import androidx.core.view.WindowInsetsControllerCompat
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
+import java.io.File
+import java.io.FileInputStream
 import kotlin.system.exitProcess
 
 /**
@@ -103,9 +107,70 @@ class MainActivity : FlutterActivity() {
                             result.error("reboot_failed", t.message, null)
                         }
                     }
+                    "installApk" -> {
+                        val path = call.argument<String>("path")
+                        if (path.isNullOrBlank()) {
+                            result.error("bad_args", "path is required", null)
+                            return@setMethodCallHandler
+                        }
+                        try {
+                            installApk(path)
+                            result.success(null)
+                        } catch (t: Throwable) {
+                            result.error("install_failed", t.message, null)
+                        }
+                    }
                     else -> result.notImplemented()
                 }
             }
+    }
+
+    /**
+     * Silently install [path] using the OS [PackageInstaller]. Works
+     * without user prompts when the app is provisioned as
+     * device-owner (which our kiosk setup already does — see
+     * [configureDeviceOwnerKiosk]). On non-owner devices the OS shows
+     * the standard "Allow this app to install unknown apps?" dialog
+     * once, after which the install proceeds.
+     *
+     * The session sends a status broadcast back to [InstallReceiver]
+     * which logs the result. Since the install replaces our own APK,
+     * Android kills + relaunches the process on success — there's no
+     * "great success" code path here, only error paths.
+     */
+    private fun installApk(path: String) {
+        val file = File(path)
+        require(file.exists() && file.canRead()) { "APK not readable: $path" }
+
+        val installer = packageManager.packageInstaller
+        val params = PackageInstaller.SessionParams(
+            PackageInstaller.SessionParams.MODE_FULL_INSTALL,
+        )
+        // INSTALL_REPLACE_EXISTING is implicit in MODE_FULL_INSTALL.
+        params.setAppPackageName(packageName)
+        val sessionId = installer.createSession(params)
+        installer.openSession(sessionId).use { session ->
+            FileInputStream(file).use { input ->
+                session.openWrite("update.apk", 0, file.length()).use { output ->
+                    val buf = ByteArray(64 * 1024)
+                    while (true) {
+                        val n = input.read(buf)
+                        if (n <= 0) break
+                        output.write(buf, 0, n)
+                    }
+                    session.fsync(output)
+                }
+            }
+
+            val intent = Intent(this, InstallReceiver::class.java)
+            val flags = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_MUTABLE
+            } else {
+                PendingIntent.FLAG_UPDATE_CURRENT
+            }
+            val pi = PendingIntent.getBroadcast(this, sessionId, intent, flags)
+            session.commit(pi.intentSender)
+        }
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {

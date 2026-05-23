@@ -13,6 +13,7 @@ import 'inventory_edit_screen.dart';
 import 'layout_editor_screen.dart';
 import 'screensaver_media_screen.dart';
 import 'tester_screen.dart';
+import 'update_screen.dart';
 
 /// Hub for service-mode actions. Reached via the long-press on the home
 /// screen header → PIN gate → here.
@@ -129,6 +130,15 @@ class ServiceMenuScreen extends StatelessWidget {
                           );
                         }
                       },
+                    ),
+                    _Tile(
+                      icon: Icons.system_update,
+                      label: 'Обновление',
+                      color: Colors.deepOrange,
+                      onTap: () => Navigator.of(context).push(
+                        MaterialPageRoute(
+                            builder: (_) => const UpdateScreen()),
+                      ),
                     ),
                     _Tile(
                       icon: Icons.exit_to_app,
