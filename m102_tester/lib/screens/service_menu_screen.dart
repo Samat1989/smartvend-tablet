@@ -10,6 +10,7 @@ import '../services/vending_service.dart';
 import 'board_diag_screen.dart';
 import 'climate_screen.dart';
 import 'inventory_edit_screen.dart';
+import 'layout_editor_screen.dart';
 import 'tester_screen.dart';
 
 /// Hub for service-mode actions. Reached via the long-press on the home
@@ -77,6 +78,15 @@ class ServiceMenuScreen extends StatelessWidget {
                       label: s.t('service_layout'),
                       color: Colors.deepPurple,
                       onTap: () => _changeLayout(context),
+                    ),
+                    _Tile(
+                      icon: Icons.dashboard_customize,
+                      label: s.t('service_layout_editor'),
+                      color: Colors.indigo,
+                      onTap: () => Navigator.of(context).push(
+                        MaterialPageRoute(
+                            builder: (_) => const LayoutEditorScreen()),
+                      ),
                     ),
                     // Sensor mode picker moved into the inventory screen.
                     // The operator manages slot-level concerns there, and

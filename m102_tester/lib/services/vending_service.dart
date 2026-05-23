@@ -5,6 +5,7 @@ import 'package:flutter/foundation.dart' hide Category;
 import '../board/board_client.dart';
 import '../models/cart.dart';
 import '../models/category.dart';
+import '../models/machine_layout.dart';
 import '../models/product.dart';
 import 'device_storage.dart';
 import 'supabase_api.dart';
@@ -31,6 +32,8 @@ class VendingService extends ChangeNotifier {
     SupabaseApi? api,
   })  : _storage = storage,
         _api = api ?? SupabaseApi() {
+    _layout = MachineLayout.decode(_storage.machineLayoutJson) ??
+        MachineLayout.empty();
     _storage.addListener(_onStorageChanged);
     if (_storage.isPaired) {
       reload();
@@ -38,6 +41,22 @@ class VendingService extends ChangeNotifier {
     } else {
       _state = CatalogState.unpaired;
     }
+  }
+
+  /// Operator-built machine layout (shelves + slots, including twin
+  /// spirals). Empty until the operator configures it in service
+  /// mode — callers should fall back to single-motor dispense when
+  /// [layout.isEmpty] or when a product's motor_id doesn't map to
+  /// any slot in the current layout.
+  late MachineLayout _layout;
+  MachineLayout get layout => _layout;
+
+  /// Replace the layout, persist it, and notify listeners so the
+  /// catalog re-renders against the new shelf/slot structure.
+  Future<void> setLayout(MachineLayout next) async {
+    _layout = next;
+    await _storage.setMachineLayoutJson(next.encode());
+    notifyListeners();
   }
 
   void _startAutoRefresh() {

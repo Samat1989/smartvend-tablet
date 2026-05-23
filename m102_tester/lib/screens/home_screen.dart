@@ -37,11 +37,12 @@ class HomeScreen extends StatefulWidget {
 }
 
 class _HomeScreenState extends State<HomeScreen> {
-  // One global key per shelf so tap-on-tab can use Scrollable.ensureVisible.
-  final List<GlobalKey> _shelfKeys = List.generate(
-    MotorLayout.rows,
-    (_) => GlobalKey(),
-  );
+  // Shelf index → GlobalKey, lazily initialised. A Map (instead of a
+  // fixed-size list) so the catalog handles operator-configured
+  // layouts with any shelf count, not just the factory 6.
+  final Map<int, GlobalKey> _shelfKeyCache = {};
+  GlobalKey _shelfKey(int oneBased) =>
+      _shelfKeyCache.putIfAbsent(oneBased, () => GlobalKey());
 
   /// Currently-highlighted shelf in the right-rail selector. Tap-on-tab
   /// sets it directly; scroll updates it via [_onScroll] so the rail
@@ -77,9 +78,13 @@ class _HomeScreenState extends State<HomeScreen> {
   /// catalog's natural top edge.
   void _onScroll() {
     const triggerDy = 24.0 + 80.0; // list top padding + a bit of slack
+    final svc = context.read<VendingService>();
+    final shelfCount = svc.layout.isNotEmpty
+        ? svc.layout.shelves.length
+        : MotorLayout.rows;
     var detected = 1;
-    for (var i = MotorLayout.rows; i >= 1; i--) {
-      final ctx = _shelfKeys[i - 1].currentContext;
+    for (var i = shelfCount; i >= 1; i--) {
+      final ctx = _shelfKey(i).currentContext;
       if (ctx == null) continue;
       final box = ctx.findRenderObject() as RenderBox?;
       if (box == null || !box.attached) continue;
@@ -109,7 +114,7 @@ class _HomeScreenState extends State<HomeScreen> {
 
   Future<void> _scrollToShelf(int shelf) async {
     setState(() => _selectedShelf = shelf);
-    final ctx = _shelfKeys[shelf - 1].currentContext;
+    final ctx = _shelfKey(shelf).currentContext;
     if (ctx == null) return;
     await Scrollable.ensureVisible(
       ctx,
@@ -137,13 +142,20 @@ class _HomeScreenState extends State<HomeScreen> {
               children: [
                 Expanded(
                   child: _ProductList(
-                    shelfKeys: _shelfKeys,
+                    shelfKey: _shelfKey,
                     scrollController: _scrollController,
                   ),
                 ),
                 _ShelfSelector(
                   selected: _selectedShelf,
                   onSelect: _scrollToShelf,
+                  shelfCount: context.watch<VendingService>().layout.isNotEmpty
+                      ? context
+                          .read<VendingService>()
+                          .layout
+                          .shelves
+                          .length
+                      : MotorLayout.rows,
                 ),
               ],
             ),
@@ -165,11 +177,14 @@ class _HomeScreenState extends State<HomeScreen> {
 
 class _ProductList extends StatelessWidget {
   const _ProductList({
-    required this.shelfKeys,
+    required this.shelfKey,
     required this.scrollController,
   });
 
-  final List<GlobalKey> shelfKeys;
+  /// Lazily resolves shelf index → GlobalKey so the right-rail tabs'
+  /// `Scrollable.ensureVisible` can hop to any shelf regardless of
+  /// how many shelves the operator configured.
+  final GlobalKey Function(int oneBased) shelfKey;
   final ScrollController scrollController;
 
   @override
@@ -184,36 +199,56 @@ class _ProductList extends StatelessWidget {
           case CatalogState.error:
             return _ErrorView(message: svc.error ?? '');
           case CatalogState.ready:
-            // Group catalog by shelf. A shelf can be empty (no rows in
-            // inventory yet) — we still render the header so the
-            // numbered shelf rail stays consistent.
-            //
-            // Using SingleChildScrollView + Column (not ListView) so all
-            // six shelf widgets exist in the render tree at once.
-            // `Scrollable.ensureVisible` from the right rail's tabs
-            // doesn't work with lazy `ListView` children — when shelf 6
-            // hasn't been built yet, the tap silently fails. With six
-            // shelves this is fine memory-wise (no virtualisation
-            // needed) and lets any tab → any tab jump work.
+            // Two render paths share the same SingleChildScrollView so
+            // the right-rail's `Scrollable.ensureVisible` works in both:
+            //   1. Operator built a layout in service mode → use it.
+            //   2. No layout configured yet → fall back to the factory
+            //      6×6 [MotorLayout] grid so first-launch users still
+            //      see a sensible catalog.
             final byMotor = {for (final p in svc.catalog) p.motorId: p};
+            final layout = svc.layout;
+            final shelves = <_RenderedShelf>[];
+            if (layout.isNotEmpty) {
+              for (var i = 0; i < layout.shelves.length; i++) {
+                final sh = layout.shelves[i];
+                final products = <Product>[];
+                for (final slot in sh.slots) {
+                  // First listed motor of the slot is the "anchor" the
+                  // product is tagged with in inventory. Twin slots
+                  // dispense all motors at run time (see VendingService).
+                  final p = byMotor[slot.primaryMotorId];
+                  if (p != null) products.add(p);
+                }
+                shelves.add(_RenderedShelf(
+                  label: sh.label,
+                  products: products,
+                ));
+              }
+            } else {
+              for (var s = 1; s <= MotorLayout.rows; s++) {
+                shelves.add(_RenderedShelf(
+                  label: MotorLayout.shelfLabelRange(s),
+                  products: [
+                    for (final m in MotorLayout.motorsForShelf(s))
+                      if (byMotor[m] != null) byMotor[m]!,
+                  ],
+                ));
+              }
+            }
             return SingleChildScrollView(
               controller: scrollController,
               padding: const EdgeInsets.fromLTRB(16, 16, 8, 120),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  for (var shelf = 1;
-                      shelf <= MotorLayout.rows;
-                      shelf++) ...[
+                  for (var i = 0; i < shelves.length; i++) ...[
                     _ShelfGroup(
-                      key: shelfKeys[shelf - 1],
-                      shelfNumber: shelf,
-                      products: [
-                        for (final motor in MotorLayout.motorsForShelf(shelf))
-                          if (byMotor[motor] != null) byMotor[motor]!,
-                      ],
+                      key: shelfKey(i + 1),
+                      shelfNumber: i + 1,
+                      label: shelves[i].label,
+                      products: shelves[i].products,
                     ),
-                    if (shelf < MotorLayout.rows)
+                    if (i < shelves.length - 1)
                       const SizedBox(height: 56),
                   ],
                 ],
@@ -225,14 +260,26 @@ class _ProductList extends StatelessWidget {
   }
 }
 
+/// Single shelf's render data — operator-supplied label + the products
+/// that fall under it. Decoupled from the underlying MachineLayout /
+/// MotorLayout origin so [_ShelfGroup] doesn't need to know which path
+/// produced the list.
+class _RenderedShelf {
+  const _RenderedShelf({required this.label, required this.products});
+  final String label;
+  final List<Product> products;
+}
+
 class _ShelfGroup extends StatelessWidget {
   const _ShelfGroup({
     super.key,
     required this.shelfNumber,
+    required this.label,
     required this.products,
   });
 
   final int shelfNumber;
+  final String label;
   final List<Product> products;
 
   @override
@@ -266,14 +313,18 @@ class _ShelfGroup extends StatelessWidget {
               ),
             ),
             const SizedBox(width: 8),
-            Text(
-              MotorLayout.shelfLabelRange(shelfNumber),
-              style: const TextStyle(
-                color: AppColors.iosGray,
-                fontSize: 14,
-                fontWeight: FontWeight.w700,
-                letterSpacing: -0.3,
-                fontFeatures: [FontFeature.tabularFigures()],
+            Expanded(
+              child: Text(
+                label,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(
+                  color: AppColors.iosGray,
+                  fontSize: 14,
+                  fontWeight: FontWeight.w700,
+                  letterSpacing: -0.3,
+                  fontFeatures: [FontFeature.tabularFigures()],
+                ),
               ),
             ),
           ],
@@ -569,9 +620,14 @@ class _CounterPill extends StatelessWidget {
 // ─────────────────────────── Shelf rail ───────────────────────────
 
 class _ShelfSelector extends StatelessWidget {
-  const _ShelfSelector({required this.selected, required this.onSelect});
+  const _ShelfSelector({
+    required this.selected,
+    required this.onSelect,
+    required this.shelfCount,
+  });
 
   final int selected;
+  final int shelfCount;
   final ValueChanged<int> onSelect;
 
   @override
@@ -610,13 +666,13 @@ class _ShelfSelector extends StatelessWidget {
             child: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
-                for (var i = 1; i <= MotorLayout.rows; i++) ...[
+                for (var i = 1; i <= shelfCount; i++) ...[
                   _ShelfTab(
                     number: i,
                     active: i == selected,
                     onTap: () => onSelect(i),
                   ),
-                  if (i < MotorLayout.rows)
+                  if (i < shelfCount)
                     Container(
                       width: 12,
                       height: 1,

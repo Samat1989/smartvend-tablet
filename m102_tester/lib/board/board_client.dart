@@ -521,6 +521,23 @@ class BoardClient extends ChangeNotifier {
     return sn.isEmpty ? null : sn;
   }
 
+  /// 0x04 Motor Scan — non-destructive presence test. Briefly pulses
+  /// the channel and reads current; per [api_docsM109E.txt §9.3] returns:
+  ///   0xAA = normal (motor wired)
+  ///   0xBB = abnormal (no/low current — channel empty or wire broken)
+  ///   0xCC = overload (short / excessive current)
+  /// `null` = no reply from board.
+  ///
+  /// Safe to call across all 0..99 channels — the motor doesn't actually
+  /// turn the spiral, so the cabinet stays loaded.
+  Future<int?> scanMotor(int motorId) async {
+    final data = <int>[motorId & 0xFF, ...List.filled(15, 0)];
+    final r = await _sendAndReceive(0x04, data,
+        timeout: const Duration(milliseconds: 400));
+    if (r == null || r.length < 3) return null;
+    return r[2];
+  }
+
   Future<PollStatus?> poll() async {
     final r = await _sendAndReceive(0x03, List.filled(16, 0));
     if (r == null || r.length < 13) return null;
@@ -683,6 +700,33 @@ class BoardClient extends ChangeNotifier {
       message: 'Таймаут выдачи (${overallTimeout.inSeconds}с)',
       finalStatus: last,
     );
+  }
+
+  /// Dispense a slot — one or more motors in sequence. Used for twin
+  /// spirals where one product is mechanically tied to two motors and
+  /// both must fire for the product to fall.
+  ///
+  /// Short-circuits on the first failure: if motor #1 of a twin runs
+  /// OK but motor #2 errors, the function returns the second motor's
+  /// failure — operator gets accurate diagnostics, and we don't keep
+  /// cranking motors after a confirmed jam.
+  ///
+  /// For a single-motor slot this behaves identically to [dispense].
+  Future<DispenseResult> dispenseSlot(
+    List<int> motorIds, {
+    int type = 2,
+    int curtain = 0,
+  }) async {
+    if (motorIds.isEmpty) {
+      return DispenseResult(
+          success: false, message: 'Пустой слот (нет motor id)');
+    }
+    DispenseResult? last;
+    for (final id in motorIds) {
+      last = await dispense(id, type: type, curtain: curtain);
+      if (!last.success) return last;
+    }
+    return last!;
   }
 
   // ---------- logging ----------

@@ -183,6 +183,11 @@ class Strings extends ChangeNotifier {
       'en': 'M102 CRC password',
     },
     'service_board': {'ru': 'Плата', 'kk': 'Плата', 'en': 'Board'},
+    'service_layout_editor': {
+      'ru': 'Раскладка слотов',
+      'kk': 'Слоттар орналасуы',
+      'en': 'Slot layout',
+    },
     'board_disconnect': {'ru': 'Отключить', 'kk': 'Ажырату', 'en': 'Disconnect'},
     'board_reconnect': {'ru': 'Подключить', 'kk': 'Қосу', 'en': 'Reconnect'},
     'board_slave_addr': {'ru': 'Адрес', 'kk': 'Мекенжайы', 'en': 'Addr'},

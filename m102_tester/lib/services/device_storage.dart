@@ -15,6 +15,7 @@ class DeviceStorage extends ChangeNotifier {
   static const _kClimateSetpoint = 'climate_setpoint';
   static const _kClimateLight = 'climate_light_always_on';
   static const _kUseM102Password = 'use_m102_password';
+  static const _kMachineLayout = 'machine_layout_v1';
   static const _defaultPin = '1234';
   static const _defaultGridColumns = 3;
   static const _defaultDispenseSensorMode = 1; // sensor required by default
@@ -80,6 +81,21 @@ class DeviceStorage extends ChangeNotifier {
 
   Future<void> setUseM102Password(bool v) async {
     await _prefs.setBool(_kUseM102Password, v);
+    notifyListeners();
+  }
+
+  /// Raw JSON for the operator-built machine layout (shelves + slots).
+  /// Null = never configured; caller falls back to a default grid.
+  /// Parsing/serializing lives in [MachineLayout] so storage here
+  /// stays a dumb string ↔ string codec.
+  String? get machineLayoutJson => _prefs.getString(_kMachineLayout);
+
+  Future<void> setMachineLayoutJson(String? json) async {
+    if (json == null || json.isEmpty) {
+      await _prefs.remove(_kMachineLayout);
+    } else {
+      await _prefs.setString(_kMachineLayout, json);
+    }
     notifyListeners();
   }
 

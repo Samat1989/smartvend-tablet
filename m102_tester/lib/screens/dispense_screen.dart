@@ -98,8 +98,14 @@ class _DispenseScreenState extends State<DispenseScreen>
       if (!mounted) return;
       setState(() => _currentIndex = i);
       final product = _queue[i];
-      final r = await board.dispense(
-        product.motorId,
+      // Resolve motor IDs via the operator-built layout: twin spirals
+      // map one product to multiple motors, all of which must fire.
+      // Fallback to the bare product.motorId for backward compat when
+      // the layout doesn't list this motor yet.
+      final slot = svc.layout.slotForMotor(product.motorId);
+      final motorIds = slot?.motorIds ?? [product.motorId];
+      final r = await board.dispenseSlot(
+        motorIds,
         type: product.motorType,
         curtain: sensor,
       );
