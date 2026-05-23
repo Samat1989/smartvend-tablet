@@ -188,6 +188,11 @@ class Strings extends ChangeNotifier {
       'kk': 'Слоттар орналасуы',
       'en': 'Slot layout',
     },
+    'service_screensaver_media': {
+      'ru': 'Заставка / Медиа',
+      'kk': 'Скринсейвер / Медиа',
+      'en': 'Screensaver media',
+    },
     'board_disconnect': {'ru': 'Отключить', 'kk': 'Ажырату', 'en': 'Disconnect'},
     'board_reconnect': {'ru': 'Подключить', 'kk': 'Қосу', 'en': 'Reconnect'},
     'board_slave_addr': {'ru': 'Адрес', 'kk': 'Мекенжайы', 'en': 'Addr'},

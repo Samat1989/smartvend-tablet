@@ -11,6 +11,7 @@ import 'board_diag_screen.dart';
 import 'climate_screen.dart';
 import 'inventory_edit_screen.dart';
 import 'layout_editor_screen.dart';
+import 'screensaver_media_screen.dart';
 import 'tester_screen.dart';
 
 /// Hub for service-mode actions. Reached via the long-press on the home
@@ -86,6 +87,15 @@ class ServiceMenuScreen extends StatelessWidget {
                       onTap: () => Navigator.of(context).push(
                         MaterialPageRoute(
                             builder: (_) => const LayoutEditorScreen()),
+                      ),
+                    ),
+                    _Tile(
+                      icon: Icons.slideshow,
+                      label: s.t('service_screensaver_media'),
+                      color: Colors.pink,
+                      onTap: () => Navigator.of(context).push(
+                        MaterialPageRoute(
+                            builder: (_) => const ScreensaverMediaScreen()),
                       ),
                     ),
                     // Sensor mode picker moved into the inventory screen.
