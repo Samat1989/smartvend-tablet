@@ -45,12 +45,44 @@ value of `ANDROID_KEYSTORE_BASE64` in GitHub Secrets.
 
 ## Releasing
 
+### Option 1 — One-shot local script (recommended)
+
+`scripts/release.ps1` bumps the version, builds split-per-abi APKs,
+tags the commit, pushes to origin, creates a GitHub Release, and
+uploads every ABI as an asset. Requires `gh` CLI (one-time
+`winget install GitHub.cli` + `gh auth login`).
+
+```powershell
+cd m102_tester
+.\scripts\release.ps1 -Version 1.0.6+1006
+# or with explicit release notes
+.\scripts\release.ps1 -Version 1.0.6+1006 -Notes "Adds: …  Fixes: …"
+# or, if pubspec is already at the desired version:
+.\scripts\release.ps1
+```
+
+Flags: `-Draft` (create release as draft), `-SkipBuild` (reuse
+existing APKs), `-NoPush` (tag + build locally without pushing).
+
+The script refuses to run if the working tree is dirty, the tag
+already exists, the keystore is missing, or `gh` isn't authenticated
+— failing loud before any destructive step.
+
+### Option 2 — GitHub Actions
+
+Push a tag manually and let CI do the build:
+
 ```
 git tag v1.0.5+1005   # versionName+versionCode — matches pubspec.yaml
 git push origin v1.0.5+1005
 ```
 
-GitHub Actions picks up the tag, builds + signs the APK split, attaches
-`app-armeabi-v7a-release.apk` to a new GitHub Release. The tablet's
-service-mode → Обновление screen reads the latest release via
-`api.github.com` and installs it via `PackageInstaller`.
+`.github/workflows/release.yml` picks up the tag, builds + signs the
+APK split using the repo secrets above, and attaches the assets to a
+new GitHub Release. Slower than the local script (~5 min vs ~2 min)
+and requires a paid GitHub plan in some account states, but useful
+when no dev machine is around.
+
+Either route ends the same way: the tablet's service-mode →
+Обновление screen reads the latest release via `api.github.com` and
+installs the APK via `PackageInstaller`.
