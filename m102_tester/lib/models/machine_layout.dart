@@ -121,11 +121,13 @@ class LayoutTemplate {
   MachineLayout build() => builder();
 
   /// Original kiosk wiring: 6 shelves × 6 slots, motor ids 99..44
-  /// (top-left to bottom-right, row-major, decade per shelf).
+  /// (top-left to bottom-right). Door labels follow the factory's
+  /// row*10+col scheme (001..006, 011..016, ..., 051..056) — *not*
+  /// a contiguous 1..36. Documented in `/c/m109e/docs/04_MOTOR_LAYOUT.md`.
   static const LayoutTemplate factory6x6 = LayoutTemplate(
     id: 'factory_6x6',
     name: 'Заводская 6×6',
-    description: '6 полок × 6 слотов, моторы 99..44, ярлыки 001..036',
+    description: '6 полок × 6 слотов, моторы 99..44, ярлыки 001..006 / 011..016 / … / 051..056',
     builder: _buildFactory6x6,
   );
 
@@ -143,19 +145,24 @@ class LayoutTemplate {
 }
 
 MachineLayout _buildFactory6x6() {
+  // Door labels follow row*10+col, not 1..36 dense numbering.
+  // Row 1 → 001..006, row 2 → 011..016, …, row 6 → 051..056.
+  // Motor ids run 99..44 (top-left to bottom-right) with the
+  // decade per row matching the row index. Full mapping in
+  // `/c/m109e/docs/04_MOTOR_LAYOUT.md`.
   final shelves = <Shelf>[];
   for (var s = 1; s <= 6; s++) {
     final slots = <Slot>[];
     for (var j = 1; j <= 6; j++) {
       final motor = (10 - s) * 10 + (10 - j);
-      final num = (s - 1) * 6 + j;
+      final num = (s - 1) * 10 + j;
       slots.add(Slot(
         label: num.toString().padLeft(3, '0'),
         motorIds: [motor],
       ));
     }
-    final first = (s - 1) * 6 + 1;
-    final last = s * 6;
+    final first = (s - 1) * 10 + 1;
+    final last = (s - 1) * 10 + 6;
     shelves.add(Shelf(
       label: '${first.toString().padLeft(3, '0')} — '
           '${last.toString().padLeft(3, '0')}',
