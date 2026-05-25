@@ -3,16 +3,21 @@ package kz.smartvend.m102_tester
 import android.app.AlarmManager
 import android.app.PendingIntent
 import android.app.admin.DevicePolicyManager
+import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
 import android.content.IntentSender
 import android.content.pm.PackageInstaller
+import android.hardware.usb.UsbDevice
+import android.hardware.usb.UsbManager
 import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.os.Process
 import android.provider.Settings
+import android.util.Log
 import android.view.View
 import android.view.WindowManager
 import androidx.core.view.WindowCompat
@@ -44,6 +49,8 @@ import kotlin.system.exitProcess
  *    [startLockTask] on resume; the call is a no-op if the OS hasn't
  *    granted that permission, so it never crashes.
  */
+private const val TAG_KIOSK = "SmartvendKiosk"
+
 class MainActivity : FlutterActivity() {
 
     /**
@@ -59,9 +66,62 @@ class MainActivity : FlutterActivity() {
      */
     private var suppressLockOnce = false
 
+    /** Reference to the kiosk MethodChannel kept on the activity so the
+     *  USB permission BroadcastReceiver can call back into Flutter when
+     *  the user accepts/denies the system dialog. */
+    private var kioskChannel: MethodChannel? = null
+
+    /** Custom action used as the PendingIntent target for
+     *  [UsbManager.requestPermission]. Receiver below converts the
+     *  result into a `usbPermissionResult` MethodChannel callback so
+     *  [BoardClient] can retry the open immediately on grant. */
+    private val usbPermissionAction get() = "$packageName.USB_PERMISSION"
+
+    private val usbPermissionReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context, intent: Intent) {
+            if (intent.action != usbPermissionAction) return
+            val granted = intent.getBooleanExtra(
+                UsbManager.EXTRA_PERMISSION_GRANTED, false,
+            )
+            val device: UsbDevice? = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                intent.getParcelableExtra(UsbManager.EXTRA_DEVICE, UsbDevice::class.java)
+            } else {
+                @Suppress("DEPRECATION")
+                intent.getParcelableExtra(UsbManager.EXTRA_DEVICE)
+            }
+            Log.i(
+                TAG_KIOSK,
+                "USB permission result: granted=$granted device=${device?.deviceName}",
+            )
+            runOnUiThread {
+                kioskChannel?.invokeMethod(
+                    "usbPermissionResult",
+                    mapOf(
+                        "granted" to granted,
+                        "deviceName" to device?.deviceName,
+                        "vendorId" to device?.vendorId,
+                        "productId" to device?.productId,
+                    ),
+                )
+            }
+        }
+    }
+
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
-        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, KIOSK_CHANNEL)
+        // Register the USB permission broadcast receiver once per engine
+        // attach. Internal action, scoped to our package, RECEIVER_NOT_EXPORTED
+        // so other apps can't spoof grant results.
+        val filter = IntentFilter(usbPermissionAction)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            registerReceiver(usbPermissionReceiver, filter, RECEIVER_NOT_EXPORTED)
+        } else {
+            @Suppress("UnspecifiedRegisterReceiverFlag")
+            registerReceiver(usbPermissionReceiver, filter)
+        }
+
+        kioskChannel = MethodChannel(flutterEngine.dartExecutor.binaryMessenger, KIOSK_CHANNEL)
+        kioskChannel!!
             .setMethodCallHandler { call, result ->
                 when (call.method) {
                     "exitToAndroid" -> {
@@ -107,6 +167,20 @@ class MainActivity : FlutterActivity() {
                             result.error("reboot_failed", t.message, null)
                         }
                     }
+                    "requestUsbPermission" -> {
+                        // Force-show the "Allow USB access?" dialog for the
+                        // CH340 device. Returns:
+                        //   "granted"   — permission already held, no dialog
+                        //   "requested" — dialog shown, result will arrive
+                        //                 via the receiver above
+                        //   "no_device" — CH340 not currently plugged in
+                        try {
+                            val state = requestUsbPermissionForCh340()
+                            result.success(state)
+                        } catch (t: Throwable) {
+                            result.error("usb_request_failed", t.message, null)
+                        }
+                    }
                     "installApk" -> {
                         val path = call.argument<String>("path")
                         if (path.isNullOrBlank()) {
@@ -123,6 +197,56 @@ class MainActivity : FlutterActivity() {
                     else -> result.notImplemented()
                 }
             }
+    }
+
+    /**
+     * Trigger the system "Allow this app to access USB device?" dialog
+     * for the CH340 if it's plugged in but permission hasn't been
+     * granted yet.
+     *
+     * Returns "granted" if permission was already held (no dialog
+     * shown), "requested" if the dialog was opened (result arrives
+     * via [usbPermissionReceiver] later), or "no_device" if no CH340
+     * is currently attached.
+     *
+     * In kiosk / lock-task mode the dialog still appears as a system
+     * overlay — lock-task only prevents leaving the app, not
+     * interacting with system surfaces.
+     */
+    private fun requestUsbPermissionForCh340(): String {
+        val usbManager = getSystemService(Context.USB_SERVICE) as? UsbManager
+            ?: return "no_device"
+        var sawDevice = false
+        for ((_, device) in usbManager.deviceList) {
+            if (device.vendorId == 0x1A86 && device.productId == 0x7523) {
+                sawDevice = true
+                if (usbManager.hasPermission(device)) {
+                    Log.i(TAG_KIOSK, "USB permission already granted for ${device.deviceName}")
+                    return "granted"
+                }
+                val flags = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                    PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_MUTABLE
+                } else {
+                    PendingIntent.FLAG_UPDATE_CURRENT
+                }
+                val intent = Intent(usbPermissionAction).setPackage(packageName)
+                val pi = PendingIntent.getBroadcast(this, 0, intent, flags)
+                Log.i(TAG_KIOSK, "Requesting USB permission for ${device.deviceName}")
+                usbManager.requestPermission(device, pi)
+                return "requested"
+            }
+        }
+        Log.w(TAG_KIOSK, "No CH340 found (deviceList size=${usbManager.deviceList.size})")
+        return if (sawDevice) "requested" else "no_device"
+    }
+
+    override fun onDestroy() {
+        try {
+            unregisterReceiver(usbPermissionReceiver)
+        } catch (_: Throwable) {
+            // never registered / already unregistered — ignore
+        }
+        super.onDestroy()
     }
 
     /**
@@ -229,8 +353,9 @@ class MainActivity : FlutterActivity() {
         }
         try {
             startLockTask()
-        } catch (_: Throwable) {
-            // Not allowed on this device / not pinned. Ignore.
+            Log.i(TAG_KIOSK, "startLockTask OK")
+        } catch (t: Throwable) {
+            Log.w(TAG_KIOSK, "startLockTask failed: ${t.message}")
         }
     }
 
@@ -244,22 +369,38 @@ class MainActivity : FlutterActivity() {
      */
     private fun configureDeviceOwnerKiosk() {
         val dpm = getSystemService(Context.DEVICE_POLICY_SERVICE)
-            as? DevicePolicyManager ?: return
-        if (!dpm.isDeviceOwnerApp(packageName)) return
+            as? DevicePolicyManager
+        if (dpm == null) {
+            Log.w(TAG_KIOSK, "no DevicePolicyManager — skipping kiosk setup")
+            return
+        }
+        val isOwner = dpm.isDeviceOwnerApp(packageName)
+        Log.i(TAG_KIOSK, "isDeviceOwnerApp($packageName) = $isOwner")
+        if (!isOwner) return
         val admin = KioskAdminReceiver.componentName(this)
         try {
-            dpm.setLockTaskPackages(admin, arrayOf(packageName))
-        } catch (_: SecurityException) {
+            // Whitelist us + com.android.systemui so the OS can launch
+            // the "Allow USB access?" dialog (UsbPermissionActivity) on
+            // top of our kiosk. Without systemui on the list, lock-task
+            // throws START_RETURN_LOCK_TASK_MODE_VIOLATION every time
+            // we call UsbManager.requestPermission() and the operator
+            // can never grant access. The packages here can launch
+            // *activities*; they still can't leave kiosk mode.
+            dpm.setLockTaskPackages(admin, arrayOf(packageName, "com.android.systemui"))
+            Log.i(TAG_KIOSK, "setLockTaskPackages OK for $packageName + systemui")
+        } catch (t: SecurityException) {
+            Log.e(TAG_KIOSK, "setLockTaskPackages SecurityException", t)
+            return
+        } catch (t: Throwable) {
+            Log.e(TAG_KIOSK, "setLockTaskPackages other failure", t)
             return
         }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
-            // 0 == LOCK_TASK_FEATURE_NONE — hides every system surface
-            // (status bar, nav bar, notifications, keyguard, recents).
             try {
                 dpm.setLockTaskFeatures(admin, 0)
-            } catch (_: Throwable) {
-                // Older OEM builds occasionally throw — ignore so the
-                // base lock-task still applies.
+                Log.i(TAG_KIOSK, "setLockTaskFeatures(0) OK")
+            } catch (t: Throwable) {
+                Log.e(TAG_KIOSK, "setLockTaskFeatures failed", t)
             }
         }
     }

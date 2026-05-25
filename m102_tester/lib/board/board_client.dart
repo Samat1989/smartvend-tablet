@@ -196,6 +196,12 @@ class BoardClient extends ChangeNotifier {
       // On any USB attach, refresh and try to auto-connect if we're not already.
       await refreshDevices();
       if (!isConnected && event.event == UsbEvent.ACTION_USB_ATTACHED) {
+        // Ask the OS to grant permission *before* trying to open the
+        // port. usb_serial does this implicitly via open(), but in
+        // kiosk mode with no recent foreground activity the dialog
+        // sometimes fails to surface. Calling it explicitly via the
+        // native MethodChannel forces the dialog every time.
+        await KioskBridge.requestUsbPermission();
         await Future.delayed(const Duration(milliseconds: 500));
         await autoConnect();
       }
@@ -204,8 +210,36 @@ class BoardClient extends ChangeNotifier {
         await disconnect();
       }
     });
+    // Listen for the system "Allow USB access?" dialog result. When the
+    // operator taps OK, retry connect — without this they'd have to
+    // open service-mode → Плата → Connect manually.
+    _usbPermissionSub = KioskBridge.usbPermissionResultStream.listen(
+      (granted) async {
+        _info('USB permission ${granted ? "granted" : "denied"}');
+        if (granted && !isConnected) {
+          await refreshDevices();
+          await autoConnect();
+        }
+      },
+    );
     _startHealthWatchdog();
+    // Probe permission at construction. If the cable was already plugged
+    // before the app launched (the common case on cabinet boot), the
+    // USB_DEVICE_ATTACHED intent never fired — so the OS has never
+    // prompted, and our usbEventStream listener above will never trigger
+    // either. Forcing the request here gets the dialog on first launch
+    // and then connects immediately if permission already exists.
+    Future.delayed(const Duration(milliseconds: 800), () async {
+      await refreshDevices();
+      final state = await KioskBridge.requestUsbPermission();
+      _info('Initial USB permission probe: $state');
+      if (state == 'granted' && !isConnected) {
+        await autoConnect();
+      }
+    });
   }
+
+  StreamSubscription<bool>? _usbPermissionSub;
 
   /// Force a clean disconnect → autoConnect cycle. Same effect as the
   /// operator hitting "Disconnect" then "Connect" in service mode,
@@ -913,6 +947,7 @@ class BoardClient extends ChangeNotifier {
     _rxSub?.cancel();
     _port?.close();
     _usbEventSub?.cancel();
+    _usbPermissionSub?.cancel();
     _healthWatchdog?.cancel();
     _heartbeatTimer?.cancel();
     _logCtrl.close();

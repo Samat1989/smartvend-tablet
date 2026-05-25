@@ -1,3 +1,6 @@
+import 'dart:async';
+
+import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 
 /// Thin wrapper over the native kiosk MethodChannel exposed by
@@ -6,6 +9,36 @@ import 'package:flutter/services.dart';
 /// trigger is the "operator wants out" escape hatch.
 class KioskBridge {
   static const _channel = MethodChannel('kz.smartvend/kiosk');
+
+  /// Lazily installs a handler on the channel that listens for callbacks
+  /// the native side pushes back to us (currently only `usbPermissionResult`
+  /// from [MainActivity.usbPermissionReceiver]). Calling this multiple
+  /// times is safe — only one handler is registered.
+  static bool _handlersInstalled = false;
+  static final _usbPermissionCtrl = StreamController<bool>.broadcast();
+
+  /// Fires `true` when the user accepted the system "Allow USB access?"
+  /// dialog and `false` when they cancelled. [BoardClient] listens here
+  /// and retries [autoConnect] on `true` so the operator never has to
+  /// tap a "reconnect" button after granting permission.
+  static Stream<bool> get usbPermissionResultStream {
+    _installHandlersIfNeeded();
+    return _usbPermissionCtrl.stream;
+  }
+
+  static void _installHandlersIfNeeded() {
+    if (_handlersInstalled) return;
+    _handlersInstalled = true;
+    _channel.setMethodCallHandler((call) async {
+      if (call.method == 'usbPermissionResult') {
+        final args = call.arguments;
+        final granted = args is Map ? args['granted'] == true : false;
+        debugPrint('[KioskBridge] usbPermissionResult granted=$granted');
+        _usbPermissionCtrl.add(granted);
+      }
+      return null;
+    });
+  }
 
   /// Stop lock-task and launch the system Settings activity. Used by
   /// the service menu so the operator can join Wi-Fi, install OS
@@ -41,5 +74,29 @@ class KioskBridge {
   /// the background and the app is killed + relaunched on success.
   static Future<void> installApk(String path) async {
     await _channel.invokeMethod<void>('installApk', {'path': path});
+  }
+
+  /// Force the Android "Allow this app to access USB device?" dialog
+  /// to appear for the CH340 — even when the cable was plugged in
+  /// before the app started (no [USB_DEVICE_ATTACHED] intent fired,
+  /// so the system never auto-prompted).
+  ///
+  /// Returns one of:
+  ///   * `'granted'`   — permission already held, the dialog was NOT
+  ///                     shown. Caller can connect immediately.
+  ///   * `'requested'` — dialog displayed, result will arrive via
+  ///                     [usbPermissionResultStream].
+  ///   * `'no_device'` — no CH340 attached, nothing to ask about.
+  ///
+  /// On non-Android platforms this returns `'no_device'`.
+  static Future<String> requestUsbPermission() async {
+    _installHandlersIfNeeded();
+    try {
+      final r = await _channel.invokeMethod<String>('requestUsbPermission');
+      return r ?? 'no_device';
+    } on PlatformException catch (e) {
+      debugPrint('[KioskBridge] requestUsbPermission failed: ${e.message}');
+      return 'no_device';
+    }
   }
 }
