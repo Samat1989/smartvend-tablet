@@ -8,7 +8,6 @@ import '../models/motor_layout.dart';
 import '../models/product.dart';
 import '../services/device_storage.dart';
 import '../services/idle_service.dart';
-import '../services/kiosk_bridge.dart';
 import '../services/strings.dart';
 import '../services/vending_service.dart';
 import '../theme.dart';
@@ -905,7 +904,7 @@ class _BottomActionBar extends StatelessWidget {
 
 // ─────────────────────────── Corners + overlay ───────────────────────
 
-class _MaintenanceOverlay extends StatefulWidget {
+class _MaintenanceOverlay extends StatelessWidget {
   const _MaintenanceOverlay({required this.onServiceTap});
 
   /// Forwarded to a small hidden hit-area in the top-right corner.
@@ -913,33 +912,6 @@ class _MaintenanceOverlay extends StatefulWidget {
   /// 5-tap-to-service-mode by accident while complaining about the
   /// dead screen. Now only that corner counts.
   final VoidCallback onServiceTap;
-
-  @override
-  State<_MaintenanceOverlay> createState() => _MaintenanceOverlayState();
-}
-
-class _MaintenanceOverlayState extends State<_MaintenanceOverlay> {
-  bool _requesting = false;
-  String? _lastResult;
-
-  /// Re-trigger the system "Allow USB access?" dialog. The most common
-  /// reason this overlay shows up after a fresh install is that USB
-  /// permission for the new signing identity hasn't been granted yet —
-  /// kiosk mode masks the dialog, so the operator never sees it. Tapping
-  /// this button forces it back into view.
-  Future<void> _retry() async {
-    if (_requesting) return;
-    setState(() {
-      _requesting = true;
-      _lastResult = null;
-    });
-    final state = await KioskBridge.requestUsbPermission();
-    if (!mounted) return;
-    setState(() {
-      _requesting = false;
-      _lastResult = state;
-    });
-  }
 
   @override
   Widget build(BuildContext context) {
@@ -951,114 +923,45 @@ class _MaintenanceOverlayState extends State<_MaintenanceOverlay> {
       // service-entry shortcut lives in a 96-dp invisible square in
       // the top-right corner (sized so the operator can hit it
       // confidently with a finger).
+      //
+      // Intentionally minimal — no retry button, no USB permission
+      // instructions. The 800 ms init probe + USB-attach listener in
+      // BoardClient handle the dialog automatically; surfacing it on
+      // the customer-facing screen looks broken and invites curious
+      // tapping. Operator path: top-right 5-tap → service mode →
+      // Плата for diagnostics.
       child: Stack(
         children: [
           Container(
             color: const Color(0xEB1C1C1E),
             alignment: Alignment.center,
-            padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 40),
-            child: SingleChildScrollView(
-              child: Column(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  const Icon(Icons.usb,
-                      size: 84, color: AppColors.iosBlue),
-                  const SizedBox(height: 20),
-                  Text(
-                    s.t('maintenance_title'),
-                    textAlign: TextAlign.center,
-                    style: const TextStyle(
-                      color: Colors.white,
-                      fontSize: 26,
-                      fontWeight: FontWeight.w900,
-                      letterSpacing: -1,
-                    ),
+            padding: const EdgeInsets.all(40),
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                const Icon(Icons.build_circle,
+                    size: 96, color: AppColors.iosOrange),
+                const SizedBox(height: 24),
+                Text(
+                  s.t('maintenance_title'),
+                  textAlign: TextAlign.center,
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 28,
+                    fontWeight: FontWeight.w900,
+                    letterSpacing: -1,
                   ),
-                  const SizedBox(height: 12),
-                  Text(
-                    s.t('maintenance_subtitle'),
-                    textAlign: TextAlign.center,
-                    style: const TextStyle(
-                      color: Color(0xCCFFFFFF),
-                      fontSize: 14,
-                    ),
+                ),
+                const SizedBox(height: 14),
+                Text(
+                  s.t('maintenance_subtitle'),
+                  textAlign: TextAlign.center,
+                  style: const TextStyle(
+                    color: Color(0xCCFFFFFF),
+                    fontSize: 15,
                   ),
-                  const SizedBox(height: 24),
-                  Container(
-                    constraints: const BoxConstraints(maxWidth: 460),
-                    padding: const EdgeInsets.all(16),
-                    decoration: BoxDecoration(
-                      color: Colors.white.withValues(alpha: 0.08),
-                      borderRadius: BorderRadius.circular(14),
-                      border: Border.all(color: Colors.white24),
-                    ),
-                    child: const Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        _Step(
-                          n: '1',
-                          text: 'Воткните USB-кабель платы в планшет.',
-                        ),
-                        SizedBox(height: 8),
-                        _Step(
-                          n: '2',
-                          text: 'Когда появится системный диалог '
-                              '«Разрешить доступ к USB-устройству» — '
-                              'поставьте галочку «Всегда» и нажмите OK.',
-                        ),
-                        SizedBox(height: 8),
-                        _Step(
-                          n: '3',
-                          text: 'Подождите 5 секунд — приложение само '
-                              'подключится к плате.',
-                        ),
-                      ],
-                    ),
-                  ),
-                  const SizedBox(height: 20),
-                  ConstrainedBox(
-                    constraints: const BoxConstraints(maxWidth: 320),
-                    child: FilledButton.icon(
-                      icon: _requesting
-                          ? const SizedBox(
-                              width: 18,
-                              height: 18,
-                              child: CircularProgressIndicator(
-                                strokeWidth: 2,
-                                color: Colors.white,
-                              ),
-                            )
-                          : const Icon(Icons.refresh),
-                      label: Text(_requesting
-                          ? 'Запрашиваем...'
-                          : 'Запросить доступ к USB'),
-                      style: FilledButton.styleFrom(
-                        padding:
-                            const EdgeInsets.symmetric(vertical: 14),
-                      ),
-                      onPressed: _requesting ? null : _retry,
-                    ),
-                  ),
-                  if (_lastResult != null) ...[
-                    const SizedBox(height: 10),
-                    Text(
-                      switch (_lastResult) {
-                        'granted' =>
-                          '✓ Доступ уже выдан, подключаемся...',
-                        'requested' =>
-                          'Появится диалог Android — нажмите OK',
-                        _ =>
-                          'Плата не найдена. Проверьте кабель и питание.',
-                      },
-                      style: const TextStyle(
-                        color: Color(0xCCFFFFFF),
-                        fontSize: 12,
-                      ),
-                      textAlign: TextAlign.center,
-                    ),
-                  ],
-                ],
-              ),
+                ),
+              ],
             ),
           ),
           Positioned(
@@ -1066,57 +969,12 @@ class _MaintenanceOverlayState extends State<_MaintenanceOverlay> {
             right: 0,
             child: GestureDetector(
               behavior: HitTestBehavior.opaque,
-              onTap: widget.onServiceTap,
+              onTap: onServiceTap,
               child: const SizedBox(width: 96, height: 96),
             ),
           ),
         ],
       ),
-    );
-  }
-}
-
-class _Step extends StatelessWidget {
-  const _Step({required this.n, required this.text});
-
-  final String n;
-  final String text;
-
-  @override
-  Widget build(BuildContext context) {
-    return Row(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Container(
-          width: 22,
-          height: 22,
-          decoration: BoxDecoration(
-            color: AppColors.iosBlue,
-            borderRadius: BorderRadius.circular(11),
-          ),
-          alignment: Alignment.center,
-          child: Text(
-            n,
-            style: const TextStyle(
-              color: Colors.white,
-              fontWeight: FontWeight.w900,
-              fontSize: 12,
-              height: 1.0,
-            ),
-          ),
-        ),
-        const SizedBox(width: 10),
-        Expanded(
-          child: Text(
-            text,
-            style: const TextStyle(
-              color: Color(0xEEFFFFFF),
-              fontSize: 13,
-              height: 1.4,
-            ),
-          ),
-        ),
-      ],
     );
   }
 }
