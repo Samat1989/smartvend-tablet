@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
@@ -58,7 +59,10 @@ class _HomeScreenState extends State<HomeScreen> {
   /// share the same controller — passes down to [_ProductList].
   final ScrollController _scrollController = ScrollController();
 
-  // Hidden service entry: 5 quick taps on the machid corner badge.
+  // Hidden service entry: 12 quick taps on the language icon. The
+  // threshold was 5 on the machid badge; bumped to 12 + moved to the
+  // language icon because random customers fiddling with the badge
+  // were accidentally landing on the PIN screen.
   final List<DateTime> _serviceTaps = [];
 
   /// Two-stage idle behaviour:
@@ -199,8 +203,10 @@ class _HomeScreenState extends State<HomeScreen> {
     final now = DateTime.now();
     _serviceTaps
       ..add(now)
-      ..removeWhere((t) => now.difference(t) > const Duration(seconds: 2));
-    if (_serviceTaps.length >= 5) {
+      ..removeWhere((t) => now.difference(t) > const Duration(seconds: 3));
+    // 12 taps within the rolling 3-second window — well past anything
+    // a curious customer would do by accident.
+    if (_serviceTaps.length >= 12) {
       _serviceTaps.clear();
       Navigator.of(context).push(
         MaterialPageRoute(builder: (_) => const ServicePinScreen()),
@@ -223,7 +229,11 @@ class _HomeScreenState extends State<HomeScreen> {
   @override
   Widget build(BuildContext context) {
     final board = context.watch<BoardClient>();
-    final boardDown = !board.isHealthy;
+    // In debug builds, ignore board health so the UI / payment / mock
+    // dispense flow can be exercised on a tablet with no M102 wired up.
+    // Production builds keep the overlay so customers can't pay for
+    // items the cabinet can't deliver.
+    final boardDown = !kDebugMode && !board.isHealthy;
     return Scaffold(
       backgroundColor: AppColors.iosBackground,
       body: Listener(
@@ -268,8 +278,14 @@ class _HomeScreenState extends State<HomeScreen> {
             // Order matters: MachidCorner first, LangCorner painted on top
             // so its tap area isn't shadowed by the (also tappable) machid
             // badge sitting above it.
-            _MachidCorner(onTap: _onServiceTap),
+            const _MachidCorner(),
             const _LangCorner(),
+            // Invisible 80×80 dp tap-catcher right below the language
+            // icon. The language icon itself only cycles ru/kk/en
+            // (kids tap it and walk away); the hidden service-entry
+            // lives just below so accidental presses on the visible
+            // chip don't count toward unlocking PIN.
+            _ServiceTapZone(onTap: _onServiceTap),
           ],
         ),
       ),
@@ -354,7 +370,7 @@ class _ProductList extends StatelessWidget {
                       products: shelves[i].products,
                     ),
                     if (i < shelves.length - 1)
-                      const SizedBox(height: 56),
+                      const SizedBox(height: 20),
                   ],
                 ],
               ),
@@ -434,7 +450,7 @@ class _ShelfGroup extends StatelessWidget {
             ),
           ],
         ),
-        const SizedBox(height: 18),
+        const SizedBox(height: 8),
         if (products.isEmpty)
           Padding(
             padding: const EdgeInsets.symmetric(vertical: 12),
@@ -454,8 +470,8 @@ class _ShelfGroup extends StatelessWidget {
                 shrinkWrap: true,
                 physics: const NeverScrollableScrollPhysics(),
                 crossAxisCount: cols,
-                mainAxisSpacing: 18,
-                crossAxisSpacing: 18,
+                mainAxisSpacing: 10,
+                crossAxisSpacing: 10,
                 // Was 0.85 (215 × 253). Bumped to 0.895 to lop ≈5 % off
                 // the card height so 3 rows × 2 cols of a single shelf
                 // (6 cards) all fit in the 533 × 853 dp viewport at once.
@@ -487,7 +503,9 @@ class _ProductCard extends StatelessWidget {
   void _tryAdd(BuildContext context) {
     final svc = context.read<VendingService>();
     final board = context.read<BoardClient>();
-    if (!board.isHealthy) {
+    // Debug builds skip the board-health gate so UI/payment can be
+    // tested on a tablet with no M102 wired up.
+    if (!kDebugMode && !board.isHealthy) {
       final s = context.read<Strings>();
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
@@ -980,9 +998,7 @@ class _MaintenanceOverlay extends StatelessWidget {
 }
 
 class _MachidCorner extends StatelessWidget {
-  const _MachidCorner({required this.onTap});
-
-  final VoidCallback onTap;
+  const _MachidCorner();
 
   @override
   Widget build(BuildContext context) {
@@ -991,19 +1007,15 @@ class _MachidCorner extends StatelessWidget {
     return Positioned(
       right: 8,
       top: 8,
-      child: GestureDetector(
-        onTap: onTap,
-        behavior: HitTestBehavior.opaque,
-        child: Padding(
-          padding: const EdgeInsets.all(4),
-          child: Text(
-            '№$machid',
-            style: const TextStyle(
-              fontSize: 10,
-              fontWeight: FontWeight.bold,
-              letterSpacing: 0.5,
-              color: Color.fromARGB(255, 162, 162, 175),
-            ),
+      child: Padding(
+        padding: const EdgeInsets.all(4),
+        child: Text(
+          '№$machid',
+          style: const TextStyle(
+            fontSize: 10,
+            fontWeight: FontWeight.bold,
+            letterSpacing: 0.5,
+            color: Color.fromARGB(255, 162, 162, 175),
           ),
         ),
       ),
@@ -1025,34 +1037,59 @@ class _LangCorner extends StatelessWidget {
     final next = _cycle[(i + 1) % _cycle.length];
     final display = s.lang == 'kk' ? 'KZ' : s.lang.toUpperCase();
     return Positioned(
-  // Sits under the machid badge (top: 8 + ≈26 dp of badge + 4 dp gap).
-  right: 8,
-  top: 40,
-  child: GestureDetector(
-    behavior: HitTestBehavior.opaque,
-    onTap: () => s.setLang(next),
-    child: Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 15),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          const Icon(Icons.language,
-              size: 14, color: Color.fromARGB(255, 175, 188, 197)),
-          const SizedBox(width: 4),
-          Text(
-            display,
-            style: const TextStyle(
-              color: Color.fromARGB(255, 139, 151, 161),
-              fontWeight: FontWeight.w900,
-              fontSize: 11,
-              letterSpacing: 0.5,
-            ),
+      // Sits under the machid badge (top: 8 + ≈26 dp of badge + 4 dp gap).
+      right: 8,
+      top: 40,
+      child: GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onTap: () => s.setLang(next),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 15),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Icon(Icons.language,
+                  size: 14, color: Color.fromARGB(255, 175, 188, 197)),
+              const SizedBox(width: 4),
+              Text(
+                display,
+                style: const TextStyle(
+                  color: Color.fromARGB(255, 139, 151, 161),
+                  fontWeight: FontWeight.w900,
+                  fontSize: 11,
+                  letterSpacing: 0.5,
+                ),
+              ),
+            ],
           ),
-        ],
+        ),
       ),
-    ),
-  ),
-);
+    );
+  }
+}
+
+/// Invisible 80×80 dp tap-catcher placed below the language icon.
+/// Counts toward the hidden 12-tap-in-3-seconds service-entry without
+/// interfering with the visible language chip. Sits in the dead space
+/// between the language pill (ends ≈ top: 80) and the rest of the
+/// catalog, so accidental swipes / scroll gestures on the catalog
+/// don't trigger it either.
+class _ServiceTapZone extends StatelessWidget {
+  const _ServiceTapZone({required this.onTap});
+
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return Positioned(
+      right: 0,
+      top: 80,
+      child: GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onTap: onTap,
+        child: const SizedBox(width: 80, height: 80),
+      ),
+    );
   }
 }
 

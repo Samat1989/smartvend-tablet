@@ -67,9 +67,11 @@ class _ProductEditScreenState extends State<ProductEditScreen> {
       _categoryId = p.categoryId;
       _catalogProductId = p.catalogProductId;
       _catalogProductName = p.name; // best guess until we fetch the row
-    } else {
-      _stockCtrl.text = '0';
     }
+    // Stock field for *new* products is intentionally left blank.
+    // Pre-filling "0" forced the operator to delete it every time
+    // before typing the real number — annoying for the common case.
+    // The save flow falls back to 0 when the field is empty.
   }
 
   /// Apply a catalog selection: prefill the form's name / image / emoji
@@ -286,7 +288,8 @@ class _ProductEditScreenState extends State<ProductEditScreen> {
     if (result == null || result.targets.isEmpty || !mounted) return;
 
     setState(() => _saving = true);
-    var ok = 0;
+    final successLabels = <String>[];
+    final failedLabels = <String>[];
     for (final target in result.targets) {
       final existing = target.product;
       final id = await _api.upsertProduct(
@@ -306,17 +309,89 @@ class _ProductEditScreenState extends State<ProductEditScreen> {
         emoji: _emojiCtrl.text.trim(),
         categoryId: _categoryId,
       );
-      if (id != null) ok++;
+      if (id != null) {
+        successLabels.add(target.slot.label);
+      } else {
+        failedLabels.add(target.slot.label);
+      }
     }
     if (!mounted) return;
     await svc.reload(silent: true);
     if (!mounted) return;
     setState(() => _saving = false);
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-      content: Text('Применено к $ok из ${result.targets.length} слотов'),
-      backgroundColor:
-          ok == result.targets.length ? Colors.green : Colors.orange,
-    ));
+
+    // Confirmation dialog with the full list of slot labels — operator
+    // immediately sees where the product landed instead of just a
+    // count. The current slot is the source; it still needs the
+    // explicit «Сохранить» tap below, called out at the bottom.
+    final sourceLabel = _resolveSlotLabel();
+    await showDialog<void>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        icon: Icon(
+          failedLabels.isEmpty ? Icons.check_circle : Icons.warning_amber,
+          color: failedLabels.isEmpty ? Colors.green : Colors.orange,
+          size: 40,
+        ),
+        title: Text(failedLabels.isEmpty
+            ? 'Применено к ${successLabels.length} слотам'
+            : 'Частично применено'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text('Товар: ${_nameCtrl.text.trim()}',
+                style: const TextStyle(fontWeight: FontWeight.w700)),
+            const SizedBox(height: 10),
+            if (successLabels.isNotEmpty) ...[
+              const Text('✓ Сохранено в:',
+                  style: TextStyle(
+                      fontSize: 12,
+                      fontWeight: FontWeight.w800,
+                      color: Colors.green)),
+              const SizedBox(height: 4),
+              Text(
+                successLabels.join(', '),
+                style: const TextStyle(fontFamily: 'monospace'),
+              ),
+              const SizedBox(height: 12),
+            ],
+            if (failedLabels.isNotEmpty) ...[
+              const Text('✕ Не сохранилось:',
+                  style: TextStyle(
+                      fontSize: 12,
+                      fontWeight: FontWeight.w800,
+                      color: Colors.red)),
+              const SizedBox(height: 4),
+              Text(
+                failedLabels.join(', '),
+                style: const TextStyle(fontFamily: 'monospace'),
+              ),
+              const SizedBox(height: 12),
+            ],
+            Container(
+              padding: const EdgeInsets.all(10),
+              decoration: BoxDecoration(
+                color: Colors.amber.shade50,
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(color: Colors.amber.shade300),
+              ),
+              child: Text(
+                'Текущий слот ($sourceLabel) ещё не сохранён — '
+                'нажмите «Сохранить» внизу формы.',
+                style: const TextStyle(fontSize: 12),
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          FilledButton(
+            onPressed: () => Navigator.of(ctx).pop(),
+            child: const Text('OK'),
+          ),
+        ],
+      ),
+    );
   }
 
   @override

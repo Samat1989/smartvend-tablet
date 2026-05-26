@@ -427,24 +427,11 @@ class _ProductRow extends StatelessWidget {
               label: '×${p.stock}',
               color: p.stock > 0 ? Colors.green.shade700 : Colors.red,
             ),
-            _chip(
-              icon: Icons.cable_outlined,
-              label: p.motorType == 3
-                  ? s.t('motor_type_3')
-                  : s.t('motor_type_2'),
-              color: Colors.grey.shade700,
-            ),
-            _chip(
-              icon: Icons.sensors,
-              label: switch (p.curtainMode) {
-                1 => s.t('curtain_standard'),
-                2 => s.t('curtain_priority'),
-                _ => s.t('curtain_off'),
-              },
-              color: p.curtainMode == 0
-                  ? Colors.grey.shade500
-                  : Colors.lightBlue.shade700,
-            ),
+            // Motor type + curtain mode chips were removed from this
+            // list — those settings live in «Настройка моторов» and
+            // surfacing them here cluttered the row without giving
+            // the operator a reason to act on them from the products
+            // screen.
           ],
         ),
       ],

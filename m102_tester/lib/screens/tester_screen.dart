@@ -44,10 +44,6 @@ class _TesterScreenState extends State<TesterScreen> {
   final Map<int, bool> _results = {};
   final Map<int, String> _resultText = {};
 
-  /// In-flight wiring PATCH keys (inventory id) so a saving indicator
-  /// can render inline without blocking other rows.
-  final Set<String> _savingInvIds = {};
-
   Future<void> _runTest(Slot slot, {required int curtain}) async {
     if (_runningSlotKey != null) return;
     final s = context.read<Strings>();
@@ -85,32 +81,6 @@ class _TesterScreenState extends State<TesterScreen> {
     final svc = context.read<VendingService>();
     final byMotor = {for (final p in svc.catalog) p.motorId: p};
     return byMotor[slot.primaryMotorId];
-  }
-
-  Future<void> _patchWiring(Product p, {int? motorType, int? curtain}) async {
-    final id = p.id;
-    if (id == null) return;
-    final svc = context.read<VendingService>();
-    final updated = p.copyWith(
-      motorType: motorType ?? p.motorType,
-      curtainMode: curtain ?? p.curtainMode,
-    );
-    svc.replaceProduct(updated);
-    setState(() => _savingInvIds.add(id));
-    final ok = await _api.updateInventoryWiring(
-      inventoryId: id,
-      motorType: motorType,
-      curtainMode: curtain,
-    );
-    if (!mounted) return;
-    setState(() => _savingInvIds.remove(id));
-    if (!ok) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-        content: Text('Не удалось сохранить настройки мотора'),
-        backgroundColor: Color(0xFFB3261E),
-      ));
-      svc.replaceProduct(p); // revert
-    }
   }
 
   Future<void> _applyGlobalCurtainToAll(int curtain) async {
@@ -195,17 +165,13 @@ class _TesterScreenState extends State<TesterScreen> {
                     runningSlotKey: _runningSlotKey,
                     results: _results,
                     resultText: _resultText,
-                    savingInvIds: _savingInvIds,
-                    productForSlot: _productForSlot,
-                    globalCurtain: globalCurtain,
+                    // "Тест" — без датчика (curtain=0), штатный поток.
+                    // "+датчик" — форсит curtain=1 для диагностики
+                    // IR-завесы независимо от глобального режима.
                     onRunMotor: (slot) =>
-                        _runTest(slot, curtain: globalCurtain),
+                        _runTest(slot, curtain: 0),
                     onRunCurtain: (slot) =>
                         _runTest(slot, curtain: 1),
-                    onChangeMotorType: (p, t) =>
-                        _patchWiring(p, motorType: t),
-                    onChangeCurtain: (p, c) =>
-                        _patchWiring(p, curtain: c),
                   ),
           ),
         ],
@@ -338,26 +304,16 @@ class _ShelvesList extends StatelessWidget {
     required this.runningSlotKey,
     required this.results,
     required this.resultText,
-    required this.savingInvIds,
-    required this.productForSlot,
-    required this.globalCurtain,
     required this.onRunMotor,
     required this.onRunCurtain,
-    required this.onChangeMotorType,
-    required this.onChangeCurtain,
   });
 
   final MachineLayout layout;
   final int? runningSlotKey;
   final Map<int, bool> results;
   final Map<int, String> resultText;
-  final Set<String> savingInvIds;
-  final Product? Function(Slot) productForSlot;
-  final int globalCurtain;
   final ValueChanged<Slot> onRunMotor;
   final ValueChanged<Slot> onRunCurtain;
-  final void Function(Product, int) onChangeMotorType;
-  final void Function(Product, int) onChangeCurtain;
 
   @override
   Widget build(BuildContext context) {
@@ -397,28 +353,16 @@ class _ShelvesList extends StatelessWidget {
               for (var j = 0; j < shelf.slots.length; j++) ...[
                 _SlotRow(
                   slot: shelf.slots[j],
-                  product: productForSlot(shelf.slots[j]),
                   running: runningSlotKey == shelf.slots[j].primaryMotorId,
                   disabledByOthers: runningSlotKey != null &&
                       runningSlotKey != shelf.slots[j].primaryMotorId,
-                  saving: savingInvIds.contains(
-                      productForSlot(shelf.slots[j])?.id ?? ''),
                   lastResult: results[shelf.slots[j].primaryMotorId],
                   lastResultText:
                       resultText[shelf.slots[j].primaryMotorId],
-                  globalCurtain: globalCurtain,
-                  onRunMotor: () => onRunMotor(shelf.slots[j]),
-                  onRunCurtain: () => onRunCurtain(shelf.slots[j]),
-                  onChangeMotorType: (t) {
-                    final p = productForSlot(shelf.slots[j]);
-                    if (p != null) onChangeMotorType(p, t);
-                  },
-                  onChangeCurtain: (c) {
-                    final p = productForSlot(shelf.slots[j]);
-                    if (p != null) onChangeCurtain(p, c);
-                  },
+                  onRunWithoutSensor: () => onRunMotor(shelf.slots[j]),
+                  onRunWithSensor: () => onRunCurtain(shelf.slots[j]),
                 ),
-                if (j != shelf.slots.length - 1) const SizedBox(height: 8),
+                if (j != shelf.slots.length - 1) const SizedBox(height: 6),
               ],
             ],
           ),
@@ -428,42 +372,31 @@ class _ShelvesList extends StatelessWidget {
   }
 }
 
-/// One row per slot — label/motors on the left, wiring + test controls
-/// on the right. Compacts vertically on narrow screens.
+/// Compact one-line slot tester: slot label + motor pin on the left,
+/// two test buttons on the right ("без проверки" = curtain 0, "с
+/// проверкой" = curtain 1). No product name, no wiring controls —
+/// motor type and curtain mode live in «Товары» / global toggle.
 class _SlotRow extends StatelessWidget {
   const _SlotRow({
     required this.slot,
-    required this.product,
     required this.running,
     required this.disabledByOthers,
-    required this.saving,
     required this.lastResult,
     required this.lastResultText,
-    required this.globalCurtain,
-    required this.onRunMotor,
-    required this.onRunCurtain,
-    required this.onChangeMotorType,
-    required this.onChangeCurtain,
+    required this.onRunWithoutSensor,
+    required this.onRunWithSensor,
   });
 
   final Slot slot;
-  final Product? product;
   final bool running;
   final bool disabledByOthers;
-  final bool saving;
   final bool? lastResult;
   final String? lastResultText;
-  final int globalCurtain;
-  final VoidCallback onRunMotor;
-  final VoidCallback onRunCurtain;
-  final ValueChanged<int> onChangeMotorType;
-  final ValueChanged<int> onChangeCurtain;
+  final VoidCallback onRunWithoutSensor;
+  final VoidCallback onRunWithSensor;
 
   @override
   Widget build(BuildContext context) {
-    final hasProduct = product != null;
-    final motorType = product?.motorType ?? 2;
-    final curtain = product?.curtainMode ?? globalCurtain;
     final motorsLabel = slot.motorIds.map((m) => 'M$m').join('+');
 
     final Color border;
@@ -481,236 +414,125 @@ class _SlotRow extends StatelessWidget {
       duration: const Duration(milliseconds: 200),
       decoration: BoxDecoration(
         color: AppColors.surfaceContainerLowest,
-        borderRadius: BorderRadius.circular(14),
+        borderRadius: BorderRadius.circular(12),
         border: Border.all(color: border, width: 1.5),
         boxShadow: const [appCardShadow],
       ),
       child: Opacity(
         opacity: disabledByOthers ? 0.4 : 1.0,
         child: Padding(
-          padding: const EdgeInsets.all(12),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.center,
             children: [
-              Row(
-                crossAxisAlignment: CrossAxisAlignment.center,
-                children: [
-                  // Slot ID badge
-                  Container(
-                    padding: const EdgeInsets.symmetric(
-                        horizontal: 10, vertical: 6),
-                    decoration: BoxDecoration(
-                      color: AppColors.iosBlue,
-                      borderRadius: BorderRadius.circular(10),
-                    ),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.center,
-                      children: [
-                        Text(
-                          slot.label,
-                          style: const TextStyle(
-                            fontSize: 18,
-                            fontWeight: FontWeight.w900,
-                            color: Colors.white,
-                            height: 1,
-                            fontFeatures: [FontFeature.tabularFigures()],
-                          ),
-                        ),
-                        const SizedBox(height: 2),
-                        Text(
-                          motorsLabel,
-                          style: const TextStyle(
-                            fontSize: 9,
-                            fontWeight: FontWeight.w700,
-                            color: Colors.white70,
-                            letterSpacing: 0.3,
-                            fontFamily: 'monospace',
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Row(
-                          children: [
-                            if (slot.isTwin)
-                              Container(
-                                margin: const EdgeInsets.only(right: 6),
-                                padding: const EdgeInsets.symmetric(
-                                    horizontal: 5, vertical: 2),
-                                decoration: BoxDecoration(
-                                  color: AppColors.iosOrange
-                                      .withValues(alpha: 0.22),
-                                  borderRadius: BorderRadius.circular(4),
-                                ),
-                                child: const Text(
-                                  'TWIN',
-                                  style: TextStyle(
-                                      color: AppColors.iosOrange,
-                                      fontSize: 8,
-                                      fontWeight: FontWeight.w900,
-                                      letterSpacing: 1.0),
-                                ),
-                              ),
-                            Flexible(
-                              child: Text(
-                                hasProduct
-                                    ? product!.name
-                                    : 'нет товара',
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                                style: TextStyle(
-                                  fontSize: 14,
-                                  fontWeight: FontWeight.w800,
-                                  color: hasProduct
-                                      ? AppColors.onSurface
-                                      : AppColors.onSurfaceVariant,
-                                  fontStyle: hasProduct
-                                      ? FontStyle.normal
-                                      : FontStyle.italic,
-                                ),
-                              ),
-                            ),
-                          ],
-                        ),
-                        if (lastResultText != null) ...[
-                          const SizedBox(height: 4),
-                          Text(
-                            lastResultText!,
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: TextStyle(
-                              fontSize: 11,
-                              fontWeight: FontWeight.bold,
-                              color: lastResult == true
-                                  ? const Color(0xFF2E7D32)
-                                  : const Color(0xFFB3261E),
-                            ),
-                          ),
-                        ],
-                      ],
-                    ),
-                  ),
-                  if (saving)
-                    const SizedBox(
-                      width: 16,
-                      height: 16,
-                      child: CircularProgressIndicator(strokeWidth: 2),
-                    ),
-                ],
-              ),
-              const SizedBox(height: 12),
-              // Wiring controls
-              Row(
-                children: [
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        const Text(
-                          'ТИП МОТОРА',
-                          style: TextStyle(
-                              fontSize: 9,
-                              fontWeight: FontWeight.bold,
-                              letterSpacing: 1.0,
-                              color: AppColors.onSurfaceVariant),
-                        ),
-                        const SizedBox(height: 4),
-                        SegmentedButton<int>(
-                          showSelectedIcon: false,
-                          style: SegmentedButton.styleFrom(
-                            visualDensity: VisualDensity.compact,
-                            textStyle: const TextStyle(
-                                fontSize: 11, fontWeight: FontWeight.w700),
-                          ),
-                          segments: const [
-                            ButtonSegment(value: 2, label: Text('2-провод')),
-                            ButtonSegment(value: 3, label: Text('3-провод')),
-                          ],
-                          selected: {motorType},
-                          onSelectionChanged: !hasProduct || disabledByOthers
-                              ? null
-                              : (set) => onChangeMotorType(set.first),
-                        ),
-                      ],
-                    ),
-                  ),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        const Text(
-                          'ВЫДАЧА (СЛОТ)',
-                          style: TextStyle(
-                              fontSize: 9,
-                              fontWeight: FontWeight.bold,
-                              letterSpacing: 1.0,
-                              color: AppColors.onSurfaceVariant),
-                        ),
-                        const SizedBox(height: 4),
-                        SegmentedButton<int>(
-                          showSelectedIcon: false,
-                          style: SegmentedButton.styleFrom(
-                            visualDensity: VisualDensity.compact,
-                            textStyle: const TextStyle(
-                                fontSize: 11, fontWeight: FontWeight.w700),
-                          ),
-                          segments: const [
-                            ButtonSegment(value: 0, label: Text('off')),
-                            ButtonSegment(value: 1, label: Text('on')),
-                            ButtonSegment(value: 2, label: Text('prio')),
-                          ],
-                          selected: {curtain},
-                          onSelectionChanged: !hasProduct || disabledByOthers
-                              ? null
-                              : (set) => onChangeCurtain(set.first),
-                        ),
-                      ],
-                    ),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 12),
-              // Test buttons
-              Row(
-                children: [
-                  Expanded(
-                    child: OutlinedButton.icon(
-                      icon: running
-                          ? const SizedBox(
-                              width: 14,
-                              height: 14,
-                              child: CircularProgressIndicator(
-                                  strokeWidth: 2),
-                            )
-                          : const Icon(Icons.precision_manufacturing,
-                              size: 16),
-                      label: const Text('Тест мотора'),
-                      style: OutlinedButton.styleFrom(
-                        padding: const EdgeInsets.symmetric(vertical: 10),
+              // Slot label + motor pin badge
+              Container(
+                padding: const EdgeInsets.symmetric(
+                    horizontal: 10, vertical: 6),
+                decoration: BoxDecoration(
+                  color: AppColors.iosBlue,
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.center,
+                  children: [
+                    Text(
+                      slot.label,
+                      style: const TextStyle(
+                        fontSize: 16,
+                        fontWeight: FontWeight.w900,
+                        color: Colors.white,
+                        height: 1,
+                        fontFeatures: [FontFeature.tabularFigures()],
                       ),
-                      onPressed: disabledByOthers ? null : onRunMotor,
                     ),
-                  ),
-                  const SizedBox(width: 8),
-                  Expanded(
-                    child: OutlinedButton.icon(
-                      icon: const Icon(Icons.sensors, size: 16),
-                      label: const Text('Датчик'),
-                      style: OutlinedButton.styleFrom(
-                        padding: const EdgeInsets.symmetric(vertical: 10),
-                        foregroundColor: Colors.lightBlue.shade700,
-                        side: BorderSide(color: Colors.lightBlue.shade300),
+                    const SizedBox(height: 2),
+                    Text(
+                      motorsLabel,
+                      style: const TextStyle(
+                        fontSize: 9,
+                        fontWeight: FontWeight.w700,
+                        color: Colors.white70,
+                        letterSpacing: 0.3,
+                        fontFamily: 'monospace',
                       ),
-                      onPressed: disabledByOthers ? null : onRunCurtain,
                     ),
+                  ],
+                ),
+              ),
+              if (slot.isTwin) ...[
+                const SizedBox(width: 6),
+                Container(
+                  padding: const EdgeInsets.symmetric(
+                      horizontal: 5, vertical: 2),
+                  decoration: BoxDecoration(
+                    color: AppColors.iosOrange.withValues(alpha: 0.22),
+                    borderRadius: BorderRadius.circular(4),
                   ),
-                ],
+                  child: const Text(
+                    'TWIN',
+                    style: TextStyle(
+                        color: AppColors.iosOrange,
+                        fontSize: 8,
+                        fontWeight: FontWeight.w900,
+                        letterSpacing: 1.0),
+                  ),
+                ),
+              ],
+              const SizedBox(width: 10),
+              // Last-test result (optional, fills available space)
+              Expanded(
+                child: lastResultText != null
+                    ? Text(
+                        lastResultText!,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          fontSize: 11,
+                          fontWeight: FontWeight.bold,
+                          color: lastResult == true
+                              ? const Color(0xFF2E7D32)
+                              : const Color(0xFFB3261E),
+                        ),
+                      )
+                    : const SizedBox.shrink(),
+              ),
+              const SizedBox(width: 8),
+              // Two test buttons side-by-side
+              OutlinedButton(
+                style: OutlinedButton.styleFrom(
+                  visualDensity: VisualDensity.compact,
+                  padding: const EdgeInsets.symmetric(
+                      horizontal: 10, vertical: 8),
+                  minimumSize: const Size(0, 36),
+                  textStyle: const TextStyle(
+                      fontSize: 11, fontWeight: FontWeight.w700),
+                ),
+                onPressed: disabledByOthers ? null : onRunWithoutSensor,
+                child: running
+                    ? const SizedBox(
+                        width: 14,
+                        height: 14,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      )
+                    : const Text('Тест'),
+              ),
+              const SizedBox(width: 6),
+              OutlinedButton.icon(
+                icon: const Icon(Icons.sensors, size: 14),
+                label: const Text('+датчик'),
+                style: OutlinedButton.styleFrom(
+                  visualDensity: VisualDensity.compact,
+                  padding: const EdgeInsets.symmetric(
+                      horizontal: 10, vertical: 8),
+                  minimumSize: const Size(0, 36),
+                  textStyle: const TextStyle(
+                      fontSize: 11, fontWeight: FontWeight.w700),
+                  foregroundColor: Colors.lightBlue.shade700,
+                  side: BorderSide(color: Colors.lightBlue.shade300),
+                ),
+                onPressed: disabledByOthers ? null : onRunWithSensor,
               ),
             ],
           ),

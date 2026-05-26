@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
@@ -6,6 +7,7 @@ import '../models/product.dart';
 import '../services/strings.dart';
 import '../services/vending_service.dart';
 import '../theme.dart';
+import '../widgets/close_circle_button.dart';
 import '../widgets/action_pill.dart';
 import '../widgets/product_thumb.dart';
 import 'payment_screen.dart';
@@ -81,6 +83,20 @@ class _CartScreenState extends State<CartScreen> {
                   enabled: items.isNotEmpty,
                   total: svc.cartTotalTenge,
                   payLabel: s.t('pay_btn'),
+                ),
+                // Top-right cancel — clears the cart and returns to the
+                // catalog. Same widget + position as the payment /
+                // dispense X so the affordance reads consistently
+                // across the post-cart flow.
+                Positioned(
+                  top: 16,
+                  right: 16,
+                  child: CloseCircleButton(
+                    onTap: () {
+                      svc.clearCart();
+                      Navigator.of(context).popUntil((r) => r.isFirst);
+                    },
+                  ),
                 ),
               ],
             );
@@ -166,11 +182,12 @@ class _CartItemCard extends StatelessWidget {
   /// Same board-healthy gate as on the catalog (see [_ProductCard._tryAdd]
   /// in home_screen.dart): refuse to grow the cart if the bus is
   /// already flagged unhealthy, so the customer can't pile on items
-  /// the dispenser can't actually deliver.
+  /// the dispenser can't actually deliver. Debug builds skip the
+  /// check so the UI/payment flow works on a tablet with no M102.
   void _tryAdd(BuildContext context) {
     final svc = context.read<VendingService>();
     final board = context.read<BoardClient>();
-    if (!board.isHealthy) {
+    if (!kDebugMode && !board.isHealthy) {
       final s = context.read<Strings>();
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
@@ -450,11 +467,21 @@ class _BottomBar extends StatelessWidget {
   Future<void> _goToPayment(BuildContext context) async {
     final s = context.read<Strings>();
     final board = context.read<BoardClient>();
+    final navigator = Navigator.of(context);
+    // Debug builds short-circuit the live ping so payment can be
+    // walked through on a tablet with no M102 wired up. Production
+    // keeps the strict pre-payment check so we never charge for a
+    // dispense we can't deliver.
+    if (kDebugMode) {
+      navigator.push(
+        MaterialPageRoute(builder: (_) => const PaymentScreen()),
+      );
+      return;
+    }
     // Live ping the board before letting the customer enter payment.
     // A stale `isConnected` is not enough — port may be open but the
     // bus dead, in which case we'd take money for a sale we can't
     // dispense. The ping uses a short timeout so the spinner is brief.
-    final navigator = Navigator.of(context);
     showDialog<void>(
       context: context,
       barrierDismissible: false,

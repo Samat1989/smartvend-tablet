@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
@@ -104,11 +105,24 @@ class _DispenseScreenState extends State<DispenseScreen>
       // the layout doesn't list this motor yet.
       final slot = svc.layout.slotForMotor(product.motorId);
       final motorIds = slot?.motorIds ?? [product.motorId];
-      final r = await board.dispenseSlot(
-        motorIds,
-        type: product.motorType,
-        curtain: sensor,
-      );
+      final DispenseResult r;
+      // Debug builds with no live board fake a successful dispense so
+      // the payment / receipt UI can be walked through end-to-end on
+      // a tablet that isn't wired up. Production / release paths
+      // always go through the real M102 protocol below.
+      if (kDebugMode && !board.isConnected) {
+        await Future<void>.delayed(const Duration(milliseconds: 800));
+        r = DispenseResult(
+          success: true,
+          message: 'DEBUG: mocked dispense OK',
+        );
+      } else {
+        r = await board.dispenseSlot(
+          motorIds,
+          type: product.motorType,
+          curtain: sensor,
+        );
+      }
       if (!mounted) return;
       final step = DispenseStepResult(
         product: product,
