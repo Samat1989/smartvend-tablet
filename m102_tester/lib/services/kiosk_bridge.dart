@@ -66,24 +66,6 @@ class KioskBridge {
     await _channel.invokeMethod<void>('rebootDevice');
   }
 
-  /// Privileged factory reset via [DevicePolicyManager.wipeData].
-  /// Erases user data, factory-reset-protection (FRP), and external
-  /// storage; preserves the system OS. The tablet reboots into the
-  /// Welcome / Setup-Wizard screen — after which device-owner has to
-  /// be re-set via ADB or QR provisioning before the kiosk is
-  /// functional again.
-  ///
-  /// Returns immediately; the actual wipe happens a few seconds later
-  /// while the native side returns control to Dart. There is **no
-  /// way to undo** this — caller MUST surface a confirmation dialog
-  /// before invoking.
-  ///
-  /// Throws `PlatformException(code: 'not_device_owner')` when the app
-  /// hasn't been provisioned as device-owner.
-  static Future<void> factoryReset() async {
-    await _channel.invokeMethod<void>('factoryReset');
-  }
-
   /// Install the APK at [path] via PackageInstaller. Device-owner
   /// kiosks (our default) install silently; non-owners see Android's
   /// "Allow this app to install unknown apps?" dialog once.

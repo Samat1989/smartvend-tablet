@@ -63,6 +63,19 @@ android {
                 signingConfigs.getByName("debug")
             }
         }
+        debug {
+            // Sign debug builds with the release keystore too. Without
+            // this, `flutter run --debug` can't update an existing
+            // release install — Android refuses with
+            // INSTALL_FAILED_UPDATE_INCOMPATIBLE. Since the tablet is
+            // device-owner with the release-signed APK, normal uninstall
+            // is also blocked, so we'd lose hot-reload entirely.
+            // Falls back to the default debug.keystore for contributors
+            // without the production keystore.
+            if (hasReleaseSigning) {
+                signingConfig = signingConfigs.getByName("release")
+            }
+        }
     }
 }
 

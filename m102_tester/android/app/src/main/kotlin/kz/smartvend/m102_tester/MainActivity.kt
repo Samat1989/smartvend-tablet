@@ -20,6 +20,7 @@ import android.provider.Settings
 import android.util.Log
 import android.view.View
 import android.view.WindowManager
+import androidx.core.view.ViewCompat
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
@@ -181,32 +182,6 @@ class MainActivity : FlutterActivity() {
                             result.error("usb_request_failed", t.message, null)
                         }
                     }
-                    "factoryReset" -> {
-                        // Device-owner privileged wipe: erases user data,
-                        // FRP, and external storage; preserves system OS.
-                        // Tablet reboots into Setup Wizard / Welcome.
-                        // No going back without re-running the ADB
-                        // provisioning sequence.
-                        val dpm = getSystemService(Context.DEVICE_POLICY_SERVICE)
-                            as? DevicePolicyManager
-                        if (dpm == null || !dpm.isDeviceOwnerApp(packageName)) {
-                            result.error(
-                                "not_device_owner",
-                                "wipeData requires device-owner",
-                                null,
-                            )
-                            return@setMethodCallHandler
-                        }
-                        try {
-                            val flags = DevicePolicyManager.WIPE_EXTERNAL_STORAGE or
-                                DevicePolicyManager.WIPE_RESET_PROTECTION_DATA
-                            Log.w(TAG_KIOSK, "Factory reset triggered by user (wipeData flags=$flags)")
-                            result.success(null)
-                            dpm.wipeData(flags)
-                        } catch (t: Throwable) {
-                            result.error("wipe_failed", t.message, null)
-                        }
-                    }
                     "installApk" -> {
                         val path = call.argument<String>("path")
                         if (path.isNullOrBlank()) {
@@ -342,6 +317,29 @@ class MainActivity : FlutterActivity() {
         // can be properly hidden by the WindowInsetsController below.
         WindowCompat.setDecorFitsSystemWindows(window, false)
         applyImmersive()
+        installInsetsRehideListener()
+    }
+
+    /**
+     * Aggressive re-hide loop. On OEM builds where `setStatusBarDisabled`
+     * is ignored (observed on Unisoc Go), the system spontaneously
+     * toggles the status bar visible — we need to fight it on every
+     * inset change. The listener fires whenever any system bar starts
+     * to appear; we ask the [WindowInsetsControllerCompat] to hide it
+     * again immediately. Combined with [applyGestureExclusion] this
+     * prevents the bar from ever staying on screen long enough for
+     * the customer to tap a back button.
+     */
+    private fun installInsetsRehideListener() {
+        val decor = window.decorView
+        ViewCompat.setOnApplyWindowInsetsListener(decor) { v, insets ->
+            val barsVisible = insets.isVisible(WindowInsetsCompat.Type.systemBars())
+            if (barsVisible) {
+                WindowInsetsControllerCompat(window, v)
+                    .hide(WindowInsetsCompat.Type.systemBars())
+            }
+            insets
+        }
     }
 
     override fun onResume() {
@@ -361,15 +359,20 @@ class MainActivity : FlutterActivity() {
 
     private fun applyImmersive() {
         val controller = WindowInsetsControllerCompat(window, window.decorView)
-        // BEHAVIOR_DEFAULT keeps the bars hidden permanently. The
-        // alternative BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE lets a
-        // customer swipe from the edge to peek at the bars (and the
-        // back button) — we explicitly don't want that. Combined
-        // with the gesture-exclusion rects and setStatusBarDisabled,
-        // there's no surface left to drag down/up.
+        // Sticky immersive: bars stay hidden, swipe shows them as
+        // transparent overlay that auto-hides. This is the original
+        // behaviour that paints them as a translucent layer over the
+        // catalog (instead of as a solid white opaque bar that BEHAVIOR_DEFAULT
+        // gives on this OEM Unisoc Go ROM). The forced re-hide
+        // listener below catches transient appearances and snaps them
+        // shut quickly.
         controller.systemBarsBehavior =
-            WindowInsetsControllerCompat.BEHAVIOR_DEFAULT
+            WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
         controller.hide(WindowInsetsCompat.Type.systemBars())
+        // Ensure the bar surfaces themselves are transparent so the
+        // catalog shows through whenever they do appear.
+        window.statusBarColor = android.graphics.Color.TRANSPARENT
+        window.navigationBarColor = android.graphics.Color.TRANSPARENT
     }
 
     /**
