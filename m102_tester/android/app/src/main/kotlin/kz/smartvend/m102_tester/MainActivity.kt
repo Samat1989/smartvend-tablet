@@ -181,6 +181,32 @@ class MainActivity : FlutterActivity() {
                             result.error("usb_request_failed", t.message, null)
                         }
                     }
+                    "factoryReset" -> {
+                        // Device-owner privileged wipe: erases user data,
+                        // FRP, and external storage; preserves system OS.
+                        // Tablet reboots into Setup Wizard / Welcome.
+                        // No going back without re-running the ADB
+                        // provisioning sequence.
+                        val dpm = getSystemService(Context.DEVICE_POLICY_SERVICE)
+                            as? DevicePolicyManager
+                        if (dpm == null || !dpm.isDeviceOwnerApp(packageName)) {
+                            result.error(
+                                "not_device_owner",
+                                "wipeData requires device-owner",
+                                null,
+                            )
+                            return@setMethodCallHandler
+                        }
+                        try {
+                            val flags = DevicePolicyManager.WIPE_EXTERNAL_STORAGE or
+                                DevicePolicyManager.WIPE_RESET_PROTECTION_DATA
+                            Log.w(TAG_KIOSK, "Factory reset triggered by user (wipeData flags=$flags)")
+                            result.success(null)
+                            dpm.wipeData(flags)
+                        } catch (t: Throwable) {
+                            result.error("wipe_failed", t.message, null)
+                        }
+                    }
                     "installApk" -> {
                         val path = call.argument<String>("path")
                         if (path.isNullOrBlank()) {

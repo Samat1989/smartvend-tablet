@@ -152,6 +152,12 @@ class ServiceMenuScreen extends StatelessWidget {
                       color: Colors.redAccent,
                       onTap: () => _confirmUnpair(context),
                     ),
+                    _Tile(
+                      icon: Icons.delete_forever,
+                      label: 'Сброс на заводские',
+                      color: Colors.red.shade900,
+                      onTap: () => _confirmFactoryReset(context),
+                    ),
                   ],
                 ),
               ),
@@ -160,6 +166,119 @@ class ServiceMenuScreen extends StatelessWidget {
         ),
       ),
     );
+  }
+
+  /// Two-step confirmation: AlertDialog, then a typed-confirmation
+  /// pop-up where the operator has to actually type the word
+  /// "СБРОС" before the button enables. Stronger guard than a
+  /// single Yes/No tap because the consequence is irreversible —
+  /// all data + device-owner cleared, kiosk dies until re-provisioned.
+  Future<void> _confirmFactoryReset(BuildContext context) async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        icon: const Icon(Icons.warning_amber, color: Colors.red, size: 40),
+        title: const Text('Сброс на заводские настройки?'),
+        content: const Text(
+          'Будут УДАЛЕНЫ:\n'
+          '  • все настройки приложения\n'
+          '  • статус device-owner (kiosk выключится)\n'
+          '  • пользовательские данные планшета\n'
+          '  • кэш каталога\n\n'
+          'Планшет перезагрузится в стандартный экран приветствия '
+          'Android. Восстановить kiosk можно только через ADB.\n\n'
+          'Действие необратимо.',
+          style: TextStyle(height: 1.4),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(false),
+            child: const Text('Отмена'),
+          ),
+          FilledButton(
+            style: FilledButton.styleFrom(backgroundColor: Colors.redAccent),
+            onPressed: () => Navigator.of(ctx).pop(true),
+            child: const Text('Продолжить'),
+          ),
+        ],
+      ),
+    );
+    if (ok != true || !context.mounted) return;
+
+    final confirmCtrl = TextEditingController();
+    final reallyOk = await showDialog<bool>(
+      context: context,
+      builder: (ctx) {
+        var canSubmit = false;
+        return StatefulBuilder(builder: (ctx, setLocal) {
+          return AlertDialog(
+            title: const Text('Подтверждение'),
+            content: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text('Введите слово СБРОС заглавными буквами:'),
+                const SizedBox(height: 12),
+                TextField(
+                  controller: confirmCtrl,
+                  autofocus: true,
+                  textCapitalization: TextCapitalization.characters,
+                  decoration: const InputDecoration(
+                    border: OutlineInputBorder(),
+                    hintText: 'СБРОС',
+                  ),
+                  onChanged: (v) =>
+                      setLocal(() => canSubmit = v.trim() == 'СБРОС'),
+                ),
+              ],
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.of(ctx).pop(false),
+                child: const Text('Отмена'),
+              ),
+              FilledButton(
+                style: FilledButton.styleFrom(
+                    backgroundColor: Colors.red.shade900),
+                onPressed: canSubmit
+                    ? () => Navigator.of(ctx).pop(true)
+                    : null,
+                child: const Text('СТЕРЕТЬ'),
+              ),
+            ],
+          );
+        });
+      },
+    );
+    if (reallyOk != true || !context.mounted) return;
+
+    try {
+      await KioskBridge.factoryReset();
+      // The wipe runs after this call returns; show a brief overlay
+      // so the operator knows something's happening if Android takes
+      // a couple of seconds to actually start the reset.
+      if (!context.mounted) return;
+      showDialog<void>(
+        context: context,
+        barrierDismissible: false,
+        builder: (_) => const AlertDialog(
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              CircularProgressIndicator(),
+              SizedBox(height: 16),
+              Text('Сброс… планшет сейчас перезагрузится.'),
+            ],
+          ),
+        ),
+      );
+    } on PlatformException catch (e) {
+      if (!context.mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text('Ошибка: ${e.message ?? e.code}'),
+        backgroundColor: Colors.redAccent,
+      ));
+    }
   }
 
   /// Placeholder while the catalog layout editor is being reworked.
