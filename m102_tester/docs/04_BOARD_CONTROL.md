@@ -363,14 +363,24 @@ When a cooling cycle needs to start:
 1. If heater module is on → turn OFF
 2. If fan is off → turn ON. Bail; next tick continues.
 3. Increment fan-warmup tick counter
-4. After 30 ticks (≈ 5 min of fan running) → turn compressor ON
+4. After N ticks → turn compressor ON
    + turn glass heater ON (unless humidity loop owns it)
 5. Compressor stays ON until temp ≤ setpoint OR forced-rest fires
 ```
 
-Why 5 min of fan-first: lets the condenser warm up airflow before
-adding compressor load, avoids high-pressure cut-out on hot starts.
-This is the factory's `M102_StartRefrigeration` logic step-by-step.
+The fan-warmup duration N depends on session history:
+
+* **First compressor start after app boot** — 30 ticks (≈ 5 min).
+  Compressor + refrigerant have been off long enough that pressure
+  needs to equalize and the relay needs slow-start protection.
+* **Every subsequent cycle** in the same session — 12 ticks
+  (≈ 2 min). Compressor + condenser are already warm; short
+  warm-up is enough.
+
+This matches the factory app's `M102_StartRefrigeration` behaviour
+exactly. The session flag (`_compressorHasRunThisSession`) resets on
+every process start — a fresh power-up of the cabinet always gets the
+long warmup.
 
 ### 7.4 Heating start-up sequence
 

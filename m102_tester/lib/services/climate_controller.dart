@@ -64,10 +64,27 @@ class ClimateController extends ChangeNotifier {
 
   // ---- factory-derived constants (do not expose in UI) ----
   static const double _hysteresisC = 4.0;
-  static const int _coolingSpinupTicks = 30;     // 5 min at 10 s tick
+  /// Cold-start fan warmup before the **first** compressor run after
+  /// app boot. Lets the condenser equalize and gives the compressor
+  /// relay a slow start — protects the relay from inrush spikes when
+  /// the unit has been off for hours.
+  static const int _coolingSpinupTicksFirst = 30; // 5 min at 10 s tick
+  /// In-session fan warmup between every subsequent compressor cycle.
+  /// Compressor + refrigerant are already warm; 2 min is enough for
+  /// pressure equalization. Matches the factory app's behavior on
+  /// re-starts within the same session.
+  static const int _coolingSpinupTicksWarm = 12; // 2 min at 10 s tick
   static const int _heatingSpinupTicks = 12;     // 2 min at 10 s tick
   static const int _tempPollSec = 10;
   static const int _humidityPollSec = 30;
+
+  /// True once the compressor has been energised at least once since
+  /// app boot. Used to pick the right fan-warmup duration:
+  /// first cold start → 5 min, all subsequent cycles → 2 min.
+  /// Resets implicitly on every fresh process start; not persisted
+  /// to DeviceStorage because power-cycling the cabinet is also a
+  /// good moment to do the long warmup again.
+  bool _compressorHasRunThisSession = false;
 
   // ---- our extra safety: forced rest ----
   static const int _maxContinuousMin = 60;
@@ -291,11 +308,17 @@ class ClimateController extends ChangeNotifier {
       return;
     }
 
-    // Compressor branch.
+    // Compressor branch. Use 5 min spin-up only on the very first
+    // start of the session (cold compressor + condenser); 2 min on
+    // every subsequent cycle. Mirrors the factory app.
+    final spinupTarget = _compressorHasRunThisSession
+        ? _coolingSpinupTicksWarm
+        : _coolingSpinupTicksFirst;
     if (!_compressorOn) {
       _spinupTicks++;
-      if (_spinupTicks > _coolingSpinupTicks) {
+      if (_spinupTicks > spinupTarget) {
         await _setDo(DoChannel.compressor, true);
+        _compressorHasRunThisSession = true;
         // Glass heater follows compressor unless humidity loop owns it.
         if (!hasHumiditySensor) {
           await _setDo(DoChannel.glassHeater, true);
@@ -305,7 +328,7 @@ class ClimateController extends ChangeNotifier {
         _setMessage('Охлаждение: ${temp.toStringAsFixed(1)}°C → '
             '${setpoint.toStringAsFixed(1)}°C');
       } else {
-        final ticksLeft = _coolingSpinupTicks - _spinupTicks;
+        final ticksLeft = spinupTarget - _spinupTicks;
         final secLeft = ticksLeft * _tempPollSec;
         _setPhase(CompressorPhase.warmingFan);
         _setMessage('Прогрев вентилятора: ещё $secLeft с');
