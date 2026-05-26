@@ -348,19 +348,27 @@ class MainActivity : FlutterActivity() {
         super.onResume()
         applyImmersive()
         tryEnterLockTask()
+        applyGestureExclusion()
     }
 
     override fun onWindowFocusChanged(hasFocus: Boolean) {
         super.onWindowFocusChanged(hasFocus)
         if (hasFocus) {
             applyImmersive()
+            applyGestureExclusion()
         }
     }
 
     private fun applyImmersive() {
         val controller = WindowInsetsControllerCompat(window, window.decorView)
+        // BEHAVIOR_DEFAULT keeps the bars hidden permanently. The
+        // alternative BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE lets a
+        // customer swipe from the edge to peek at the bars (and the
+        // back button) — we explicitly don't want that. Combined
+        // with the gesture-exclusion rects and setStatusBarDisabled,
+        // there's no surface left to drag down/up.
         controller.systemBarsBehavior =
-            WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+            WindowInsetsControllerCompat.BEHAVIOR_DEFAULT
         controller.hide(WindowInsetsCompat.Type.systemBars())
     }
 
@@ -429,6 +437,50 @@ class MainActivity : FlutterActivity() {
                 Log.e(TAG_KIOSK, "setLockTaskFeatures failed", t)
             }
         }
+        // Fully disable the status bar — swipe-down does nothing, no
+        // notification panel, no quick settings. Survives even if the
+        // operator briefly leaves lock-task via «Выйти в Android».
+        try {
+            dpm.setStatusBarDisabled(admin, true)
+            Log.i(TAG_KIOSK, "setStatusBarDisabled(true) OK")
+        } catch (t: Throwable) {
+            Log.e(TAG_KIOSK, "setStatusBarDisabled failed", t)
+        }
+    }
+
+    /**
+     * Tell the OS that the edges of our window are NOT system-gesture
+     * areas. Without this, gesture-navigation Android (10+) treats a
+     * swipe-up from the bottom as "go home" and a swipe-in from either
+     * side as "back" — even in lock-task. With these rects claimed,
+     * the gestures land on our Flutter view and do nothing.
+     *
+     * Re-applied on every onResume / window-focus because the OS clears
+     * the list when an activity loses focus.
+     */
+    private fun applyGestureExclusion() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) return
+        val decor = window.decorView
+        val w = decor.width
+        val h = decor.height
+        if (w == 0 || h == 0) {
+            // First call — layout hasn't happened yet. Defer.
+            decor.post { applyGestureExclusion() }
+            return
+        }
+        // Cover the full bottom edge (home swipe) and both side edges
+        // (back swipe) with our own gesture zones. 60-dp tall / 30-dp
+        // wide stripes — enough to swallow the system gesture without
+        // breaking our own touch handling further inside the screen.
+        val density = resources.displayMetrics.density
+        val bottomStripe = (60 * density).toInt()
+        val sideStripe = (30 * density).toInt()
+        val exclusions = listOf(
+            android.graphics.Rect(0, h - bottomStripe, w, h),
+            android.graphics.Rect(0, 0, sideStripe, h),
+            android.graphics.Rect(w - sideStripe, 0, w, h),
+        )
+        decor.systemGestureExclusionRects = exclusions
     }
 
     /**
