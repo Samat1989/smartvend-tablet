@@ -50,7 +50,7 @@ dependencies:
   # flutter_native_splash advertises itself as a runtime Android plugin
   # but Flutter SDK 3.41.4 has a known bug where dev_dependency plugins
   # still get added to GeneratedPluginRegistrant.java for release builds
-  # while their AAR is excluded from the classpath вЂ” "package
+  # while their AAR is excluded from the classpath - "package
   # net.jonhanson.flutter_native_splash does not exist" at compile time.
   # Putting it in normal deps includes the AAR (~30 KB overhead) and the
   # registrant compiles. The package is only invoked manually via
