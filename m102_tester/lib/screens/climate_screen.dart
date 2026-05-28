@@ -27,6 +27,8 @@ class ClimateScreen extends StatelessWidget {
               const SizedBox(height: 16),
               _lightCard(ctrl),
               const SizedBox(height: 16),
+              _glassHeaterCard(ctrl),
+              const SizedBox(height: 16),
               _detailsExpansion(ctrl),
             ],
           );
@@ -83,7 +85,7 @@ class ClimateScreen extends StatelessWidget {
   Widget _phaseIndicator(CompressorPhase phase) {
     final (label, color, icon) = switch (phase) {
       CompressorPhase.idle => ('Простой', Colors.grey, Icons.power_settings_new),
-      CompressorPhase.warmingFan => ('Прогрев вентилятора', Colors.orange, Icons.air),
+      CompressorPhase.warmingFan => ('Продувка вентилятором', Colors.orange, Icons.air),
       CompressorPhase.cooling => ('Компрессор работает', Colors.lightBlue, Icons.ac_unit),
       CompressorPhase.resting => ('Принудительный отдых', Colors.purple, Icons.bedtime),
       CompressorPhase.noProbe => ('Нет датчика температуры', Colors.red, Icons.error),
@@ -193,6 +195,23 @@ class ClimateScreen extends StatelessWidget {
     );
   }
 
+  Widget _glassHeaterCard(ClimateController ctrl) {
+    return Card(
+      child: SwitchListTile(
+        title: const Text('Подогрев стекла подключён',
+            style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600)),
+        subtitle: const Text(
+          'Выключите, если на этой машине реле есть, '
+          'а нагревателя физически нет',
+          style: TextStyle(fontSize: 12),
+        ),
+        value: ctrl.config.hasGlassHeater,
+        onChanged: (v) =>
+            ctrl.updateConfig(ctrl.config.copyWith(hasGlassHeater: v)),
+      ),
+    );
+  }
+
   // ---------- details (collapsible) ----------
 
   Widget _detailsExpansion(ClimateController ctrl) {
@@ -223,8 +242,9 @@ class ClimateScreen extends StatelessWidget {
                 ),
                 const SizedBox(height: 4),
                 const _BulletText('Гистерезис ±4°C — без частых пусков-остановок'),
-                const _BulletText('Прогрев вентилятора 5 мин перед стартом компрессора'),
-                const _BulletText('Прогрев перед нагревателем 2 мин'),
+                const _BulletText(
+                    'Продувка вентилятором 5 мин при первом запуске, потом 2 мин'),
+                const _BulletText('Продувка перед нагревателем 2 мин'),
                 const _BulletText('При >60 мин непрерывной работы — отдых 5 мин'),
                 const _BulletText('При потере датчика — компрессор сразу ВЫКЛ'),
                 const _BulletText('Компрессор не стартует, если вентилятор выключен'),

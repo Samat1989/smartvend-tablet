@@ -32,6 +32,19 @@ android {
         jvmTarget = JavaVersion.VERSION_17.toString()
     }
 
+    // Skip Android Lint on release builds. We already run `flutter
+    // analyze` from release.ps1 before the Gradle build, which covers
+    // the Dart side. The native `lintVitalAnalyzeRelease` task tends
+    // to lock its on-disk cache files on Windows (jars under
+    // build/app/intermediates/lint-cache/) and crashes the whole
+    // assembleRelease with a FileSystemException when something else
+    // touches that directory — IDE indexing, antivirus, leftover
+    // Gradle daemon — which is unrelated to actual lint findings.
+    lint {
+        checkReleaseBuilds = false
+        abortOnError = false
+    }
+
     defaultConfig {
         applicationId = "kz.smartvend.m102_tester"
         minSdk = flutter.minSdkVersion

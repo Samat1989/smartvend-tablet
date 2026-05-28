@@ -1,4 +1,4 @@
-name: m102_tester
+﻿name: m102_tester
 description: "A new Flutter project."
 # The following line prevents the package from being accidentally published to
 # pub.dev using `flutter pub publish`. This is preferred for private packages.
@@ -16,8 +16,7 @@ publish_to: 'none' # Remove this line if you wish to publish to pub.dev
 # https://developer.apple.com/library/archive/documentation/General/Reference/InfoPlistKeyReference/Articles/CoreFoundationKeys.html
 # In Windows, build-name is used as the major, minor, and patch parts
 # of the product and file versions while build-number is used as the build suffix.
-version: 1.1.2+3012
-
+version: 1.1.3+3013
 environment:
   sdk: ^3.11.1
 
@@ -47,6 +46,17 @@ dependencies:
   package_info_plus: ^9.0.0
   video_player: ^2.11.1
   file_picker: ^11.0.2
+  # Lives in `dependencies` instead of `dev_dependencies` on purpose:
+  # flutter_native_splash advertises itself as a runtime Android plugin
+  # but Flutter SDK 3.41.4 has a known bug where dev_dependency plugins
+  # still get added to GeneratedPluginRegistrant.java for release builds
+  # while their AAR is excluded from the classpath вЂ” "package
+  # net.jonhanson.flutter_native_splash does not exist" at compile time.
+  # Putting it in normal deps includes the AAR (~30 KB overhead) and the
+  # registrant compiles. The package is only invoked manually via
+  # `dart run flutter_native_splash:create` to regenerate splash assets;
+  # the included runtime code is dead-stripped at the engine level.
+  flutter_native_splash: ^2.4.6
 
 dev_dependencies:
   flutter_test:
@@ -59,7 +69,6 @@ dev_dependencies:
   # rules and activating additional ones.
   flutter_lints: ^6.0.0
   flutter_launcher_icons: ^0.14.1
-  flutter_native_splash: ^2.4.6
 
 # Generates mipmaps from a single source PNG. Re-run whenever the logo
 # changes:

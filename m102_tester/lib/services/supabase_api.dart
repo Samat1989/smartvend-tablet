@@ -310,6 +310,122 @@ class SupabaseApi {
 
   // ---------- sales ----------
 
+  /// Insert a sale shell row up-front (before the first motor turns) so
+  /// each item can be persisted as it finishes. Returns the new sale id
+  /// or null on failure — caller falls back to the legacy "insert at
+  /// the end" path if this returns null.
+  ///
+  /// [expectedTotalTenge] is what the customer paid (cart total). The
+  /// row's `amount` will be PATCHed down by [completeSale] to the sum
+  /// of successfully-dispensed items, but the initial value is useful
+  /// for ops if the planshet hangs before completion.
+  Future<String?> createSale({
+    required String machid,
+    required String paymentId,
+    required int expectedTotalTenge,
+  }) async {
+    try {
+      final saleId = _uuidV4();
+      final resp = await _client.post(
+        _rest('sales'),
+        headers: {..._headers, 'Prefer': 'return=minimal'},
+        body: jsonEncode({
+          'id': saleId,
+          'micromarket_id': int.tryParse(machid) ?? machid,
+          'amount': expectedTotalTenge,
+          'status': 'in_progress',
+          'payment_id': paymentId,
+        }),
+      ).timeout(const Duration(seconds: 10));
+      if (resp.statusCode < 200 || resp.statusCode >= 300) {
+        debugPrint('[createSale] sales insert failed: '
+            'HTTP ${resp.statusCode} ${resp.body}');
+        return null;
+      }
+      return saleId;
+    } catch (e) {
+      debugPrint('[createSale] exception: $e');
+      return null;
+    }
+  }
+
+  /// Persist a single dispense step against an existing sale. On a
+  /// successful dispense also decrements the inventory stock — same
+  /// PATCH the legacy [recordSale] did, just done per-item instead of
+  /// in a batch at the end.
+  Future<void> recordSaleItem({
+    required String saleId,
+    required DispenseStepResult step,
+  }) async {
+    final productId = step.product.id;
+    if (productId == null) return;
+    try {
+      final itemResp = await _client.post(
+        _rest('sales_items'),
+        headers: {..._headers, 'Prefer': 'return=minimal'},
+        body: jsonEncode({
+          'id': _uuidV4(),
+          'sale_id': saleId,
+          'product_id': productId,
+          'price': step.product.priceTenge,
+          'quantity': 1,
+          'dispensed': step.outcome == DispenseOutcome.ok,
+          if (step.outcome == DispenseOutcome.failed && step.resultCode != null)
+            'result_code': step.resultCode,
+          if (step.outcome == DispenseOutcome.failed && step.message.isNotEmpty)
+            'result_message': step.message,
+        }),
+      ).timeout(const Duration(seconds: 8));
+      if (itemResp.statusCode < 200 || itemResp.statusCode >= 300) {
+        debugPrint('[recordSaleItem] insert failed: '
+            'HTTP ${itemResp.statusCode} ${itemResp.body}');
+      }
+    } catch (e) {
+      debugPrint('[recordSaleItem] exception: $e');
+    }
+
+    // Only OK dispenses decrement stock — failed/unknown leave it as is,
+    // matching what the legacy [recordSale] aggregator did.
+    if (step.outcome != DispenseOutcome.ok) return;
+    try {
+      final newStock = (step.product.stock - 1).clamp(0, 1 << 31);
+      final patchResp = await _client.patch(
+        _rest('inventory', {'id': 'eq.$productId'}),
+        headers: _headers,
+        body: jsonEncode({'stock': newStock}),
+      ).timeout(const Duration(seconds: 8));
+      if (patchResp.statusCode < 200 || patchResp.statusCode >= 300) {
+        debugPrint('[recordSaleItem] stock PATCH failed for $productId: '
+            'HTTP ${patchResp.statusCode} ${patchResp.body}');
+      }
+    } catch (e) {
+      debugPrint('[recordSaleItem] stock exception: $e');
+    }
+  }
+
+  /// Close out a sale that was opened via [createSale]: mark it
+  /// `completed` and rewrite `amount` to the sum of items that were
+  /// actually dispensed (so the receipt matches what the customer got,
+  /// and the dashboard's revenue totals don't double-count refunds).
+  Future<void> completeSale({
+    required String saleId,
+    required int totalTenge,
+  }) async {
+    try {
+      final resp = await _client.patch(
+        _rest('sales', {'id': 'eq.$saleId'}),
+        headers: _headers,
+        body: jsonEncode({'amount': totalTenge, 'status': 'completed'}),
+      ).timeout(const Duration(seconds: 10));
+      if (resp.statusCode < 200 || resp.statusCode >= 300) {
+        debugPrint('[completeSale] PATCH failed: '
+            'HTTP ${resp.statusCode} ${resp.body}');
+      }
+    } catch (e) {
+      debugPrint('[completeSale] exception: $e');
+    }
+  }
+
   /// Insert a sale + its items. Returns the new sale id, or null on error.
   /// [items] should already be filtered to items the customer paid for —
   /// failed dispenses still get recorded so owner sees them.
@@ -360,7 +476,15 @@ class SupabaseApi {
             'product_id': productId,
             'price': r.product.priceTenge,
             'quantity': 1,
-            'dispensed': r.success,
+            'dispensed': r.outcome == DispenseOutcome.ok,
+            // Diagnostics so the admin receipt can print a specific
+            // reason ("Перегрузка мотора" etc.) via RESULT_CODE_I18N,
+            // falling back to the free-form message when no poll byte
+            // arrived.
+            if (r.outcome == DispenseOutcome.failed && r.resultCode != null)
+              'result_code': r.resultCode,
+            if (r.outcome == DispenseOutcome.failed && r.message.isNotEmpty)
+              'result_message': r.message,
           }),
         ).timeout(const Duration(seconds: 8));
         if (itemResp.statusCode < 200 || itemResp.statusCode >= 300) {

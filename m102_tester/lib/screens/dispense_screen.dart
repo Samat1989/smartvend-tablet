@@ -7,6 +7,7 @@ import 'package:provider/provider.dart';
 import '../board/board_client.dart';
 import '../models/cart.dart';
 import '../models/product.dart';
+import '../services/climate_controller.dart';
 import '../services/device_storage.dart';
 import '../services/strings.dart';
 import '../services/supabase_api.dart';
@@ -90,84 +91,189 @@ class _DispenseScreenState extends State<DispenseScreen>
     super.dispose();
   }
 
+  /// Hard cap on a single slot's dispense call. The board client has its
+  /// own 20-second overall timeout, but in the field we've seen the await
+  /// hang past several minutes — likely a stuck `_port.write` in the
+  /// CH340 driver layer that prevents the inner timer from completing
+  /// the future. This outer wrapper guarantees the loop moves on.
+  ///
+  /// Generous enough (35s) that a legitimate slow motor + curtain
+  /// confirmation won't trip it; tight enough that a hung port stops
+  /// blocking the rest of the receipt within ~half a minute.
+  static const _slotHardTimeout = Duration(seconds: 35);
+
   Future<void> _runQueue() async {
     final svc = context.read<VendingService>();
     final board = context.read<BoardClient>();
+    final climate = context.read<ClimateController>();
     final sensor = context.read<DeviceStorage>().dispenseSensorMode;
-
-    for (var i = 0; i < _queue.length; i++) {
-      if (!mounted) return;
-      setState(() => _currentIndex = i);
-      final product = _queue[i];
-      // Resolve motor IDs via the operator-built layout: twin spirals
-      // map one product to multiple motors, all of which must fire.
-      // Fallback to the bare product.motorId for backward compat when
-      // the layout doesn't list this motor yet.
-      final slot = svc.layout.slotForMotor(product.motorId);
-      final motorIds = slot?.motorIds ?? [product.motorId];
-      final DispenseResult r;
-      // Debug builds with no live board fake a successful dispense so
-      // the payment / receipt UI can be walked through end-to-end on
-      // a tablet that isn't wired up. Production / release paths
-      // always go through the real M102 protocol below.
-      if (kDebugMode && !board.isConnected) {
-        await Future<void>.delayed(const Duration(milliseconds: 800));
-        r = DispenseResult(
-          success: true,
-          message: 'DEBUG: mocked dispense OK',
-        );
-      } else {
-        r = await board.dispenseSlot(
-          motorIds,
-          type: product.motorType,
-          curtain: sensor,
-        );
-      }
-      if (!mounted) return;
-      final step = DispenseStepResult(
-        product: product,
-        success: r.success,
-        message: r.message,
-        resultCode: r.finalStatus?.result,
-      );
-      setState(() {
-        _results[i] = step;
-        _currentIndex = null;
-      });
-      // Optimistically decrement the local stock on success so subsequent
-      // refresh shows the right number.
-      if (r.success) {
-        svc.replaceProduct(
-          product.copyWith(stock: product.stock - 1),
-        );
-      }
-    }
-
-    if (!mounted) return;
-    setState(() {
-      _done = true;
-      _saving = true;
-    });
-    await _recordSale(svc);
-    if (!mounted) return;
-    setState(() => _saving = false);
-    _startReturnCountdown();
-  }
-
-  Future<void> _recordSale(VendingService svc) async {
     final storage = context.read<DeviceStorage>();
     final machid = storage.machid;
     final paymentId = svc.consumePaymentId();
-    if (machid == null || paymentId == null || _results.isEmpty) return;
-    final total = _results.values
-        .where((r) => r.success)
-        .fold<int>(0, (s, r) => s + r.product.priceTenge);
-    await _api.recordSale(
-      machid: machid,
-      totalTenge: total,
-      paymentId: paymentId,
-      items: _results.values.toList(),
-    );
+
+    // Stop climate's periodic sensor polls / compressor-toggle writeDo
+    // frames for the duration of the sale. The M102 board has a single
+    // shared serial bus; if a `readTemp` frame races a `motorRun` or
+    // `poll`, both sides end up parsing the wrong response and a
+    // dispense can hang past its 35-second hard timeout. Compressor /
+    // fan relays keep whatever state they were in — we don't power-cycle
+    // them per sale; climate catches up automatically on resume.
+    climate.pauseForDispense();
+
+    try {
+      // Create the sale row up-front (status='in_progress'). This means
+      // every item we dispense can be persisted immediately as it
+      // finishes — so even if the planshet hangs / crashes mid-queue,
+      // the operator sees a partial receipt in the admin (with the items
+      // that were dispensed before the hang).
+      String? saleId;
+      if (machid != null && paymentId != null) {
+        saleId = await _api.createSale(
+          machid: machid,
+          paymentId: paymentId,
+          expectedTotalTenge: svc.cartTotalTenge,
+        );
+      }
+
+      for (var i = 0; i < _queue.length; i++) {
+        if (!mounted) return;
+        final product = _queue[i];
+
+        // If the board went offline (cable yanked, power loss, etc.),
+        // don't waste 35 seconds per remaining item waiting for the
+        // hard timeout — the motor can't have run, so the dispense is
+        // a definite failure. Mark all remaining items as failed and
+        // jump straight to sale completion / refund. This is the
+        // autonomous-machine choice: nobody can come check the bin, so
+        // bias toward the customer and refund the full unpaid balance.
+        if (!board.isHealthy) {
+          for (var j = i; j < _queue.length; j++) {
+            final p = _queue[j];
+            final step = DispenseStepResult(
+              product: p,
+              outcome: DispenseOutcome.failed,
+              message: 'Связь с платой потеряна — возврат средств',
+            );
+            _results[j] = step;
+            if (saleId != null) {
+              unawaited(_api.recordSaleItem(saleId: saleId, step: step));
+            }
+          }
+          if (!mounted) return;
+          setState(() => _currentIndex = null);
+          break;
+        }
+
+        setState(() => _currentIndex = i);
+        // Resolve motor IDs via the operator-built layout: twin spirals
+        // map one product to multiple motors, all of which must fire.
+        // Fallback to the bare product.motorId for backward compat when
+        // the layout doesn't list this motor yet.
+        final slot = svc.layout.slotForMotor(product.motorId);
+        final motorIds = slot?.motorIds ?? [product.motorId];
+        DispenseResult r;
+        // Debug builds with no live board fake a successful dispense so
+        // the payment / receipt UI can be walked through end-to-end on
+        // a tablet that isn't wired up. Production / release paths
+        // always go through the real M102 protocol below.
+        if (kDebugMode && !board.isConnected) {
+          await Future<void>.delayed(const Duration(milliseconds: 800));
+          r = DispenseResult(
+            success: true,
+            message: 'DEBUG: mocked dispense OK',
+          );
+        } else {
+          try {
+            r = await board
+                .dispenseSlot(motorIds,
+                    type: product.motorType, curtain: sensor)
+                .timeout(_slotHardTimeout);
+          } on TimeoutException {
+            // Board didn't acknowledge in 35s. We don't know whether the
+            // motor physically turned, but for an autonomous vending
+            // machine the safe default is `failed` → refund. Better to
+            // occasionally pay out for a product the customer kept than
+            // leave a paying customer empty-handed with no recourse.
+            r = DispenseResult(
+              success: false,
+              message: 'Превышено время выдачи',
+            );
+          }
+        }
+        if (!mounted) return;
+        final outcome =
+            r.success ? DispenseOutcome.ok : DispenseOutcome.failed;
+        final step = DispenseStepResult(
+          product: product,
+          outcome: outcome,
+          message: r.message,
+          resultCode: r.finalStatus?.result,
+        );
+        setState(() {
+          _results[i] = step;
+          _currentIndex = null;
+        });
+        // Optimistically decrement the local stock on success so a
+        // subsequent refresh shows the right number.
+        if (outcome == DispenseOutcome.ok) {
+          svc.replaceProduct(
+            product.copyWith(stock: product.stock - 1),
+          );
+        }
+        // Persist this item immediately. Unawaited so a slow / hung
+        // Supabase doesn't push the next motor's dispense behind it —
+        // order of inserts isn't load-bearing for the admin.
+        if (saleId != null) {
+          unawaited(_api.recordSaleItem(saleId: saleId, step: step));
+        }
+      }
+
+      if (!mounted) return;
+      setState(() {
+        _done = true;
+        _saving = true;
+      });
+      await _finalizeSale(svc, saleId);
+      if (!mounted) return;
+      setState(() => _saving = false);
+      _startReturnCountdown();
+    } finally {
+      // Always resume — even on early return / exception — so a stuck
+      // dispense doesn't permanently freeze the climate loop.
+      unawaited(climate.resumeFromDispense());
+    }
+  }
+
+  /// Wrap up the sale row: PATCH status to `completed` and set the final
+  /// amount (only successful items count toward what the customer paid).
+  /// Also reloads stock + clears the cart. Safe to call with [saleId]
+  /// null — that just means the upfront insert failed (no network, RLS
+  /// regression, etc.), and we fall back to a single recordSale call so
+  /// at least the legacy code path still records *something*.
+  Future<void> _finalizeSale(VendingService svc, String? saleId) async {
+    final storage = context.read<DeviceStorage>();
+    final machid = storage.machid;
+    final paymentId = svc.consumePaymentId();
+
+    if (saleId != null) {
+      final finalAmount = _results.values
+          .where((r) => r.outcome == DispenseOutcome.ok)
+          .fold<int>(0, (s, r) => s + r.product.priceTenge);
+      await _api.completeSale(saleId: saleId, totalTenge: finalAmount);
+    } else if (machid != null && paymentId != null && _results.isNotEmpty) {
+      // Fallback: upfront insert failed, so do the legacy "all at end"
+      // path. Loses partial-state guarantees but still records the sale.
+      final total = _results.values
+          .where((r) => r.outcome == DispenseOutcome.ok)
+          .fold<int>(0, (s, r) => s + r.product.priceTenge);
+      await _api.recordSale(
+        machid: machid,
+        totalTenge: total,
+        paymentId: paymentId,
+        items: _results.values.toList(),
+      );
+    }
+
     await svc.reload(silent: true);
     // Cart is "consumed" by dispense — the items should disappear from
     // the previous screen if the customer returns to it.
@@ -175,7 +281,8 @@ class _DispenseScreenState extends State<DispenseScreen>
   }
 
   void _startReturnCountdown() {
-    final hasFails = _results.values.any((r) => !r.success);
+    final hasFails =
+        _results.values.any((r) => r.outcome == DispenseOutcome.failed);
     setState(() {
       _returnSecondsLeft =
           hasFails ? _returnSecondsWithFailure : _returnSecondsOk;
@@ -200,12 +307,14 @@ class _DispenseScreenState extends State<DispenseScreen>
   }
 
   // ---------- aggregates for the header / banner ----------
-  int get _deliveredCount =>
-      _results.values.where((r) => r.success).length;
-  int get _failedCount =>
-      _results.values.where((r) => !r.success).length;
+  int get _deliveredCount => _results.values
+      .where((r) => r.outcome == DispenseOutcome.ok)
+      .length;
+  int get _failedCount => _results.values
+      .where((r) => r.outcome == DispenseOutcome.failed)
+      .length;
   int get _refundTenge => _results.values
-      .where((r) => !r.success)
+      .where((r) => r.outcome == DispenseOutcome.failed)
       .fold(0, (s, r) => s + r.product.priceTenge);
 
   @override
@@ -291,7 +400,7 @@ class _DispenseScreenState extends State<DispenseScreen>
     if (_currentIndex == index) return _DispenseCardState.dispensing;
     final r = _results[index];
     if (r == null) return _DispenseCardState.pending;
-    return r.success
+    return r.outcome == DispenseOutcome.ok
         ? _DispenseCardState.success
         : _DispenseCardState.failed;
   }
@@ -326,7 +435,7 @@ class _Header extends StatelessWidget {
       icon = Icons.check_circle;
       tint = const Color(0xFF2E7D32);
       title = s.t('dispense_done');
-    } else if (failed == delivered + failed) {
+    } else if (delivered == 0) {
       icon = Icons.error_outline;
       tint = const Color(0xFFB3261E);
       title = s.t('dispense_failed');
@@ -335,6 +444,8 @@ class _Header extends StatelessWidget {
       tint = const Color(0xFFFF9F0A);
       title = s.t('dispense_partial');
     }
+    final summary = StringBuffer('Выдано $delivered');
+    if (failed > 0) summary.write(' · Возврат $failed');
     return Column(
       children: [
         Container(
@@ -362,7 +473,7 @@ class _Header extends StatelessWidget {
         const SizedBox(height: 6),
         if (done)
           Text(
-            'Выдано $delivered · Возврат $failed',
+            summary.toString(),
             style: const TextStyle(
               color: AppColors.iosGray,
               fontSize: 13,

@@ -266,7 +266,7 @@ class VendingService extends ChangeNotifier {
         }
         yield DispenseStepResult(
           product: item.product,
-          success: r.success,
+          outcome: r.success ? DispenseOutcome.ok : DispenseOutcome.failed,
           message: r.message,
           resultCode: r.finalStatus?.result,
         );

@@ -14,6 +14,7 @@ class DeviceStorage extends ChangeNotifier {
   static const _kClimateMode = 'climate_mode';
   static const _kClimateSetpoint = 'climate_setpoint';
   static const _kClimateLight = 'climate_light_always_on';
+  static const _kClimateHasGlassHeater = 'climate_has_glass_heater';
   static const _kUseM102Password = 'use_m102_password';
   static const _kMachineLayout = 'machine_layout_v1';
   static const _defaultPin = '1234';
@@ -21,6 +22,7 @@ class DeviceStorage extends ChangeNotifier {
   static const _defaultDispenseSensorMode = 1; // sensor required by default
   static const _defaultClimateSetpoint = 6.0;
   static const _defaultClimateLightOn = true;
+  static const _defaultClimateHasGlassHeater = true;
   // — most installs have the IR curtain wired, so refund-on-no-drop is
   // the safer default for production. Operator can turn it off from the
   // inventory screen for machines without a sensor.
@@ -68,6 +70,10 @@ class DeviceStorage extends ChangeNotifier {
   /// Whether the LED strip stays on regardless of climate state.
   bool get climateLightAlwaysOn =>
       _prefs.getBool(_kClimateLight) ?? _defaultClimateLightOn;
+
+  /// Whether this cabinet has a glass-heater wired to DO #2.
+  bool get climateHasGlassHeater =>
+      _prefs.getBool(_kClimateHasGlassHeater) ?? _defaultClimateHasGlassHeater;
 
   /// Whether [BoardClient] should mix the 11-byte M102 "password" into
   /// the outgoing CRC. `null` means "never probed yet" — BoardClient
@@ -151,10 +157,12 @@ class DeviceStorage extends ChangeNotifier {
     required String modeName,
     required double setpointC,
     required bool lightAlwaysOn,
+    required bool hasGlassHeater,
   }) async {
     await _prefs.setString(_kClimateMode, modeName);
     await _prefs.setDouble(_kClimateSetpoint, setpointC);
     await _prefs.setBool(_kClimateLight, lightAlwaysOn);
+    await _prefs.setBool(_kClimateHasGlassHeater, hasGlassHeater);
     notifyListeners();
   }
 }

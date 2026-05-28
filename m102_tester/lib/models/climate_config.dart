@@ -29,21 +29,31 @@ class ClimateConfig {
   final ClimateMode mode;
   final double setpointC;
   final bool lightAlwaysOn;
+  /// Whether this cabinet has a glass-heater (anti-fog) element wired to
+  /// DO #2. Default true because the factory cooler ships with one; set
+  /// false from the climate screen for machines where the relay exists
+  /// but no heater is physically attached — keeps that relay idle so it
+  /// doesn't fire alongside the compressor (which can brown-out the USB
+  /// bus and trigger the BoardClient self-heal cascade).
+  final bool hasGlassHeater;
 
   const ClimateConfig({
     this.mode = ClimateMode.cooling,
     this.setpointC = 6.0,
     this.lightAlwaysOn = true,
+    this.hasGlassHeater = true,
   });
 
   ClimateConfig copyWith({
     ClimateMode? mode,
     double? setpointC,
     bool? lightAlwaysOn,
+    bool? hasGlassHeater,
   }) =>
       ClimateConfig(
         mode: mode ?? this.mode,
         setpointC: setpointC ?? this.setpointC,
         lightAlwaysOn: lightAlwaysOn ?? this.lightAlwaysOn,
+        hasGlassHeater: hasGlassHeater ?? this.hasGlassHeater,
       );
 }

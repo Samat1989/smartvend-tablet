@@ -1,10 +1,15 @@
 import 'dart:async';
+import 'dart:developer' as developer;
 
 import 'package:flutter/foundation.dart';
 
 import '../board/board_client.dart';
 import '../models/climate_config.dart';
 import 'device_storage.dart';
+
+void _clog(String msg) {
+  developer.log(msg, name: 'Climate');
+}
 
 enum CompressorPhase {
   idle,         // climate off, or in-band (between hysteresis bounds)
@@ -48,6 +53,7 @@ class ClimateController extends ChangeNotifier {
       mode: mode,
       setpointC: _storage.climateSetpoint,
       lightAlwaysOn: _storage.climateLightAlwaysOn,
+      hasGlassHeater: _storage.climateHasGlassHeater,
     );
   }
 
@@ -125,11 +131,41 @@ class ClimateController extends ChangeNotifier {
 
   Timer? _tempTimer;
   Timer? _humidityTimer;
+  Timer? _uiTimer; // 1 Hz — only re-renders countdown text, no I/O.
+  DateTime? _warmupEndsAt; // when the current fan spinup will allow the compressor
 
   bool _started = false;
   bool get isRunning => _started;
 
+  /// Set by [pauseForDispense] while a sale is in progress, cleared by
+  /// [resumeFromDispense]. Periodic sensor polls and `_evaluate` are
+  /// skipped while this is true so we don't fire `readTemp` / `readHumidity`
+  /// / compressor `writeDo` frames on the same serial bus the dispense
+  /// motor commands need exclusive access to. Compressor / fan relays
+  /// keep whatever state they had — we don't power-cycle them per sale.
+  bool _pausedForDispense = false;
+  bool get isPausedForDispense => _pausedForDispense;
+
   // -------------------------------------------------------------- public API
+
+  /// Freeze sensor polling for the duration of a dispense / sale. The
+  /// dispense screen calls this in `initState` and pairs it with
+  /// [resumeFromDispense] in `dispose` (or after the cycle finishes).
+  /// Idempotent — second call is a no-op.
+  void pauseForDispense() {
+    if (_pausedForDispense) return;
+    _pausedForDispense = true;
+    _clog('paused for dispense');
+  }
+
+  /// Resume sensor polling. Triggers an immediate evaluate so the
+  /// compressor catches up if temperature drifted while we were paused.
+  Future<void> resumeFromDispense() async {
+    if (!_pausedForDispense) return;
+    _pausedForDispense = false;
+    _clog('resumed from dispense');
+    if (_started) await _evaluate();
+  }
 
   void updateConfig(ClimateConfig next) {
     final modeChanged = _config.mode != next.mode;
@@ -148,6 +184,7 @@ class ClimateController extends ChangeNotifier {
       modeName: clamped.mode.name,
       setpointC: clamped.setpointC,
       lightAlwaysOn: clamped.lightAlwaysOn,
+      hasGlassHeater: clamped.hasGlassHeater,
     );
     notifyListeners();
     if (modeChanged) {
@@ -198,6 +235,7 @@ class ClimateController extends ChangeNotifier {
   void _scheduleTimers() {
     _tempTimer = Timer.periodic(Duration(seconds: _tempPollSec), (_) async {
       if (!_started) return;
+      if (_pausedForDispense) return;
       if (board.isConnected) {
         _temperatureC = await board.readTemp();
       }
@@ -206,10 +244,23 @@ class ClimateController extends ChangeNotifier {
     });
     _humidityTimer = Timer.periodic(Duration(seconds: _humidityPollSec), (_) async {
       if (!_started) return;
+      if (_pausedForDispense) return;
       if (board.isConnected) {
         _humidityPercent = await board.readHumidity();
       }
       await _runHumidityLoop();
+      notifyListeners();
+    });
+    // UI countdown: ticks every second while we're in fan-warmup phase,
+    // refreshes _statusMessage with the remaining seconds and notifies
+    // listeners. Pure UI — no board I/O.
+    _uiTimer = Timer.periodic(const Duration(seconds: 1), (_) {
+      if (!_started) return;
+      if (_phase != CompressorPhase.warmingFan) return;
+      if (_warmupEndsAt == null) return;
+      final left = _warmupEndsAt!.difference(DateTime.now()).inSeconds;
+      if (left <= 0) return;
+      _setMessage('Продувка перед компрессором: ещё $left с');
       notifyListeners();
     });
   }
@@ -217,8 +268,10 @@ class ClimateController extends ChangeNotifier {
   void _cancelTimers() {
     _tempTimer?.cancel();
     _humidityTimer?.cancel();
+    _uiTimer?.cancel();
     _tempTimer = null;
     _humidityTimer = null;
+    _uiTimer = null;
   }
 
   // ----------------------------------------------------------- main logic
@@ -227,6 +280,7 @@ class ClimateController extends ChangeNotifier {
     await _applyLight();
 
     if (!board.isConnected) {
+      _clog('evaluate: board NOT connected — skipping');
       _setMessage('Нет связи с платой');
       return;
     }
@@ -239,7 +293,7 @@ class ClimateController extends ChangeNotifier {
     }
 
     if (_temperatureC == null) {
-      // No probe → safety: turn cooling/heating off, fan off too.
+      _clog('evaluate: no temperature reading');
       await _allClimateOff();
       _setPhase(CompressorPhase.noProbe);
       _setMessage('Нет данных от датчика температуры');
@@ -248,6 +302,10 @@ class ClimateController extends ChangeNotifier {
 
     final temp = _temperatureC!;
     final setpoint = _config.setpointC;
+    _clog('tick mode=${_config.mode.name} temp=${temp.toStringAsFixed(1)} '
+        'set=${setpoint.toStringAsFixed(1)} phase=${_phase.name} '
+        'fan=$_fanOn comp=$_compressorOn spin=$_spinupTicks '
+        'hasRun=$_compressorHasRunThisSession');
 
     if (_config.mode == ClimateMode.cooling) {
       await _coolingTick(temp, setpoint);
@@ -300,27 +358,36 @@ class ClimateController extends ChangeNotifier {
       await _setDo(DoChannel.heaterModule, false);
     }
 
-    if (!_fanOn) {
-      // Step 1: fan first.
-      await _setDo(DoChannel.fan, true);
-      _setPhase(CompressorPhase.warmingFan);
-      _setMessage('Запуск охлаждения: вентилятор включён');
-      return;
-    }
-
     // Compressor branch. Use 5 min spin-up only on the very first
     // start of the session (cold compressor + condenser); 2 min on
     // every subsequent cycle. Mirrors the factory app.
     final spinupTarget = _compressorHasRunThisSession
         ? _coolingSpinupTicksWarm
         : _coolingSpinupTicksFirst;
+
+    if (!_fanOn) {
+      // Step 1: fan first. Set the warmup deadline so the 1 Hz UI
+      // timer can count down without needing the 10 s sensor poll.
+      await _setDo(DoChannel.fan, true);
+      _setPhase(CompressorPhase.warmingFan);
+      _warmupEndsAt = DateTime.now()
+          .add(Duration(seconds: spinupTarget * _tempPollSec));
+      _setMessage('Циркуляция воздуха перед компрессором');
+      return;
+    }
     if (!_compressorOn) {
       _spinupTicks++;
       if (_spinupTicks > spinupTarget) {
+        _clog('FIRING compressor relay (spinup done after $_spinupTicks ticks)');
         await _setDo(DoChannel.compressor, true);
         _compressorHasRunThisSession = true;
-        // Glass heater follows compressor unless humidity loop owns it.
-        if (!hasHumiditySensor) {
+        _warmupEndsAt = null;
+        // Glass heater follows compressor unless humidity loop owns it,
+        // and only if the cabinet actually has a heater wired. Some
+        // machines have the DO #2 relay but no heater attached — firing
+        // it then just creates an extra inrush spike for nothing.
+        if (_config.hasGlassHeater && !hasHumiditySensor) {
+          _clog('FIRING glass heater relay');
           await _setDo(DoChannel.glassHeater, true);
         }
         _compressorStartedAt = DateTime.now();
@@ -331,7 +398,7 @@ class ClimateController extends ChangeNotifier {
         final ticksLeft = spinupTarget - _spinupTicks;
         final secLeft = ticksLeft * _tempPollSec;
         _setPhase(CompressorPhase.warmingFan);
-        _setMessage('Прогрев вентилятора: ещё $secLeft с');
+        _setMessage('Циркуляция перед компрессором: ещё $secLeft с');
       }
     } else {
       // Compressor already running — check forced-rest threshold.
@@ -370,7 +437,9 @@ class ClimateController extends ChangeNotifier {
     // Factory M102_StartHeating: compressor off, fan on, then heater module.
     if (_compressorOn) {
       await _setDo(DoChannel.compressor, false);
-      if (!hasHumiditySensor) await _setDo(DoChannel.glassHeater, false);
+      if (_config.hasGlassHeater && !hasHumiditySensor) {
+        await _setDo(DoChannel.glassHeater, false);
+      }
     }
 
     if (!_fanOn) {
@@ -387,7 +456,7 @@ class ClimateController extends ChangeNotifier {
             '${setpoint.toStringAsFixed(1)}°C');
       } else {
         final ticksLeft = _heatingSpinupTicks - _spinupTicks;
-        _setMessage('Прогрев перед нагревателем: '
+        _setMessage('Циркуляция перед нагревателем: '
             'ещё ${ticksLeft * _tempPollSec} с');
       }
     } else {
@@ -398,6 +467,7 @@ class ClimateController extends ChangeNotifier {
 
   Future<void> _runHumidityLoop() async {
     if (!board.isConnected) return;
+    if (!_config.hasGlassHeater) return; // no physical heater to drive
     if (!hasHumiditySensor) {
       // No sensor → glass heater is owned by the cooling cycle.
       return;
@@ -419,7 +489,11 @@ class ClimateController extends ChangeNotifier {
 
   Future<void> _setDo(DoChannel ch, bool on) async {
     final ok = await board.writeDo(ch.id, on);
-    if (!ok) return;
+    if (!ok) {
+      _clog('writeDo ${ch.name} → $on FAILED');
+      return;
+    }
+    _clog('writeDo ${ch.name} → $on ok');
     switch (ch) {
       case DoChannel.fan:
         _fanOn = on;

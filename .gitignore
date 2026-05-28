@@ -23,6 +23,12 @@ _patch_tmp/
 key.properties
 **/android/key.properties
 
+# --- Release credentials (NEVER commit) ---------------------------------
+# Personal Access Token used by release.ps1. Fine-grained PAT scoped to
+# `Contents: read+write` on Samat1989/smartvend-tablet. See header of
+# release.ps1 for setup instructions.
+.github_token
+
 # Third-party tooling jars (downloaded separately when needed).
 apktool*.jar
 uber-apk-signer*.jar
