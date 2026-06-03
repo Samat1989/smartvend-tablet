@@ -216,9 +216,20 @@ class ServiceMenuScreen extends StatelessWidget {
         ],
       ),
     );
-    if (ok == true && ctrl.text.trim().length >= 4 && context.mounted) {
-      await context.read<DeviceStorage>().setServicePin(ctrl.text.trim());
+    if (ok != true || !context.mounted) return;
+    final pin = ctrl.text.trim();
+    final reason = DeviceStorage.validatePin(pin);
+    if (reason != null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(reason), backgroundColor: Colors.redAccent),
+      );
+      return;
     }
+    await context.read<DeviceStorage>().setServicePin(pin);
+    if (!context.mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('PIN изменён'), backgroundColor: Colors.green),
+    );
   }
 
   /// Pops a confirmation, then calls into the Android side to stop lock

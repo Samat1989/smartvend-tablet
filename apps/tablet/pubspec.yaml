@@ -40,6 +40,10 @@ dependencies:
   shared_preferences: ^2.3.2
   http: ^1.2.2
   crypto: ^3.0.5
+  # Android Keystore-backed storage for the SmartVend secret + service PIN
+  # (audit F3 — previously plaintext in SharedPreferences). Uses Jetpack
+  # EncryptedSharedPreferences under the hood.
+  flutter_secure_storage: ^9.2.2
   # Disk-persistent image cache (keyed by URL). Product image URLs change
   # whenever the image is replaced (admin uploads under a fresh random
   # filename), so URL-keyed caching self-invalidates — the catalog renders
