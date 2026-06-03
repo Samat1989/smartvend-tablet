@@ -1,0 +1,153 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ScrollView
+    xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="#FAFAFA">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:padding="20dp">
+
+        <!-- Заголовок -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal"
+            android:gravity="center_vertical"
+            android:layout_marginBottom="24dp">
+
+            <Button
+                android:id="@+id/btnBack"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="← Назад"
+                android:textSize="13sp"
+                android:backgroundTint="#ECEFF1"
+                android:textColor="#37474F"
+                android:layout_marginEnd="12dp" />
+
+            <TextView
+                android:id="@+id/tvTitle"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="Редактировать товар"
+                android:textSize="18sp"
+                android:textStyle="bold" />
+
+        </LinearLayout>
+
+        <!-- Фото -->
+        <FrameLayout
+            android:layout_width="120dp"
+            android:layout_height="120dp"
+            android:layout_gravity="center_horizontal"
+            android:layout_marginBottom="8dp">
+
+            <ImageView
+                android:id="@+id/ivPreview"
+                android:layout_width="120dp"
+                android:layout_height="120dp"
+                android:scaleType="centerCrop"
+                android:background="#ECEFF1"
+                android:visibility="gone" />
+
+            <TextView
+                android:id="@+id/tvEmojiPreview"
+                android:layout_width="120dp"
+                android:layout_height="120dp"
+                android:gravity="center"
+                android:textSize="56sp"
+                android:background="#ECEFF1" />
+
+        </FrameLayout>
+
+        <Button
+            android:id="@+id/btnPickImage"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_gravity="center_horizontal"
+            android:text="📷 Выбрать фото"
+            android:backgroundTint="#ECEFF1"
+            android:textColor="#37474F"
+            android:layout_marginBottom="24dp" />
+
+        <!-- Название -->
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="Название"
+            android:textSize="14sp"
+            android:textColor="#757575"
+            android:layout_marginBottom="4dp" />
+
+        <EditText
+            android:id="@+id/etName"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:inputType="text"
+            android:hint="Название товара"
+            android:layout_marginBottom="16dp" />
+
+        <!-- Эмодзи -->
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="Эмодзи (если нет фото)"
+            android:textSize="14sp"
+            android:textColor="#757575"
+            android:layout_marginBottom="4dp" />
+
+        <EditText
+            android:id="@+id/etEmoji"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:inputType="text"
+            android:hint="🍎"
+            android:layout_marginBottom="16dp" />
+
+        <!-- Цена -->
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="Цена (тенге)"
+            android:textSize="14sp"
+            android:textColor="#757575"
+            android:layout_marginBottom="4dp" />
+
+        <EditText
+            android:id="@+id/etPrice"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:inputType="number"
+            android:hint="100"
+            android:layout_marginBottom="16dp" />
+
+        <!-- Остаток -->
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="Остаток (шт)"
+            android:textSize="14sp"
+            android:textColor="#757575"
+            android:layout_marginBottom="4dp" />
+
+        <EditText
+            android:id="@+id/etStock"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:inputType="number"
+            android:hint="10"
+            android:layout_marginBottom="32dp" />
+
+        <Button
+            android:id="@+id/btnSave"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Сохранить"
+            android:textSize="16sp" />
+
+    </LinearLayout>
+</ScrollView>

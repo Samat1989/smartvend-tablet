@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="primary">#FF6B00</color> <!-- Citrus Snap Orange -->
+    <color name="primary_dark">#E66000</color>
+    <color name="accent">#FF6B00</color>
+    
+    <color name="surface_bg">#F9F5F2</color> <!-- Warm Background from Web -->
+    <color name="surface_card">#FFFFFF</color>
+    
+    <color name="text_main">#1A1A1A</color>
+    <color name="text_secondary">#4A4A4A</color>
+    <color name="text_hint">#9E9E9E</color>
+    
+    <color name="success">#388E3C</color>
+    <color name="divider">#ECE0D5</color>
+    
+    <color name="white">#FFFFFFFF</color>
+    <color name="black">#FF000000</color>
+</resources>

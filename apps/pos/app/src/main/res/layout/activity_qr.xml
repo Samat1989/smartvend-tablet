@@ -1,0 +1,286 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ScrollView
+    xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@color/surface_bg">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:padding="32dp">
+
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/btnBack"
+            style="@style/Widget.MaterialComponents.Button.TextButton"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="← Назад к покупкам"
+            android:textColor="@color/text_secondary"
+            android:layout_marginBottom="32dp" />
+
+        <TextView
+            android:id="@+id/tvProductName"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:textSize="28sp"
+            android:textStyle="bold"
+            android:textColor="@color/text_main"
+            android:layout_marginBottom="8dp" />
+
+        <TextView
+            android:id="@+id/tvProductPrice"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:textSize="40sp"
+            android:textStyle="bold"
+            android:textColor="@color/primary"
+            android:layout_marginBottom="48dp" />
+
+        <!-- Выбор способа оплаты -->
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="Выберите способ оплаты"
+            android:textSize="14sp"
+            android:textAllCaps="true"
+            android:letterSpacing="0.1"
+            android:textStyle="bold"
+            android:textColor="@color/text_secondary"
+            android:layout_marginBottom="20dp" />
+
+        <!-- Kaspi QR Card -->
+        <com.google.android.material.card.MaterialCardView
+            android:id="@+id/cardKaspi"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginBottom="16dp"
+            app:cardCornerRadius="24dp"
+            app:cardElevation="2dp"
+            app:strokeWidth="1dp"
+            app:strokeColor="@color/divider">
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal"
+                android:gravity="center_vertical"
+                android:padding="24dp">
+
+                <TextView
+                    android:layout_width="56dp"
+                    android:layout_height="56dp"
+                    android:text="📱"
+                    android:gravity="center"
+                    android:background="#FFF1F0"
+                    android:textSize="32sp"
+                    android:layout_marginEnd="20dp" />
+
+                <LinearLayout
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:orientation="vertical">
+
+                    <TextView
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="Kaspi QR"
+                        android:textSize="20sp"
+                        android:textStyle="bold"
+                        android:textColor="@color/text_main" />
+
+                    <TextView
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="Оплата через приложение Kaspi.kz"
+                        android:textSize="14sp"
+                        android:textColor="@color/text_secondary" />
+
+                </LinearLayout>
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="›"
+                    android:textSize="28sp"
+                    android:textColor="@color/text_hint" />
+
+            </LinearLayout>
+
+        </com.google.android.material.card.MaterialCardView>
+
+        <!-- Карта Card -->
+        <com.google.android.material.card.MaterialCardView
+            android:id="@+id/cardCard"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginBottom="40dp"
+            app:cardCornerRadius="24dp"
+            app:cardElevation="2dp"
+            app:strokeWidth="1dp"
+            app:strokeColor="@color/divider">
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal"
+                android:gravity="center_vertical"
+                android:padding="24dp">
+
+                <TextView
+                    android:layout_width="56dp"
+                    android:layout_height="56dp"
+                    android:text="💳"
+                    android:gravity="center"
+                    android:background="#F0F7FF"
+                    android:textSize="32sp"
+                    android:layout_marginEnd="20dp" />
+
+                <LinearLayout
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:orientation="vertical">
+
+                    <TextView
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="Банковская карта"
+                        android:textSize="20sp"
+                        android:textStyle="bold"
+                        android:textColor="@color/text_main" />
+
+                    <TextView
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="Visa, Mastercard, Apple/Google Pay"
+                        android:textSize="14sp"
+                        android:textColor="@color/text_secondary" />
+
+                </LinearLayout>
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="›"
+                    android:textSize="28sp"
+                    android:textColor="@color/text_hint" />
+
+            </LinearLayout>
+
+        </com.google.android.material.card.MaterialCardView>
+
+        <!-- Kaspi QR блок -->
+        <LinearLayout
+            android:id="@+id/layoutKaspi"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:gravity="center_horizontal"
+            android:visibility="gone">
+
+            <com.google.android.material.card.MaterialCardView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                app:cardCornerRadius="32dp"
+                app:cardElevation="8dp"
+                android:layout_marginBottom="32dp"
+                app:strokeWidth="1dp"
+                app:strokeColor="@color/divider">
+
+                <FrameLayout
+                    android:layout_width="360dp"
+                    android:layout_height="360dp"
+                    android:padding="24dp"
+                    android:background="@color/white">
+
+                    <ProgressBar
+                        android:id="@+id/progressBar"
+                        android:layout_width="64dp"
+                        android:layout_height="64dp"
+                        android:layout_gravity="center"
+                        android:visibility="gone" />
+
+                    <ImageView
+                        android:id="@+id/ivQrCode"
+                        android:layout_width="match_parent"
+                        android:layout_height="match_parent"
+                        android:scaleType="fitCenter"
+                        android:visibility="gone" />
+                </FrameLayout>
+            </com.google.android.material.card.MaterialCardView>
+
+            <TextView
+                android:id="@+id/tvStatus"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:textSize="20sp"
+                android:textStyle="bold"
+                android:gravity="center"
+                android:textColor="@color/text_main"
+                android:layout_marginBottom="40dp" />
+
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/btnGenerateQr"
+                android:layout_width="wrap_content"
+                android:layout_height="64dp"
+                android:text="Повторить запрос"
+                android:visibility="gone"
+                app:cornerRadius="32dp"
+                app:backgroundTint="@color/primary"
+                android:textColor="@color/white"
+                android:paddingHorizontal="32dp" />
+
+        </LinearLayout>
+
+        <!-- Платеж картой заглушка -->
+        <LinearLayout
+            android:id="@+id/layoutCard"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:gravity="center"
+            android:visibility="gone">
+
+            <TextView
+                android:layout_width="100dp"
+                android:layout_height="100dp"
+                android:text="💳"
+                android:gravity="center"
+                android:background="#F0F7FF"
+                android:textSize="64sp"
+                android:layout_marginBottom="32dp" />
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="Приложите карту"
+                android:textSize="28sp"
+                android:textColor="@color/text_main"
+                android:textStyle="bold"
+                android:layout_marginBottom="8dp" />
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="К терминалу HalykPOS"
+                android:textSize="18sp"
+                android:textColor="@color/text_secondary"
+                android:layout_marginBottom="48dp" />
+
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/btnCardBack"
+                style="@style/Widget.MaterialComponents.Button.TextButton"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="← Выбрать другой способ"
+                android:textColor="@color/text_secondary"
+                android:textSize="14sp" />
+
+        </LinearLayout>
+
+    </LinearLayout>
+</ScrollView>

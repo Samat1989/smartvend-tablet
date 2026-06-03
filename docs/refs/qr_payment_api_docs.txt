@@ -1,0 +1,349 @@
+ 
+LE Machine Access to Third Party Payment 
+System Description Document 
+V2.3 
+ 
+ 
+ 
+ 
+ 
+ 
+Version 
+Date 
+Written by 
+Description 
+V1.0 
+2017.11.6 
+V1.1 
+2017.11.17 
+Revise sign 
+V1.2 
+2018.1.18 
+Correction of communication link 
+V1.3 
+2018.3.27 
+Adding and modifying 
+security mechanisms 
+V1.4 
+2018.03.28 
+Add third party order ID 
+V1.5 
+2018.03.30 
+Revise APPKEY 
+V1.6 
+2018.04.28 
+Increasing third-party 
+integral payment interface 
+V1.7 
+Fixed document structure 
+V1.8 
+2018.09.15 
+Amendment of Third Party 
+Payment Method 
+V1.9 
+2018.11.06 
+32-39 is defined as 
+third-party payment, using 
+36 by default. 
+V2.0 
+2018.11.10 
+Increase the original price 
+of goods when acquiring 
+the two-dimensional code 
+of the third-party payment 
+interface 
+V2.1 
+2019.01.05 
+Modified partial 
+description 
+V2.2 
+2019.10.25 
+Modified partial words 
+description 
+V2.3 
+2022.02.26 
+Add examples 
+ 
+ 
+ 
+Hangzhou Yile Shangyun Robot Technology Co., Ltd 
+
+ 
+ 
+1. Summary 
+This document can be further developed according to the specific business needs of the partners. 
+This document shall not be published without the confirmation and consent of both companies. 
+ 
+2. Noun Interpretation 
+ 
+Pick up code 
+Pickup code is a string of numbers 
+weburlA 
+Service provider's web QR code verification interface API interface 
+weburlB 
+The service provider's web sales confirmation notification 
+weburlC 
+The service provider's web obtains the payment result API interface 
+machid 
+Machine ID(11 bit characters) eg:99999999999 
+twocode 
+QR code 
+trackno 
+The track number (10 to 69 or other track identification number) 
+actually corresponds to the number of vending machine pallet tracks 
+for coffee machines and beverage machines starting from (01) 
+orderid 
+Order No. Characters less than 60 bits 
+torderid 
+Third Party Order Number Recommendation Available without Special Needs 
+ 
+ 
+3. Functional description 
+ 
+ 
+ 
+4. Supported models and software versions 
+ 
+model 
+Software version 
+Inhand 070 screen vending machines 
+Software needs customization 
+Coffee machine 
+Software needs customization 
+ 
+ 
+ 
+ 
+5. communication mode 
+ 
+character set：UTF-8 
+ 
+Adopt http, post mode。 
+ 
+Yile vending machine ->Operator Server 
+ 
+ 
+Vending 
+machine 
+(A) 
+Operator 
+Server(C) 
+
+ 
+Vending machine：
+terminal A Operator 
+Server：terminal C 
+ 
+6 .Interface specification 
+6.1 Obtaining Third Party Payment Code 
+ 
+Request URL 
+Transfer parameters 
+（terminal A 
+--->terminal C） 
+returned value 
+http://weburlA 
+ver=v1(Interface 
+version 
+number) 
+orderid=Order number（Less 
+than 60 bits） 
+machid=Machine ID Number 
+trackno=Track number 
+name=Trade name(UTF-8) 
+price=Price(Set price*100) 
+channelid=36 
+( 
+32:Third party payment 
+33:Third party payment 
+34:Third party payment 
+35:Third party payment 
+36:Third party 
+payment(default) 
+37:Third party payment 
+38:Third party payment 
+39:Third party payment 
+) 
+randstr=Random strings 
+timestamp=201803271343 
+sign=Authentication 
+signature 
+{"orderid":" Return of original value 
+","torderid":"third-party 
+system 
+ID","code":"0","msg":"message content 
+","twocode":"lksajfddkjdsflsjfsalkj"} 
+code( 0 Indicates a failure, and 
+needs to return when it fails. 
+msg 1 indicates successful 
+processing.) 
+twocode:QR code data 
+sign :Authentication signature refer to Chapter 7 for authentication methods 
+Official 
+environmental 
+address: 
+ 
+ 
+Request example: 
+{  
+  "ver": "v1",  
+  "orderid": "0000000000722022615564401910140",  
+  "machid": "00000000007",  
+"trackno": "15",  
+  "name": "可乐",  
+  "price": "400",  
+
+"channelid": "36",  
+"randstr": "pt9fygnwg68a6ktc",  
+"timestamp": "20220226155645",  
+"sign": "89fb5b7e3b319c57a4ca52bb0687565b862e39e3"  
+} 
+ 
+ 
+Return example: 
+{  
+  " code": "1",  
+  "orderid": "0000000000722022615564401910140",  
+  "torderid": "00000000007",  
+"msg": "成功",  
+"twocode": " 
+http://xxx/advertise.html?orderid=0000000000722022615564401910140&advurl=https://qr 
+.alipay.com/bax008886cy0lui4taof2570&goodsprice=0.01 "  
+}  
+ 
+ 
+ 
+ 
+6.2 Polling Payment Result Interface 
+ 
+Request URL 
+Transfer parameters 
+（terminal A 
+--->terminal C） 
+returned value 
+http://weburlC 
+ver=v1 
+(Interface version number) 
+orderid =Order number 
+torderid=Order number(Third 
+party ID) 
+machid=Machine ID number 
+channelid=Channel ID 
+(See the 6.1 interface.) 
+randstr=Random strings 
+timestamp=201803271343 
+sign=Authentication signature 
+{"orderid":"return of original value} 
+","torderid":"123","code":"0","msg":"me 
+ssage "} 
+Code : 0 means failure, need to return msg when 
+it fails 
+Code :1 Consumer payment success 
+Code :2 waiting for consumer payment 
+Code :3 means the transaction has expired 
+Code :4 means the transaction is closed 
+Code:5 
+means 
+the 
+transaction 
+has 
+been 
+completed 
+sign :Authentication signature refer to Chapter 7 for authentication methods 
+The transaction validity time is set by a third party, and the requester can set a waiting time of 1-5 minutes 
+without the consumer voluntarily withdrawing from the payment interface. 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+
+ 
+ 
+ 
+6.3 Delivery success or failure notification interface 
+ 
+Request URL 
+Passing parameters（A    end----> C end） 
+return value 
+http://weburlB 
+Ver=v1 
+(interface 
+version 
+number) 
+Orderid = order number (less 
+than 60 digits) 
+Torderid=order 
+number (third 
+party ID) 
+Machid=machine ID number 
+Trackno=track number 
+Status=0 or 1 
+(0 Shipment failure 1 Shipment 
+success) 
+Errinfo=Error Message (UTF-8) 
+Randstr=random string 
+Timestamp=201803271343 
+Sign=certification signature 
+{"orderid ":"return of original value 
+","torderid":"123","code":"0","msg":" 
+Message content"} 
+Code : 0 means failure, need to return msg 
+when it fails 
+Code :1 handling success 
+sign :Authentication signature refer to Chapter 7 for authentication methods 
+ 
+ 
+ 
+ 
+7.   Authentication method 
+In order to prevent the interface from being maliciously invoked, the server needs to verify 
+the data transmitted to the interface. The specific methods are as follows.： 
+1、Each machine is assigned an ID (called machid) and a key (appkey). The key is a string 
+consisting of 16 upper and lower case letters or numbers. Different machines have different 
+machids and keys. Define can be written in code or configuration file before leaving the factory. 
+2、There are three additional parameters to be transferred when calling any interface： 
+randstr：Random strings, also composed of 16 upper and lower case letters or numbers, should 
+be regenerated every time the interface is called. 
+timestamp：Machine local Unix timestamp, with a global standard time error of no more than  2 
+minutes. 
+sign：signature，generated as follows: 
+ 
+ 
+Here's an example of a machine request generating an order. For example, POST 
+parameters are: 
+appkey 
+1234567890abcdef 
+randstr 
+ok76oc1jkh2sy85o 
+timestamp 
+20190105144625 
+sign 
+81fd6a8d97e3b775828028371a0cc85d6678d39a 
+ 
+1）Dictionary  ordering  of  appkey,  timestamp  and  randstr. 
+2）’Sha1’  encryption  by  splicing  three  parameter  strings  into  one  string 
+
+First, the three parameters of appkey, timestamp and randstr are sorted by dictionary order, and 
+the string 1234567890abcdef 20190105144625 ok76oc1jkh2sy85o is obtained. 
+Then 
+the 
+string 
+is 
+encrypted 
+by 
+‘sha1’, 
+and 
+the 
+final 
+signature 
+is 
+81fd6a8d97e3b775828028371a0cc85d6678d39a. 

@@ -49,6 +49,30 @@ __pycache__/
 .venv/
 venv/
 
+# --- Node / web (apps/admin, apps/customer-qr) --------------------------
+node_modules/
+dist/
+.vercel/
+
+# --- Flutter / Dart build state -----------------------------------------
+**/build/
+.dart_tool/
+.flutter-plugins
+.flutter-plugins-dependencies
+**/android/local.properties
+**/android/.gradle/
+
+# --- Supabase CLI local state -------------------------------------------
+**/supabase/.temp/
+**/supabase/.branches/
+
+# --- Secrets / env (NEVER commit) ---------------------------------------
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
 # --- OS / editors -------------------------------------------------------
 .DS_Store
 Thumbs.db

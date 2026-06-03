@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(gradle --version)",
+      "Bash(java --version)",
+      "Bash(curl -s -X POST https://levending.smartvend.kz/payment_request -H 'Content-Type: application/json' -d '{\"ver\":\"v1\",\"orderid\":\"1000000002026040310304324g496\",\"machid\":\"100000000\",\"trackno\":\"01\",\"name\":\"Оплата\",\"price\":\"1000\",\"channelid\":\"36\",\"randstr\":\"24g496c5z66qvx6i\",\"timestamp\":\"20260403103043\",\"sign\":\"b3f7527c7e56390f7dc77d9dc1839732d0994e4d\"}')",
+      "Bash(curl -s -X POST https://levending.smartvend.kz/payment_request -d 'ver=v1&orderid=1000000002026040310304324g496&machid=100000000&trackno=01&name=%D0%9E%D0%BF%D0%BB%D0%B0%D1%82%D0%B0&price=1000&channelid=36&randstr=24g496c5z66qvx6i&timestamp=20260403103043&sign=b3f7527c7e56390f7dc77d9dc1839732d0994e4d')",
+      "Bash(curl -s -X POST https://levending.smartvend.kz/payment_request -d 'ver=v1&orderid=2064920260403103358rq55bq&machid=20649&trackno=01&name=%D0%9E%D0%BF%D0%BB%D0%B0%D1%82%D0%B0&price=100&channelid=36&randstr=rq55bqk2ahqr72t0&timestamp=20260403103358&sign=bd87867125fa94107bfab6f89670b8aad06a15ef')"
+    ]
+  }
+}

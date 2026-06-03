@@ -1,0 +1,73 @@
+<?xml version="1.0" encoding="utf-8"?>
+<FrameLayout
+    xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@color/surface_bg">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:orientation="vertical">
+
+        <!-- Modern Header -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:padding="32dp"
+            android:background="@color/surface_card">
+            
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="MICROMART"
+                android:textColor="@color/primary"
+                android:textSize="14sp"
+                android:textAllCaps="true"
+                android:letterSpacing="0.2"
+                android:textStyle="bold" />
+
+            <TextView
+                android:id="@+id/tvHeader"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="Свежие продукты"
+                android:textSize="36sp"
+                android:textStyle="bold"
+                android:textColor="@color/text_main"
+                android:layout_marginTop="8dp" />
+        </LinearLayout>
+
+        <androidx.recyclerview.widget.RecyclerView
+            android:id="@+id/rvProducts"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:paddingHorizontal="24dp"
+            android:paddingTop="16dp"
+            android:paddingBottom="120dp"
+            android:clipToPadding="false" />
+
+    </LinearLayout>
+
+    <!-- Modern Floating Cart Button (Citrus Snap Style) -->
+    <com.google.android.material.button.MaterialButton
+        android:id="@+id/btnCart"
+        android:layout_width="wrap_content"
+        android:layout_height="72dp"
+        android:layout_gravity="bottom|center_horizontal"
+        android:layout_marginBottom="32dp"
+        android:text="Корзина (0)"
+        android:textSize="18sp"
+        app:cornerRadius="36dp"
+        android:elevation="16dp"
+        android:paddingHorizontal="48dp"
+        android:visibility="gone"
+        app:backgroundTint="@color/primary"
+        android:textColor="@color/white"
+        app:icon="@android:drawable/ic_menu_directions"
+        app:iconGravity="textStart"
+        app:iconPadding="12dp" />
+
+</FrameLayout>

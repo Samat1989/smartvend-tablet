@@ -1,0 +1,13 @@
+<resources>
+    <style name="Theme.Micromart" parent="Theme.MaterialComponents.DayNight.NoActionBar">
+        <item name="colorPrimary">@color/primary</item>
+        <item name="colorPrimaryVariant">@color/primary_dark</item>
+        <item name="colorOnPrimary">@color/white</item>
+        <item name="colorSecondary">@color/accent</item>
+        <item name="colorOnSecondary">@color/white</item>
+        
+        <!-- Global Styles - using same as main theme -->
+        <item name="materialButtonStyle">@style/Widget.Micromart.Button</item>
+        <item name="cardViewStyle">@style/Widget.Micromart.Card</item>
+    </style>
+</resources>
