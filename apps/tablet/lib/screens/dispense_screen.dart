@@ -109,6 +109,7 @@ class _DispenseScreenState extends State<DispenseScreen>
     final sensor = context.read<DeviceStorage>().dispenseSensorMode;
     final storage = context.read<DeviceStorage>();
     final machid = storage.machid;
+    final secret = storage.secret;
     final paymentId = svc.consumePaymentId();
 
     // Stop climate's periodic sensor polls / compressor-toggle writeDo
@@ -127,9 +128,10 @@ class _DispenseScreenState extends State<DispenseScreen>
       // the operator sees a partial receipt in the admin (with the items
       // that were dispensed before the hang).
       String? saleId;
-      if (machid != null && paymentId != null) {
+      if (machid != null && secret != null && paymentId != null) {
         saleId = await _api.createSale(
           machid: machid,
+          secret: secret,
           paymentId: paymentId,
           expectedTotalTenge: svc.cartTotalTenge,
         );
@@ -156,7 +158,8 @@ class _DispenseScreenState extends State<DispenseScreen>
             );
             _results[j] = step;
             if (saleId != null) {
-              unawaited(_api.recordSaleItem(saleId: saleId, step: step));
+              unawaited(_api.recordSaleItem(
+                  machid: machid!, secret: secret!, saleId: saleId, step: step));
             }
           }
           if (!mounted) return;
@@ -224,7 +227,8 @@ class _DispenseScreenState extends State<DispenseScreen>
         // Supabase doesn't push the next motor's dispense behind it —
         // order of inserts isn't load-bearing for the admin.
         if (saleId != null) {
-          unawaited(_api.recordSaleItem(saleId: saleId, step: step));
+          unawaited(_api.recordSaleItem(
+              machid: machid!, secret: secret!, saleId: saleId, step: step));
         }
       }
 
@@ -253,14 +257,17 @@ class _DispenseScreenState extends State<DispenseScreen>
   Future<void> _finalizeSale(VendingService svc, String? saleId) async {
     final storage = context.read<DeviceStorage>();
     final machid = storage.machid;
+    final secret = storage.secret;
     final paymentId = svc.consumePaymentId();
 
     if (saleId != null) {
-      final finalAmount = _results.values
-          .where((r) => r.outcome == DispenseOutcome.ok)
-          .fold<int>(0, (s, r) => s + r.product.priceTenge);
-      await _api.completeSale(saleId: saleId, totalTenge: finalAmount);
-    } else if (machid != null && paymentId != null && _results.isNotEmpty) {
+      // Amount is recomputed server-side from dispensed items by complete_sale.
+      await _api.completeSale(
+          machid: machid!, secret: secret!, saleId: saleId);
+    } else if (machid != null &&
+        secret != null &&
+        paymentId != null &&
+        _results.isNotEmpty) {
       // Fallback: upfront insert failed, so do the legacy "all at end"
       // path. Loses partial-state guarantees but still records the sale.
       final total = _results.values
@@ -268,6 +275,7 @@ class _DispenseScreenState extends State<DispenseScreen>
           .fold<int>(0, (s, r) => s + r.product.priceTenge);
       await _api.recordSale(
         machid: machid,
+        secret: secret,
         totalTenge: total,
         paymentId: paymentId,
         items: _results.values.toList(),

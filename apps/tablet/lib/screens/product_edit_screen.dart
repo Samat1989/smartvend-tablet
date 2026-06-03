@@ -181,13 +181,15 @@ class _ProductEditScreenState extends State<ProductEditScreen> {
 
     final storage = context.read<DeviceStorage>();
     final machid = storage.machid;
-    if (machid == null) return;
+    final secret = storage.secret;
+    if (machid == null || secret == null) return;
     setState(() => _saving = true);
 
     final id = await _api.upsertProduct(
       inventoryId: widget.existing?.id,
       catalogProductId: _catalogProductId!,
       machid: machid,
+      secret: secret,
       motorId: widget.motorId,
       name: _nameCtrl.text.trim(),
       priceTenge: price,
@@ -210,8 +212,11 @@ class _ProductEditScreenState extends State<ProductEditScreen> {
 
   Future<void> _delete() async {
     final s = context.read<Strings>();
+    final storage = context.read<DeviceStorage>();
+    final machid = storage.machid;
+    final secret = storage.secret;
     final id = widget.existing?.id;
-    if (id == null) return;
+    if (id == null || machid == null || secret == null) return;
     final ok = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
@@ -231,7 +236,8 @@ class _ProductEditScreenState extends State<ProductEditScreen> {
       ),
     );
     if (ok != true) return;
-    final deleted = await _api.deleteProduct(id);
+    final deleted = await _api.deleteProduct(
+        machid: machid, secret: secret, inventoryId: id);
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(
       content: Text(deleted ? s.t('save_ok') : s.t('save_failed')),
@@ -249,7 +255,8 @@ class _ProductEditScreenState extends State<ProductEditScreen> {
     final svc = context.read<VendingService>();
     final storage = context.read<DeviceStorage>();
     final machid = storage.machid;
-    if (machid == null) return;
+    final secret = storage.secret;
+    if (machid == null || secret == null) return;
 
     final price = int.tryParse(_priceCtrl.text.trim()) ?? 0;
     final stock = int.tryParse(_stockCtrl.text.trim()) ?? 0;
@@ -296,6 +303,7 @@ class _ProductEditScreenState extends State<ProductEditScreen> {
         inventoryId: existing?.id,
         catalogProductId: _catalogProductId!,
         machid: machid,
+        secret: secret,
         motorId: target.slot.primaryMotorId,
         name: _nameCtrl.text.trim(),
         priceTenge:

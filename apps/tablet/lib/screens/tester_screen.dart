@@ -85,11 +85,14 @@ class _TesterScreenState extends State<TesterScreen> {
 
   Future<void> _applyGlobalCurtainToAll(int curtain) async {
     final svc = context.read<VendingService>();
+    final storage = context.read<DeviceStorage>();
+    final machid = storage.machid;
+    final secret = storage.secret;
     final ids = [
       for (final p in svc.catalog)
         if (p.id != null) p.id!,
     ];
-    if (ids.isEmpty) return;
+    if (ids.isEmpty || machid == null || secret == null) return;
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
@@ -111,6 +114,8 @@ class _TesterScreenState extends State<TesterScreen> {
     );
     if (confirmed != true || !mounted) return;
     final n = await _api.bulkUpdateCurtain(
+      machid: machid,
+      secret: secret,
       inventoryIds: ids,
       curtainMode: curtain,
     );

@@ -1,5 +1,4 @@
 import 'dart:convert';
-import 'dart:math';
 
 // Hide Flutter foundation's `Category` (used for DiagnosticPropertiesBuilder)
 // since we have our own Supabase model with the same name.
@@ -25,8 +24,15 @@ class FetchResult<T> {
   bool get isOk => error == null;
 }
 
-/// REST client for Supabase. Uses anon key (RLS allows anon SELECT on
-/// inventory/micromarkets and INSERT on sales/sales_items per project policy).
+/// REST client for Supabase.
+///
+/// Reads (inventory / products / categories) use the anon key directly against
+/// PostgREST. All WRITES and the pairing check go through SECURITY DEFINER RPCs
+/// that validate (machid, secret) server-side and scope every write to the
+/// calling machine's own rows — so the anon key alone can neither read another
+/// machine's secret nor write on its behalf (see docs/security-audit-2026-06.md,
+/// findings F1/F2/F4). The machine secret is provisioned at pairing and kept in
+/// DeviceStorage; it is passed to each write RPC but never read back from the DB.
 class SupabaseApi {
   SupabaseApi({http.Client? client}) : _client = client ?? http.Client();
 
@@ -41,44 +47,55 @@ class SupabaseApi {
   Uri _rest(String path, [Map<String, String>? query]) =>
       Uri.parse('${SupabaseConfig.url}/rest/v1/$path').replace(queryParameters: query);
 
+  /// POST a SECURITY DEFINER RPC with named params.
+  Future<http.Response> _rpc(String fn, Map<String, dynamic> body) {
+    return _client
+        .post(_rest('rpc/$fn'), headers: _headers, body: jsonEncode(body))
+        .timeout(const Duration(seconds: 10));
+  }
+
+  /// Extract a human-readable message from a PostgREST error body
+  /// ({"message": "...", ...}); falls back to the raw body.
+  static String _errMessage(String body) {
+    try {
+      final j = jsonDecode(body);
+      if (j is Map && j['message'] is String) return j['message'] as String;
+    } catch (_) {}
+    return body;
+  }
+
+  static int _machidParam(String machid) => int.tryParse(machid) ?? -1;
+
   // ---------- pairing ----------
 
-  /// Check that machid + secret pair matches a row in micromarkets and
-  /// that the row is of the right kind for this app.
+  /// Check that machid + secret match a row in micromarkets and that the row
+  /// is of the right kind for this app, via the `verify_pairing` RPC.
   ///
-  /// This app only handles `kind='vending'` machines — staffed and
-  /// static-QR micromarkets are served by other apps. Pairing the wrong
-  /// kind would silently succeed at the credential layer and then fail
-  /// later (no products with motor_id, no dispense possible), so we
-  /// reject it here with a clear message.
+  /// The RPC validates the secret server-side and returns only `kind` — the
+  /// secret column is never sent to the client (closes audit F1). This app
+  /// only handles `kind='vending'` machines; other kinds are rejected here
+  /// with a clear message.
   ///
   /// Returns null on success, or a localised-style error string.
   Future<String?> verifyPairing(String machid, String secret) async {
     try {
-      final r = await _client.get(
-        _rest('micromarkets',
-            {'id': 'eq.$machid', 'select': 'id,secret,kind', 'limit': '1'}),
-        headers: _headers,
-      ).timeout(const Duration(seconds: 10));
-      if (r.statusCode < 200 || r.statusCode >= 300) {
-        return 'HTTP ${r.statusCode}: ${r.body}';
+      final resp = await _rpc('verify_pairing', {
+        'p_machid': _machidParam(machid),
+        'p_secret': secret.trim(),
+      });
+      if (resp.statusCode >= 200 && resp.statusCode < 300) {
+        final kind = (jsonDecode(resp.body) as String?)?.trim() ??
+            'micromarket_tablet';
+        if (kind != 'vending') {
+          return 'Это не вендинг-аппарат (тип: $kind). '
+              'Используйте приложение, соответствующее типу.';
+        }
+        return null;
       }
-      final list = jsonDecode(r.body) as List;
-      if (list.isEmpty) return 'Аппарат №$machid не найден';
-      final row = list.first as Map<String, dynamic>;
-      final dbSecret = (row['secret'] as String?)?.trim();
-      if (dbSecret == null || dbSecret.isEmpty) {
-        return 'Секрет аппарата не задан в базе';
-      }
-      if (dbSecret != secret.trim()) return 'Секрет не совпадает';
-      // Older databases without the kind column return null — treat as the
-      // legacy default (micromarket_tablet), still rejected here.
-      final kind = row['kind']?.toString() ?? 'micromarket_tablet';
-      if (kind != 'vending') {
-        return 'Это не вендинг-аппарат (тип: $kind). '
-            'Используйте приложение, соответствующее типу.';
-      }
-      return null;
+      final msg = _errMessage(resp.body);
+      if (msg.contains('not found')) return 'Аппарат №$machid не найден';
+      if (msg.contains('bad secret')) return 'Секрет не совпадает';
+      return 'HTTP ${resp.statusCode}: ${resp.body}';
     } catch (e) {
       return 'Сеть: $e';
     }
@@ -86,26 +103,19 @@ class SupabaseApi {
 
   // ---------- machine layout ----------
 
-  /// Push the current [MachineLayout] JSON to Supabase via the
-  /// `set_machine_layout` RPC. Gated by the machine secret (same one
-  /// used in [verifyPairing]) so anon tablets can write only their
-  /// own layout. Admin reads `micromarkets.layout_json` to render the
-  /// same cabinet view the operator sees on-device.
+  /// Push the current machine layout JSON to Supabase via the
+  /// `set_machine_layout` RPC, gated by the machine secret.
   Future<bool> pushMachineLayout({
     required String machid,
     required String secret,
     required String layoutJson,
   }) async {
     try {
-      final resp = await _client.post(
-        _rest('rpc/set_machine_layout'),
-        headers: _headers,
-        body: jsonEncode({
-          'p_machid': int.tryParse(machid) ?? machid,
-          'p_secret': secret,
-          'p_layout': jsonDecode(layoutJson),
-        }),
-      ).timeout(const Duration(seconds: 10));
+      final resp = await _rpc('set_machine_layout', {
+        'p_machid': _machidParam(machid),
+        'p_secret': secret,
+        'p_layout': jsonDecode(layoutJson),
+      });
       if (resp.statusCode >= 200 && resp.statusCode < 300) return true;
       debugPrint('[pushMachineLayout] HTTP ${resp.statusCode} ${resp.body}');
       return false;
@@ -115,7 +125,7 @@ class SupabaseApi {
     }
   }
 
-  // ---------- inventory ----------
+  // ---------- reads (anon SELECT) ----------
 
   /// Load all inventory rows for [machid]. Maps to [Product] objects keyed
   /// by motor_id. Slots without a DB row stay as placeholders.
@@ -161,9 +171,8 @@ class SupabaseApi {
   }
 
   /// Load the catalog of SKUs (`products` table). Used by the tablet's
-  /// "Выбрать из каталога" picker — operators don't type names by hand
-  /// when a matching product already exists. Archived and draft rows
-  /// are excluded by default so the picker stays clean.
+  /// "Выбрать из каталога" picker. Archived and draft rows are excluded by
+  /// default so the picker stays clean.
   Future<FetchResult<List<CatalogProduct>>> fetchProducts({
     bool includeArchived = false,
     bool includeDrafts = false,
@@ -174,7 +183,6 @@ class SupabaseApi {
             'id,name,image_url,emoji,category_id,volume_ml,description,is_draft,is_archived',
         'order': 'name.asc',
       };
-      // PostgREST: combine filters via and=(...) so both can be active.
       final filters = <String>[];
       if (!includeArchived) filters.add('is_archived.eq.false');
       if (!includeDrafts) filters.add('is_draft.eq.false');
@@ -199,48 +207,7 @@ class SupabaseApi {
     }
   }
 
-  /// Insert a draft `products` row from the tablet's manual-entry path
-  /// (operator typed a name but didn't pick from the catalog). RLS
-  /// allows this only with `is_draft=true`, so admin can later review
-  /// and promote it from customer_web.
-  ///
-  /// Returns the new product id, or null on failure.
-  Future<String?> createDraftProduct({
-    required String name,
-    String? imageUrl,
-    String? emoji,
-    String? categoryId,
-  }) async {
-    try {
-      final resp = await _client.post(
-        _rest('products'),
-        headers: {..._headers, 'Prefer': 'return=representation'},
-        body: jsonEncode({
-          'name': name,
-          if (imageUrl != null && imageUrl.isNotEmpty) 'image_url': imageUrl,
-          if (emoji != null && emoji.isNotEmpty) 'emoji': emoji,
-          'category_id': ?categoryId,
-          'is_draft': true,
-        }),
-      ).timeout(const Duration(seconds: 10));
-      if (resp.statusCode < 200 || resp.statusCode >= 300) {
-        debugPrint('[createDraftProduct] HTTP ${resp.statusCode} ${resp.body}');
-        return null;
-      }
-      final list = jsonDecode(resp.body);
-      if (list is List && list.isNotEmpty) {
-        return list.first['id'] as String?;
-      }
-      return null;
-    } catch (e) {
-      debugPrint('[createDraftProduct] exception: $e');
-      return null;
-    }
-  }
-
-  /// Load all available product categories. The list is small (~10 rows)
-  /// and global to the Supabase project — not per-machid — so we fetch
-  /// it once on app start alongside the inventory.
+  /// Load all available product categories (small, global to the project).
   Future<FetchResult<List<Category>>> fetchCategories() async {
     try {
       final r = await _client.get(
@@ -272,24 +239,38 @@ class SupabaseApi {
     }
   }
 
-  static final _rng = Random.secure();
-
-  /// Generate a RFC 4122 v4 UUID. Used for sale / sales_item ids so we
-  /// don't have to read PostgREST `Prefer: return=representation` (anon
-  /// can INSERT but not SELECT under the project's RLS).
-  static String _uuidV4() {
-    final b = List<int>.generate(16, (_) => _rng.nextInt(256));
-    b[6] = (b[6] & 0x0F) | 0x40; // version 4
-    b[8] = (b[8] & 0x3F) | 0x80; // variant 10xx
-    String h(int x) => x.toRadixString(16).padLeft(2, '0');
-    final s = b.map(h).join();
-    return '${s.substring(0, 8)}-${s.substring(8, 12)}-${s.substring(12, 16)}'
-        '-${s.substring(16, 20)}-${s.substring(20, 32)}';
+  /// Insert a draft `products` row from the tablet's manual-entry path
+  /// (operator typed a name but didn't pick from the catalog), via the
+  /// `create_draft_product` RPC. The new row is attributed to the machine's
+  /// owner for later admin review. Returns the new product id, or null.
+  Future<String?> createDraftProduct({
+    required String machid,
+    required String secret,
+    required String name,
+    String? imageUrl,
+    String? emoji,
+    String? categoryId,
+  }) async {
+    try {
+      final resp = await _rpc('create_draft_product', {
+        'p_machid': _machidParam(machid),
+        'p_secret': secret,
+        'p_name': name,
+        'p_image_url': (imageUrl != null && imageUrl.isNotEmpty) ? imageUrl : null,
+        'p_emoji': (emoji != null && emoji.isNotEmpty) ? emoji : null,
+        'p_category_id': categoryId,
+      });
+      if (resp.statusCode < 200 || resp.statusCode >= 300) {
+        debugPrint('[createDraftProduct] HTTP ${resp.statusCode} ${resp.body}');
+        return null;
+      }
+      return jsonDecode(resp.body) as String?;
+    } catch (e) {
+      debugPrint('[createDraftProduct] exception: $e');
+      return null;
+    }
   }
 
-  /// Coerce a JSON value (which Postgres/PostgREST may return as int, double,
-  /// or string depending on the column type) to a Dart int. Returns null
-  /// if the value can't be parsed.
   static int? _asInt(Object? v) {
     if (v == null) return null;
     if (v is int) return v;
@@ -308,117 +289,86 @@ class SupabaseApi {
     return n.toString().padLeft(3, '0');
   }
 
-  // ---------- sales ----------
+  // ---------- sales (RPC, secret-scoped, server-priced) ----------
 
-  /// Insert a sale shell row up-front (before the first motor turns) so
-  /// each item can be persisted as it finishes. Returns the new sale id
-  /// or null on failure — caller falls back to the legacy "insert at
-  /// the end" path if this returns null.
-  ///
-  /// [expectedTotalTenge] is what the customer paid (cart total). The
-  /// row's `amount` will be PATCHed down by [completeSale] to the sum
-  /// of successfully-dispensed items, but the initial value is useful
-  /// for ops if the planshet hangs before completion.
+  /// Open a sale shell up-front (before the first motor turns). Returns the
+  /// new server-generated sale id, or null on failure — caller falls back to
+  /// [recordSale]. [expectedTotalTenge] is informational; the final amount is
+  /// recomputed server-side by [completeSale].
   Future<String?> createSale({
     required String machid,
+    required String secret,
     required String paymentId,
     required int expectedTotalTenge,
   }) async {
     try {
-      final saleId = _uuidV4();
-      final resp = await _client.post(
-        _rest('sales'),
-        headers: {..._headers, 'Prefer': 'return=minimal'},
-        body: jsonEncode({
-          'id': saleId,
-          'micromarket_id': int.tryParse(machid) ?? machid,
-          'amount': expectedTotalTenge,
-          'status': 'in_progress',
-          'payment_id': paymentId,
-        }),
-      ).timeout(const Duration(seconds: 10));
+      final resp = await _rpc('open_sale', {
+        'p_machid': _machidParam(machid),
+        'p_secret': secret,
+        'p_payment_id': paymentId,
+        'p_expected_total': expectedTotalTenge,
+      });
       if (resp.statusCode < 200 || resp.statusCode >= 300) {
-        debugPrint('[createSale] sales insert failed: '
+        debugPrint('[createSale] open_sale failed: '
             'HTTP ${resp.statusCode} ${resp.body}');
         return null;
       }
-      return saleId;
+      return jsonDecode(resp.body) as String?;
     } catch (e) {
       debugPrint('[createSale] exception: $e');
       return null;
     }
   }
 
-  /// Persist a single dispense step against an existing sale. On a
-  /// successful dispense also decrements the inventory stock — same
-  /// PATCH the legacy [recordSale] did, just done per-item instead of
-  /// in a batch at the end.
+  /// Persist a single dispense step against an existing sale via
+  /// `record_sale_item`. The price is taken from the server's inventory row
+  /// (not from the client), and stock is decremented atomically server-side
+  /// on a successful dispense.
   Future<void> recordSaleItem({
+    required String machid,
+    required String secret,
     required String saleId,
     required DispenseStepResult step,
   }) async {
     final productId = step.product.id;
     if (productId == null) return;
+    final dispensed = step.outcome == DispenseOutcome.ok;
     try {
-      final itemResp = await _client.post(
-        _rest('sales_items'),
-        headers: {..._headers, 'Prefer': 'return=minimal'},
-        body: jsonEncode({
-          'id': _uuidV4(),
-          'sale_id': saleId,
-          'product_id': productId,
-          'price': step.product.priceTenge,
-          'quantity': 1,
-          'dispensed': step.outcome == DispenseOutcome.ok,
-          if (step.outcome == DispenseOutcome.failed && step.resultCode != null)
-            'result_code': step.resultCode,
-          if (step.outcome == DispenseOutcome.failed && step.message.isNotEmpty)
-            'result_message': step.message,
-        }),
-      ).timeout(const Duration(seconds: 8));
-      if (itemResp.statusCode < 200 || itemResp.statusCode >= 300) {
-        debugPrint('[recordSaleItem] insert failed: '
-            'HTTP ${itemResp.statusCode} ${itemResp.body}');
+      final resp = await _rpc('record_sale_item', {
+        'p_machid': _machidParam(machid),
+        'p_secret': secret,
+        'p_sale_id': saleId,
+        'p_product_id': productId,
+        'p_qty': 1,
+        'p_dispensed': dispensed,
+        'p_result_code': (!dispensed) ? step.resultCode : null,
+        'p_result_message':
+            (!dispensed && step.message.isNotEmpty) ? step.message : null,
+      });
+      if (resp.statusCode < 200 || resp.statusCode >= 300) {
+        debugPrint('[recordSaleItem] failed: '
+            'HTTP ${resp.statusCode} ${resp.body}');
       }
     } catch (e) {
       debugPrint('[recordSaleItem] exception: $e');
     }
-
-    // Only OK dispenses decrement stock — failed/unknown leave it as is,
-    // matching what the legacy [recordSale] aggregator did.
-    if (step.outcome != DispenseOutcome.ok) return;
-    try {
-      final newStock = (step.product.stock - 1).clamp(0, 1 << 31);
-      final patchResp = await _client.patch(
-        _rest('inventory', {'id': 'eq.$productId'}),
-        headers: _headers,
-        body: jsonEncode({'stock': newStock}),
-      ).timeout(const Duration(seconds: 8));
-      if (patchResp.statusCode < 200 || patchResp.statusCode >= 300) {
-        debugPrint('[recordSaleItem] stock PATCH failed for $productId: '
-            'HTTP ${patchResp.statusCode} ${patchResp.body}');
-      }
-    } catch (e) {
-      debugPrint('[recordSaleItem] stock exception: $e');
-    }
   }
 
-  /// Close out a sale that was opened via [createSale]: mark it
-  /// `completed` and rewrite `amount` to the sum of items that were
-  /// actually dispensed (so the receipt matches what the customer got,
-  /// and the dashboard's revenue totals don't double-count refunds).
+  /// Close out a sale opened via [createSale]: marks it `completed` and the
+  /// server recomputes `amount` as the sum of successfully-dispensed items.
   Future<void> completeSale({
+    required String machid,
+    required String secret,
     required String saleId,
-    required int totalTenge,
   }) async {
     try {
-      final resp = await _client.patch(
-        _rest('sales', {'id': 'eq.$saleId'}),
-        headers: _headers,
-        body: jsonEncode({'amount': totalTenge, 'status': 'completed'}),
-      ).timeout(const Duration(seconds: 10));
+      final resp = await _rpc('complete_sale', {
+        'p_machid': _machidParam(machid),
+        'p_secret': secret,
+        'p_sale_id': saleId,
+      });
       if (resp.statusCode < 200 || resp.statusCode >= 300) {
-        debugPrint('[completeSale] PATCH failed: '
+        debugPrint('[completeSale] failed: '
             'HTTP ${resp.statusCode} ${resp.body}');
       }
     } catch (e) {
@@ -426,122 +376,42 @@ class SupabaseApi {
     }
   }
 
-  /// Insert a sale + its items. Returns the new sale id, or null on error.
-  /// [items] should already be filtered to items the customer paid for —
-  /// failed dispenses still get recorded so owner sees them.
+  /// Fallback "record the whole sale at the end" path, used when the upfront
+  /// [createSale] failed. Reuses the same secret-scoped RPCs (open → items →
+  /// complete). Returns the new sale id, or null on error.
   Future<String?> recordSale({
     required String machid,
+    required String secret,
     required int totalTenge,
     required String paymentId,
     required List<DispenseStepResult> items,
   }) async {
-    try {
-      // Generate the sale id client-side. The micromarket project's RLS
-      // grants anon INSERT on `sales` but not SELECT — so a normal
-      // `Prefer: return=representation` would yield an empty body and we'd
-      // never find out our own row id. Generating it here removes that
-      // dependency: the row is inserted with a known id we can immediately
-      // use for `sales_items.sale_id`.
-      final saleId = _uuidV4();
-      final saleResp = await _client.post(
-        _rest('sales'),
-        headers: {..._headers, 'Prefer': 'return=minimal'},
-        body: jsonEncode({
-          'id': saleId,
-          'micromarket_id': int.tryParse(machid) ?? machid,
-          'amount': totalTenge,
-          'status': 'completed',
-          'payment_id': paymentId,
-        }),
-      ).timeout(const Duration(seconds: 10));
-      if (saleResp.statusCode < 200 || saleResp.statusCode >= 300) {
-        debugPrint('[recordSale] sales insert failed: '
-            'HTTP ${saleResp.statusCode} ${saleResp.body}');
-        return null;
-      }
-
-      // Aggregate quantities so we don't decrement twice when the same
-      // motor is dispensed multiple times in one sale.
-      final dispensedByProduct = <String, int>{};
-      final productByDispensed = <String, DispenseStepResult>{};
-      for (final r in items) {
-        final productId = r.product.id;
-        if (productId == null) continue;
-        final itemResp = await _client.post(
-          _rest('sales_items'),
-          headers: {..._headers, 'Prefer': 'return=minimal'},
-          body: jsonEncode({
-            'id': _uuidV4(),
-            'sale_id': saleId,
-            'product_id': productId,
-            'price': r.product.priceTenge,
-            'quantity': 1,
-            'dispensed': r.outcome == DispenseOutcome.ok,
-            // Diagnostics so the admin receipt can print a specific
-            // reason ("Перегрузка мотора" etc.) via RESULT_CODE_I18N,
-            // falling back to the free-form message when no poll byte
-            // arrived.
-            if (r.outcome == DispenseOutcome.failed && r.resultCode != null)
-              'result_code': r.resultCode,
-            if (r.outcome == DispenseOutcome.failed && r.message.isNotEmpty)
-              'result_message': r.message,
-          }),
-        ).timeout(const Duration(seconds: 8));
-        if (itemResp.statusCode < 200 || itemResp.statusCode >= 300) {
-          debugPrint('[recordSale] sales_items insert failed: '
-              'HTTP ${itemResp.statusCode} ${itemResp.body}');
-        }
-        if (r.success) {
-          dispensedByProduct[productId] =
-              (dispensedByProduct[productId] ?? 0) + 1;
-          productByDispensed[productId] = r;
-        }
-      }
-
-      // Decrement stock per product. We use a direct PATCH (not the
-      // `decrement_stock` RPC) because the anon-write RLS we added covers
-      // this path and the RPC may not be installed everywhere yet.
-      for (final entry in dispensedByProduct.entries) {
-        final productId = entry.key;
-        final qty = entry.value;
-        final currentStock = productByDispensed[productId]!.product.stock;
-        final newStock = (currentStock - qty).clamp(0, 1 << 31);
-        final patchResp = await _client.patch(
-          _rest('inventory', {'id': 'eq.$productId'}),
-          headers: _headers,
-          body: jsonEncode({'stock': newStock}),
-        ).timeout(const Duration(seconds: 8));
-        if (patchResp.statusCode < 200 || patchResp.statusCode >= 300) {
-          debugPrint('[recordSale] stock PATCH failed for $productId: '
-              'HTTP ${patchResp.statusCode} ${patchResp.body}');
-        }
-      }
-      return saleId;
-    } catch (e) {
-      debugPrint('[recordSale] exception: $e');
-      return null;
+    final saleId = await createSale(
+      machid: machid,
+      secret: secret,
+      paymentId: paymentId,
+      expectedTotalTenge: totalTenge,
+    );
+    if (saleId == null) return null;
+    for (final step in items) {
+      await recordSaleItem(
+          machid: machid, secret: secret, saleId: saleId, step: step);
     }
+    await completeSale(machid: machid, secret: secret, saleId: saleId);
+    return saleId;
   }
 
-  // ---------- inventory editing ----------
+  // ---------- inventory editing (RPC, secret-scoped) ----------
 
-  /// Insert (when [inventoryId] is null) or update an inventory row.
-  /// Returns the row id on success, or null on failure.
-  ///
-  /// [catalogProductId] is the FK into `products` — required for new
-  /// inserts (the DB has a NOT NULL constraint). Callers who let the
-  /// operator type a product name freehand should first invoke
-  /// [createDraftProduct] and pass the returned id here.
-  ///
-  /// `name`, `imageUrl`, `emoji`, `categoryId` are still written to
-  /// `inventory` for backwards-compat with the customer_web build that
-  /// hasn't been migrated to read from `products` yet. They mirror the
-  /// fields on the linked product so the catalog stays the source of
-  /// truth.
+  /// Insert (when [inventoryId] is null) or update an inventory row via the
+  /// `upsert_inventory` RPC, scoped to [machid]. [catalogProductId] is the FK
+  /// into `products` (required — DB has a NOT NULL constraint). Returns the
+  /// row id on success, or null on failure.
   Future<String?> upsertProduct({
     String? inventoryId,
     required String catalogProductId,
     required String machid,
+    required String secret,
     required int motorId,
     required String name,
     required int priceTenge,
@@ -550,125 +420,120 @@ class SupabaseApi {
     required int curtainMode,
     String? imageUrl,
     String? emoji,
-    // `null` = "Без категории" (clear FK), non-null = set/replace it.
-    // We always include the key so PATCH can clear an existing value.
     String? categoryId,
   }) async {
-    final body = <String, dynamic>{
-      'micromarket_id': int.tryParse(machid) ?? machid,
-      'motor_id': motorId,
-      'product_id': catalogProductId,
-      'name': name,
-      'price': priceTenge,
-      'stock': stock,
-      'motor_type': motorType,
-      'curtain_mode': curtainMode,
-      'category_id': categoryId, // include so PATCH can null-it-out
-      if (imageUrl != null && imageUrl.isNotEmpty) 'image_url': imageUrl,
-      if (imageUrl != null && imageUrl.isEmpty) 'image_url': null,
-      if (emoji != null && emoji.isNotEmpty) 'emoji': emoji,
-      if (emoji != null && emoji.isEmpty) 'emoji': null,
-    };
     try {
-      final http.Response resp;
-      if (inventoryId == null) {
-        resp = await _client.post(
-          _rest('inventory'),
-          headers: {..._headers, 'Prefer': 'return=representation'},
-          body: jsonEncode(body),
-        ).timeout(const Duration(seconds: 10));
-      } else {
-        resp = await _client.patch(
-          _rest('inventory', {'id': 'eq.$inventoryId'}),
-          headers: {..._headers, 'Prefer': 'return=representation'},
-          body: jsonEncode(body),
-        ).timeout(const Duration(seconds: 10));
+      final resp = await _rpc('upsert_inventory', {
+        'p_machid': _machidParam(machid),
+        'p_secret': secret,
+        'p_inventory_id': inventoryId,
+        'p_product_id': catalogProductId,
+        'p_motor_id': motorId,
+        'p_name': name,
+        'p_price': priceTenge,
+        'p_stock': stock,
+        'p_motor_type': motorType,
+        'p_curtain_mode': curtainMode,
+        'p_image_url': (imageUrl != null && imageUrl.isNotEmpty) ? imageUrl : null,
+        'p_emoji': (emoji != null && emoji.isNotEmpty) ? emoji : null,
+        'p_category_id': categoryId,
+      });
+      if (resp.statusCode < 200 || resp.statusCode >= 300) {
+        debugPrint('[upsertProduct] failed: HTTP ${resp.statusCode} ${resp.body}');
+        return null;
       }
-      if (resp.statusCode < 200 || resp.statusCode >= 300) return null;
-      final list = jsonDecode(resp.body);
-      if (list is List && list.isNotEmpty) {
-        return list.first['id'] as String?;
-      }
-      return inventoryId;
-    } catch (_) {
+      return jsonDecode(resp.body) as String?;
+    } catch (e) {
+      debugPrint('[upsertProduct] exception: $e');
       return null;
     }
   }
 
-  /// PATCH only the wiring-related columns of an inventory row.
-  /// Used by the motor-setup screen so the operator can change motor
-  /// type / drop-sensor mode per slot without going through the full
-  /// product editor.
+  /// PATCH only the wiring columns of an inventory row via the
+  /// `update_inventory_wiring` RPC (null = leave as is).
   Future<bool> updateInventoryWiring({
+    required String machid,
+    required String secret,
     required String inventoryId,
     int? motorType,
     int? curtainMode,
   }) async {
-    final body = <String, dynamic>{
-      'motor_type': ?motorType,
-      'curtain_mode': ?curtainMode,
-    };
-    if (body.isEmpty) return true;
+    if (motorType == null && curtainMode == null) return true;
     try {
-      final resp = await _client.patch(
-        _rest('inventory', {'id': 'eq.$inventoryId'}),
-        headers: _headers,
-        body: jsonEncode(body),
-      ).timeout(const Duration(seconds: 8));
+      final resp = await _rpc('update_inventory_wiring', {
+        'p_machid': _machidParam(machid),
+        'p_secret': secret,
+        'p_inventory_id': inventoryId,
+        'p_motor_type': motorType,
+        'p_curtain_mode': curtainMode,
+      });
       return resp.statusCode >= 200 && resp.statusCode < 300;
     } catch (_) {
       return false;
     }
   }
 
-  /// Bulk update of curtain_mode across many inventory rows. Returns
-  /// the number of rows that succeeded (best-effort — the server
-  /// commits each PATCH independently). Used by the "apply to all"
-  /// affordance in motor setup.
+  /// Bulk curtain_mode update across [inventoryIds] via the
+  /// `bulk_update_curtain` RPC. Returns the number of rows updated.
   Future<int> bulkUpdateCurtain({
+    required String machid,
+    required String secret,
     required List<String> inventoryIds,
     required int curtainMode,
   }) async {
-    var ok = 0;
-    for (final id in inventoryIds) {
-      if (await updateInventoryWiring(inventoryId: id, curtainMode: curtainMode)) {
-        ok++;
-      }
+    if (inventoryIds.isEmpty) return 0;
+    try {
+      final resp = await _rpc('bulk_update_curtain', {
+        'p_machid': _machidParam(machid),
+        'p_secret': secret,
+        'p_inventory_ids': inventoryIds,
+        'p_curtain_mode': curtainMode,
+      });
+      if (resp.statusCode < 200 || resp.statusCode >= 300) return 0;
+      return (jsonDecode(resp.body) as num?)?.toInt() ?? 0;
+    } catch (_) {
+      return 0;
     }
-    return ok;
   }
 
-  /// Bulk price update across many inventory rows. Used by the
-  /// "apply price to other slots" affordance in the product editor.
+  /// Bulk price update across [inventoryIds] via the `bulk_update_price` RPC.
+  /// Returns the number of rows updated.
   Future<int> bulkUpdatePrice({
+    required String machid,
+    required String secret,
     required List<String> inventoryIds,
     required int priceTenge,
   }) async {
-    var ok = 0;
-    for (final id in inventoryIds) {
-      try {
-        final resp = await _client.patch(
-          _rest('inventory', {'id': 'eq.$id'}),
-          headers: _headers,
-          body: jsonEncode({'price': priceTenge}),
-        ).timeout(const Duration(seconds: 8));
-        if (resp.statusCode >= 200 && resp.statusCode < 300) ok++;
-      } catch (_) {}
+    if (inventoryIds.isEmpty) return 0;
+    try {
+      final resp = await _rpc('bulk_update_price', {
+        'p_machid': _machidParam(machid),
+        'p_secret': secret,
+        'p_inventory_ids': inventoryIds,
+        'p_price': priceTenge,
+      });
+      if (resp.statusCode < 200 || resp.statusCode >= 300) return 0;
+      return (jsonDecode(resp.body) as num?)?.toInt() ?? 0;
+    } catch (_) {
+      return 0;
     }
-    return ok;
   }
 
-  /// Delete a product row by id.
-  Future<bool> deleteProduct(String productId) async {
+  /// Delete one inventory row via the `delete_inventory` RPC, scoped to [machid].
+  Future<bool> deleteProduct({
+    required String machid,
+    required String secret,
+    required String inventoryId,
+  }) async {
     try {
-      final resp = await _client.delete(
-        _rest('inventory', {'id': 'eq.$productId'}),
-        headers: _headers,
-      ).timeout(const Duration(seconds: 10));
+      final resp = await _rpc('delete_inventory', {
+        'p_machid': _machidParam(machid),
+        'p_secret': secret,
+        'p_inventory_id': inventoryId,
+      });
       return resp.statusCode >= 200 && resp.statusCode < 300;
     } catch (_) {
       return false;
     }
   }
-
 }
