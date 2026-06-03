@@ -1756,10 +1756,10 @@ function InventoryByLayout({ products, layout, categories, stockLabel, priceLabe
           </div>
           <div className="space-y-2">
             {unassigned.map(p => (
-              <button
+              <div
                 key={p.id}
                 onClick={() => onEdit(p)}
-                className="w-full flex items-center gap-3 p-2.5 rounded-xl bg-white border-2 border-amber-200 hover:border-amber-500 hover:shadow-md transition-all text-left"
+                className="w-full flex items-center gap-3 p-2.5 rounded-xl bg-white border-2 border-amber-200 hover:border-amber-500 hover:shadow-md transition-all text-left cursor-pointer"
               >
                 <div className="w-10 h-10 bg-slate-50 rounded-lg flex items-center justify-center overflow-hidden shrink-0 border border-slate-200">
                   {p.image_url ? (
@@ -1778,8 +1778,23 @@ function InventoryByLayout({ products, layout, categories, stockLabel, priceLabe
                       : `M${p.motor_id} не входит в текущую раскладку`}
                   </div>
                 </div>
-                <Pencil size={14} className="text-amber-700" />
-              </button>
+                <div className="flex items-center gap-1 shrink-0">
+                  <button
+                    onClick={(e) => { e.stopPropagation(); onEdit(p); }}
+                    className="p-2 bg-white border border-amber-300 text-amber-700 rounded-lg hover:bg-amber-600 hover:border-amber-600 hover:text-white transition-all"
+                    title="Редактировать"
+                  >
+                    <Pencil size={14} />
+                  </button>
+                  <button
+                    onClick={(e) => { e.stopPropagation(); onDelete(p); }}
+                    className="p-2 bg-white border border-amber-300 text-amber-700 rounded-lg hover:bg-red-600 hover:border-red-600 hover:text-white transition-all"
+                    title="Удалить"
+                  >
+                    <Trash2 size={14} />
+                  </button>
+                </div>
+              </div>
             ))}
           </div>
         </div>
