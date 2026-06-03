@@ -170,33 +170,26 @@ class SupabaseApi {
     }
   }
 
-  /// Load the catalog of SKUs (`products` table). Used by the tablet's
-  /// "Выбрать из каталога" picker. Archived and draft rows are excluded by
-  /// default so the picker stays clean.
+  /// Load the catalog of SKUs via the `list_catalog` RPC — scoped to the
+  /// machine's owner (so one operator never sees another's products).
+  /// Archived and draft rows are excluded by default so the picker stays clean.
   Future<FetchResult<List<CatalogProduct>>> fetchProducts({
+    required String machid,
+    required String secret,
     bool includeArchived = false,
     bool includeDrafts = false,
   }) async {
     try {
-      final query = <String, String>{
-        'select':
-            'id,name,image_url,emoji,category_id,volume_ml,description,is_draft,is_archived',
-        'order': 'name.asc',
-      };
-      final filters = <String>[];
-      if (!includeArchived) filters.add('is_archived.eq.false');
-      if (!includeDrafts) filters.add('is_draft.eq.false');
-      if (filters.isNotEmpty) {
-        query['and'] = '(${filters.join(',')})';
+      final resp = await _rpc('list_catalog', {
+        'p_machid': _machidParam(machid),
+        'p_secret': secret,
+        'p_include_archived': includeArchived,
+        'p_include_drafts': includeDrafts,
+      });
+      if (resp.statusCode < 200 || resp.statusCode >= 300) {
+        return FetchResult.err('HTTP ${resp.statusCode}: ${resp.body}');
       }
-      final r = await _client.get(
-        _rest('products', query),
-        headers: _headers,
-      ).timeout(const Duration(seconds: 15));
-      if (r.statusCode < 200 || r.statusCode >= 300) {
-        return FetchResult.err('HTTP ${r.statusCode}: ${r.body}');
-      }
-      final list = jsonDecode(r.body) as List;
+      final list = jsonDecode(resp.body) as List;
       final products = <CatalogProduct>[
         for (final raw in list)
           CatalogProduct.fromJson(raw as Map<String, dynamic>),

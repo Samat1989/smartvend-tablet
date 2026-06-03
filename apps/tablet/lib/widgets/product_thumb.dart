@@ -1,3 +1,4 @@
+import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 
 import '../models/product.dart';
@@ -31,12 +32,11 @@ class ProductThumb extends StatelessWidget {
       ),
     );
     if (url == null || url.isEmpty) return fallback;
-    return Image.network(
-      url,
+    return CachedNetworkImage(
+      imageUrl: url,
       fit: fit,
-      errorBuilder: (_, _, _) => fallback,
-      loadingBuilder: (ctx, child, progress) =>
-          progress == null ? child : fallback,
+      placeholder: (_, _) => fallback,
+      errorWidget: (_, _, _) => fallback,
     );
   }
 }

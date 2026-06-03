@@ -1,3 +1,4 @@
+import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
@@ -97,6 +98,10 @@ class _ProductEditScreenState extends State<ProductEditScreen> {
   }
 
   Future<void> _openCatalogPicker() async {
+    final storage = context.read<DeviceStorage>();
+    final machid = storage.machid;
+    final secret = storage.secret;
+    if (machid == null || secret == null) return;
     final picked = await showModalBottomSheet<CatalogProduct>(
       context: context,
       isScrollControlled: true,
@@ -104,7 +109,7 @@ class _ProductEditScreenState extends State<ProductEditScreen> {
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
       ),
-      builder: (_) => const _CatalogPickerSheet(),
+      builder: (_) => _CatalogPickerSheet(machid: machid, secret: secret),
     );
     if (picked == null || !mounted) return;
     _applyCatalog(picked);
@@ -297,6 +302,27 @@ class _ProductEditScreenState extends State<ProductEditScreen> {
     setState(() => _saving = true);
     final successLabels = <String>[];
     final failedLabels = <String>[];
+
+    // Save the originally-selected (source) slot too, so the operator no
+    // longer has to press «Сохранить» separately after applying to others.
+    final sourceLabel = _resolveSlotLabel();
+    final sourceId = await _api.upsertProduct(
+      inventoryId: widget.existing?.id,
+      catalogProductId: _catalogProductId!,
+      machid: machid,
+      secret: secret,
+      motorId: widget.motorId,
+      name: _nameCtrl.text.trim(),
+      priceTenge: price,
+      stock: stock,
+      motorType: _motorType,
+      curtainMode: _curtain,
+      imageUrl: _imageCtrl.text.trim(),
+      emoji: _emojiCtrl.text.trim(),
+      categoryId: _categoryId,
+    );
+    (sourceId != null ? successLabels : failedLabels).add(sourceLabel);
+
     for (final target in result.targets) {
       final existing = target.product;
       final id = await _api.upsertProduct(
@@ -328,11 +354,9 @@ class _ProductEditScreenState extends State<ProductEditScreen> {
     if (!mounted) return;
     setState(() => _saving = false);
 
-    // Confirmation dialog with the full list of slot labels — operator
-    // immediately sees where the product landed instead of just a
-    // count. The current slot is the source; it still needs the
-    // explicit «Сохранить» tap below, called out at the bottom.
-    final sourceLabel = _resolveSlotLabel();
+    // Confirmation dialog with the full list of slot labels — including the
+    // source slot, which is now saved as part of this action (no separate
+    // «Сохранить» needed).
     await showDialog<void>(
       context: context,
       builder: (ctx) => AlertDialog(
@@ -377,30 +401,30 @@ class _ProductEditScreenState extends State<ProductEditScreen> {
               ),
               const SizedBox(height: 12),
             ],
-            Container(
-              padding: const EdgeInsets.all(10),
-              decoration: BoxDecoration(
-                color: Colors.amber.shade50,
-                borderRadius: BorderRadius.circular(8),
-                border: Border.all(color: Colors.amber.shade300),
-              ),
-              child: Text(
-                'Текущий слот ($sourceLabel) ещё не сохранён — '
-                'нажмите «Сохранить» внизу формы.',
-                style: const TextStyle(fontSize: 12),
-              ),
-            ),
           ],
         ),
         actions: [
           FilledButton(
-            onPressed: () => Navigator.of(ctx).pop(),
+            onPressed: () {
+              Navigator.of(ctx).pop(); // close dialog
+              Navigator.of(context).pop(); // return to the grid (source saved)
+            },
             child: const Text('OK'),
           ),
         ],
       ),
     );
   }
+
+  /// Small placeholder/error box for the image preview (shown while the
+  /// cached image loads or if it fails).
+  Widget _imgFallbackBox() => Container(
+        width: 40,
+        height: 40,
+        color: Colors.green.shade100,
+        alignment: Alignment.center,
+        child: const Text('📦', style: TextStyle(fontSize: 20)),
+      );
 
   @override
   Widget build(BuildContext context) {
@@ -601,19 +625,13 @@ class _ProductEditScreenState extends State<ProductEditScreen> {
                       style: const TextStyle(fontSize: 20),
                     ),
                   )
-                : Image.network(
-                    img,
+                : CachedNetworkImage(
+                    imageUrl: img,
                     width: 40,
                     height: 40,
                     fit: BoxFit.cover,
-                    errorBuilder: (_, _, _) => Container(
-                      width: 40,
-                      height: 40,
-                      color: Colors.green.shade100,
-                      alignment: Alignment.center,
-                      child: const Text('📦',
-                          style: TextStyle(fontSize: 20)),
-                    ),
+                    placeholder: (_, _) => _imgFallbackBox(),
+                    errorWidget: (_, _, _) => _imgFallbackBox(),
                   ),
           ),
           const SizedBox(width: 12),
@@ -717,7 +735,10 @@ class _ProductEditScreenState extends State<ProductEditScreen> {
 /// search box. Pops the selected [CatalogProduct] so the parent screen
 /// can prefill the form.
 class _CatalogPickerSheet extends StatefulWidget {
-  const _CatalogPickerSheet();
+  const _CatalogPickerSheet({required this.machid, required this.secret});
+
+  final String machid;
+  final String secret;
 
   @override
   State<_CatalogPickerSheet> createState() => _CatalogPickerSheetState();
@@ -736,7 +757,8 @@ class _CatalogPickerSheetState extends State<_CatalogPickerSheet> {
   }
 
   Future<void> _load() async {
-    final r = await _api.fetchProducts();
+    final r = await _api.fetchProducts(
+        machid: widget.machid, secret: widget.secret);
     if (!mounted) return;
     setState(() {
       if (r.isOk) {
@@ -898,14 +920,13 @@ class _CatalogTile extends StatelessWidget {
       leading: ClipRRect(
         borderRadius: BorderRadius.circular(8),
         child: product.imageUrl != null && product.imageUrl!.isNotEmpty
-            ? Image.network(
-                product.imageUrl!,
+            ? CachedNetworkImage(
+                imageUrl: product.imageUrl!,
                 width: 48,
                 height: 48,
                 fit: BoxFit.cover,
-                errorBuilder: (_, _, _) => _emojiBox(product.emoji),
-                loadingBuilder: (_, child, p) =>
-                    p == null ? child : _emojiBox(product.emoji),
+                placeholder: (_, _) => _emojiBox(product.emoji),
+                errorWidget: (_, _, _) => _emojiBox(product.emoji),
               )
             : _emojiBox(product.emoji),
       ),

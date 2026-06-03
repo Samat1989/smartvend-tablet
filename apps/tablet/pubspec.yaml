@@ -40,6 +40,11 @@ dependencies:
   shared_preferences: ^2.3.2
   http: ^1.2.2
   crypto: ^3.0.5
+  # Disk-persistent image cache (keyed by URL). Product image URLs change
+  # whenever the image is replaced (admin uploads under a fresh random
+  # filename), so URL-keyed caching self-invalidates — the catalog renders
+  # from disk after a reboot instead of re-downloading from Supabase Storage.
+  cached_network_image: ^3.4.1
   qr_flutter: ^4.1.0
   intl: ^0.20.2
   path_provider: ^2.1.5

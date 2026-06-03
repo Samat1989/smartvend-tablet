@@ -1,3 +1,4 @@
+import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
@@ -363,14 +364,13 @@ class _ProductRow extends StatelessWidget {
     if (url != null && url.isNotEmpty) {
       return ClipRRect(
         borderRadius: BorderRadius.circular(10),
-        child: Image.network(
-          url,
+        child: CachedNetworkImage(
+          imageUrl: url,
           width: 44,
           height: 44,
           fit: BoxFit.cover,
-          errorBuilder: (_, _, _) => _emojiBox(p.emoji),
-          loadingBuilder: (_, child, progress) =>
-              progress == null ? child : _emojiBox(p.emoji),
+          placeholder: (_, _) => _emojiBox(p.emoji),
+          errorWidget: (_, _, _) => _emojiBox(p.emoji),
         ),
       );
     }

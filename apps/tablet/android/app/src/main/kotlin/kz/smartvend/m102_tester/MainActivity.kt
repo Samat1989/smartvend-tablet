@@ -4,6 +4,7 @@ import android.app.AlarmManager
 import android.app.PendingIntent
 import android.app.admin.DevicePolicyManager
 import android.content.BroadcastReceiver
+import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
@@ -431,6 +432,27 @@ class MainActivity : FlutterActivity() {
         } catch (t: Throwable) {
             Log.e(TAG_KIOSK, "setLockTaskPackages other failure", t)
             return
+        }
+        // Make the kiosk the persistent HOME/launcher. After a reboot the
+        // system launches HOME — which is now us — so the machine returns
+        // straight to the catalog with no operator on-site. This is the
+        // reliable path: BootReceiver's startActivity is blocked by Android
+        // 10+ background-activity-start restrictions (observed: device booted
+        // to the stock launcher instead of the kiosk), but the HOME route is
+        // not subject to that.
+        try {
+            val homeFilter = IntentFilter(Intent.ACTION_MAIN).apply {
+                addCategory(Intent.CATEGORY_HOME)
+                addCategory(Intent.CATEGORY_DEFAULT)
+            }
+            dpm.addPersistentPreferredActivity(
+                admin,
+                homeFilter,
+                ComponentName(this, MainActivity::class.java),
+            )
+            Log.i(TAG_KIOSK, "addPersistentPreferredActivity(HOME) OK")
+        } catch (t: Throwable) {
+            Log.e(TAG_KIOSK, "addPersistentPreferredActivity failed", t)
         }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
             try {
