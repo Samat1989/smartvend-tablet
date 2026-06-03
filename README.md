@@ -7,15 +7,19 @@
 
 ```
 apps/
-  tablet/         Flutter — приложение планшета вендинга (основное, ex-m102_tester)
-  admin/         Vite/TS веб — админка (деплой на Vercel, ex-customer_web)
-  pos/            Android/Kotlin — POS-приложение
-  provisioning/   Flutter — провижининг QR устройств
-  mmd/            Flutter — клиент платы/устройства
-  customer-qr/    (план) static QR веб для телефона клиента
+  tablet/         Flutter — планшет вендинга со спиралями (плата M109E/M102,
+                  моторные спирали через USB-Serial). Сам проводит Kaspi QR
+                  оплату и крутит моторы. (ex-m102_tester)
+  web_app/        Vite/React веб (деплой на Vercel) — два режима в одном коде:
+                    • админка владельца (каталог, цены, остатки, продажи)
+                    • витрина покупателя, открывается при скане статического QR
+                      на static-QR машине
+                  (ex-customer_web / admin)
+  mmd_diag/       Flutter — диагностический клиент платы/устройства (ex-mmd)
 
 firmware/
-  esp-relay/      Прошивка ESP реле (ex-esp_relay_mart)
+  esp-relay/      Прошивка ESP-реле для static-QR машин: слушает MQTT,
+                  щёлкает реле → открывает электрозамок (ex-esp_relay_mart)
 
 supabase/         ЕДИНЫЙ бэкенд проекта `micromart`
   migrations/     История схемы БД (SQL, по timestamp) — коммитим и пушим
@@ -26,9 +30,13 @@ docs/             Документация и планы разработки
   refs/           Вендорские справочники (протоколы, API PDF)
 
 tools/            Вспомогательные python-скрипты
-hardware/         3D-модели и аппаратные файлы
 release.ps1       Сборка/публикация APK планшета в GitHub Releases
 ```
+
+Два типа продающих машин (vending со спиралями и static-QR с замком) и
+платёжные потоки подробно описаны в
+[docs/system_architecture.md](docs/system_architecture.md) и
+[docs/machine-types-and-payment-flows.md](docs/machine-types-and-payment-flows.md).
 
 ## Supabase
 
@@ -45,6 +53,6 @@ release.ps1       Сборка/публикация APK планшета в GitH
 
 ## Деплой-заметки
 
-- `apps/admin` (Vercel): после переезда в монорепо в настройках проекта Vercel
-  нужно выставить **Root Directory = `apps/admin`**.
+- `apps/web_app` (Vercel): в настройках проекта Vercel выставить
+  **Root Directory = `apps/web_app`**.
 - `apps/tablet`: релиз через `release.ps1` (нужен `.github_token`, см. `.gitignore`).
