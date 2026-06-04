@@ -6,10 +6,19 @@ import './i18n';
 import Cropper from 'react-easy-crop';
 import QRCode from 'qrcode';
 import * as JsPdfNS from 'jspdf';
-// jspdf's export shape varies between dev (esbuild) and prod (rollup) bundles,
-// so resolve the constructor defensively — the named `{ jsPDF }` import alone
-// resolved to a non-constructor in the production build ("Wn is not a constructor").
-const JsPDF = JsPdfNS.jsPDF || JsPdfNS.default || JsPdfNS;
+
+// jspdf's export shape varies between dev (esbuild) and prod (rollup) bundles
+// ("Wn is not a constructor" in prod). Resolve the constructor at call time and
+// fail loudly with what we actually got.
+function resolveJsPDF() {
+  const c =
+    JsPdfNS.jsPDF ||
+    (JsPdfNS.default && (JsPdfNS.default.jsPDF || JsPdfNS.default));
+  if (typeof c !== 'function') {
+    throw new Error('jsPDF ctor not found (keys: ' + Object.keys(JsPdfNS).join(',') + ')');
+  }
+  return c;
+}
 
 // How many most-recent sales to load (avoid pulling the whole history).
 const SALES_PAGE_SIZE = 10;
@@ -55,7 +64,8 @@ async function buildMarketQrPdf(market, qrDataUrl) {
   ctx.font = '26px sans-serif';
   ctx.fillText(url, 500, 1135);
 
-  const doc = new JsPDF({ unit: 'mm', format: 'a4' });
+  const JsPDFCtor = resolveJsPDF();
+  const doc = new JsPDFCtor({ unit: 'mm', format: 'a4' });
   const pageW = doc.internal.pageSize.getWidth();
   const margin = 15;
   const imgW = pageW - margin * 2;
@@ -69,6 +79,7 @@ async function buildMarketQrPdf(market, qrDataUrl) {
 function QrModal({ market, onClose }) {
   const [qrSrc, setQrSrc] = useState(null);
   const [pdfUrl, setPdfUrl] = useState(null);
+  const [pdfErr, setPdfErr] = useState(null);
   const url = `${STOREFRONT_BASE}/micromarket?id=${market.id}`;
   useEffect(() => {
     let alive = true;
@@ -83,7 +94,7 @@ function QrModal({ market, onClose }) {
       if (!alive) return;
       createdUrl = URL.createObjectURL(doc.output('blob'));
       setPdfUrl(createdUrl);
-    })().catch((e) => console.error('[QrModal] build failed', e));
+    })().catch((e) => { console.error('[QrModal] build failed', e); if (alive) setPdfErr(String((e && e.message) || e)); });
     return () => { alive = false; if (createdUrl) URL.revokeObjectURL(createdUrl); };
   }, [url, market]);
 
@@ -114,6 +125,10 @@ function QrModal({ market, onClose }) {
           >
             <Download size={18} /> Скачать QR (PDF)
           </a>
+        ) : pdfErr ? (
+          <div className="mt-5 w-full text-center bg-rose-50 border border-rose-200 text-rose-700 py-3 px-3 rounded-xl text-xs font-bold break-words">
+            Ошибка PDF: {pdfErr}
+          </div>
         ) : (
           <button disabled className="mt-5 w-full flex items-center justify-center gap-2 bg-slate-300 text-white py-3 rounded-xl font-bold cursor-wait">
             <Loader2 size={18} className="animate-spin" /> Подготовка…
