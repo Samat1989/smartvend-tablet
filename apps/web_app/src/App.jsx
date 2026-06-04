@@ -200,7 +200,12 @@ function App() {
       const { data, error } = await supabase.functions.invoke('create-payment', {
         body: { marketId: marketId.toString(), items: Object.values(cart) }
       });
-      if (error || !data?.paymentUrl) throw new Error("Payment initialization failed");
+      if (error || !data?.paymentUrl) {
+        // Surface the function's real error (e.g. the SmartVend gateway message).
+        let reason = error?.message;
+        try { reason = (await error?.context?.json())?.error || reason; } catch (_) {}
+        throw new Error(reason || data?.error || 'Payment initialization failed');
+      }
       setPaymentData(data);
       setPaymentStatus('awaiting_payment');
       localStorage.setItem('micromart_pending_payment', JSON.stringify({
