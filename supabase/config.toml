@@ -1,4 +1,17 @@
 
+# static_qr payment functions. verify_jwt MUST be false: the project uses the
+# new publishable key (sb_publishable_…) which is not a JWT, so verify_jwt=true
+# rejects the storefront's requests with 401 "Invalid JWT". These functions are
+# public payment endpoints (no secret is exposed; the amount is computed
+# server-side), so anon access is intended.
+[functions.create-payment]
+enabled = true
+verify_jwt = false
+
+[functions.verify-payment]
+enabled = true
+verify_jwt = false
+
 [functions.complete-order]
 enabled = true
 verify_jwt = true
