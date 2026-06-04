@@ -1,143 +1,105 @@
-import { serve } from "https://deno.land/std@0.168.0/http/server.ts"
-import { createClient } from "https://esm.sh/@supabase/supabase-js@2"
+import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
-const RESULT_URL = "https://levending.smartvend.kz/payment_result"
+// static_qr payment verification. Reads the cart + amount from the server-side
+// pending_orders row (never from the client), queries SmartVend payment_result
+// with the server-held secret, and on success records the sale + decrements
+// stock exactly once (claims the pending row atomically). No motor/door — these
+// are open-shelf micromarkets, so a paid order just records the sale.
+const RESULT_URL = "https://levending.smartvend.kz/payment_result";
+const cors = {
+  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
+};
 
-const corsHeaders = {
-  'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
+async function sign(appkey: string, randstr: string, timestamp: string) {
+  const combined = [appkey, randstr, timestamp].sort().join("");
+  const buf = await crypto.subtle.digest("SHA-1", new TextEncoder().encode(combined));
+  return Array.from(new Uint8Array(buf)).map((b) => b.toString(16).padStart(2, "0")).join("");
 }
 
-serve(async (req) => {
-  if (req.method === 'OPTIONS') {
-    return new Response('ok', { headers: corsHeaders })
-  }
+function ok(body: Record<string, unknown>) {
+  return new Response(JSON.stringify(body), { headers: { ...cors, "Content-Type": "application/json" } });
+}
 
+Deno.serve(async (req) => {
+  if (req.method === "OPTIONS") return new Response("ok", { headers: cors });
   try {
-    const { marketId, orderid, torderid, cartItems } = await req.json()
-    console.log(`[VerifyPayment] Checking status for Order: ${orderid}, Market: ${marketId}`);
+    const { marketId, orderid, torderid } = await req.json();
+    const numericId = parseInt(marketId);
+    if (!numericId || !orderid) throw new Error("marketId and orderid are required");
 
-    const supabaseClient = createClient(
-      Deno.env.get('SUPABASE_URL') ?? '',
-      Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? ''
-    )
+    const supabase = createClient(
+      Deno.env.get("SUPABASE_URL") ?? "",
+      Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "",
+    );
 
-    // --- NEW: Check if ESP32 already finalized this order ---
-    const { data: pendingOrder } = await supabaseClient
-      .from('pending_orders')
-      .select('status')
-      .eq('orderid', orderid)
-      .single();
-    
-    if (pendingOrder?.status === 'completed') {
-      console.log(`[VerifyPayment] Order ${orderid} already finalized by ESP32. Returning success.`);
-      return new Response(JSON.stringify({ status: 'success' }), {
-        headers: { ...corsHeaders, 'Content-Type': 'application/json' }
-      });
-    }
+    const { data: pending } = await supabase
+      .from("pending_orders").select("*").eq("orderid", orderid).single();
+    if (pending?.status === "completed") return ok({ status: "success" });
 
-    const { data: market } = await supabaseClient
-      .from('micromarkets')
-      .select('secret')
-      .eq('id', marketId)
-      .single()
+    const { data: market } = await supabase
+      .from("micromarkets").select("secret").eq("id", numericId).single();
+    if (!market) throw new Error("Market not found");
+    const appkey = (market.secret || "").trim();
 
-    if (!market) throw new Error("Market secret not found");
+    const timestamp = new Date().toISOString().replace(/[-:T]/g, "").split(".")[0];
+    const randstr = Math.random().toString(36).substring(2, 18).padEnd(16, "0");
+    const s = await sign(appkey, randstr, timestamp);
 
-    const appkey = market.secret.trim()
-    const timestamp = new Date().toISOString().replace(/[-:T]/g, '').split('.')[0]
-    const randstr = Math.random().toString(36).substring(2, 18).padEnd(16, '0')
-    
-    // Принудительная алфавитная сортировка
-    const parts = [appkey, randstr, timestamp];
-    parts.sort();
-    const signatureInput = parts.join("");
-    
-    console.log(`[Debug] Signature Input: ${signatureInput}`);
-    
-    const msgUint8 = new TextEncoder().encode(signatureInput)
-    const hashBuffer = await crypto.subtle.digest("SHA-1", msgUint8)
-    const hashArray = Array.from(new Uint8Array(hashBuffer))
-    const sign = hashArray.map((b) => b.toString(16).padStart(2, "0")).join("")
+    const form = new URLSearchParams();
+    form.append("ver", "v1");
+    form.append("orderid", orderid);
+    form.append("torderid", torderid ?? pending?.torderid ?? "");
+    form.append("machid", String(numericId));
+    form.append("channelid", "36");
+    form.append("randstr", randstr);
+    form.append("timestamp", timestamp);
+    form.append("sign", s);
 
-    const formData = new URLSearchParams()
-    formData.append("ver", "v1")
-    formData.append("orderid", orderid)
-    formData.append("torderid", torderid)
-    formData.append("machid", marketId)
-    formData.append("channelid", "36")
-    formData.append("randstr", randstr)
-    formData.append("timestamp", timestamp)
-    formData.append("sign", sign)
-
-    const response = await fetch(RESULT_URL, {
+    const resp = await fetch(RESULT_URL, {
       method: "POST",
       headers: { "Content-Type": "application/x-www-form-urlencoded" },
-      body: formData.toString(),
-    })
-
-    const result = await response.json()
-    console.log(`[VerifyPayment] SmartVend Response: Code ${result.code}, Msg: ${result.msg}`);
-
+      body: form.toString(),
+    });
+    const result = await resp.json();
     const code = parseInt(result.code);
 
     if (code === 1) {
-      console.log("[VerifyPayment] Success! Triggering door and saving sale.");
-      const amount = Object.values(cartItems).reduce((sum: number, item: any) => sum + (item.price * item.count), 0);
+      // Claim the pending order exactly once (idempotent across concurrent polls).
+      const { data: claimed } = await supabase
+        .from("pending_orders")
+        .update({ status: "completed" })
+        .eq("orderid", orderid).eq("status", "pending").select();
+      if (!claimed || claimed.length === 0) return ok({ status: "success" });
 
-      const { data: saleData, error: saleError } = await supabaseClient
-        .from('sales')
-        .insert({ 
-          micromarket_id: marketId,
-          amount: amount,
-          status: 'completed',
-          payment_id: torderid
-        })
-        .select()
-        .single();
+      const po: any = claimed[0];
+      const cart: any[] = Array.isArray(po.cart) ? po.cart : [];
 
-      if (saleError) console.error("[VerifyPayment] Sale insert error:", saleError);
+      const { data: sale, error: saleErr } = await supabase.from("sales").insert({
+        micromarket_id: numericId,
+        amount: po.amount,
+        status: "completed",
+        payment_id: torderid ?? po.torderid,
+      }).select().single();
+      if (saleErr) throw saleErr;
 
-      for (const item of Object.values(cartItems) as any[]) {
-        await supabaseClient.from('sales_items').insert({
-          sale_id: saleData.id,
-          product_id: item.id,
-          price: item.price,
-          quantity: item.count
+      for (const it of cart) {
+        await supabase.from("sales_items").insert({
+          sale_id: sale.id, product_id: it.id, price: it.price, quantity: it.count,
         });
-
-        await supabaseClient.rpc('decrement_stock', { 
-          product_id: item.id, 
-          qty: item.count 
-        });
+        const { data: inv } = await supabase
+          .from("inventory").select("stock").eq("id", it.id).single();
+        const newStock = Math.max(0, (inv?.stock ?? 0) - (it.count ?? 1));
+        await supabase.from("inventory").update({ stock: newStock })
+          .eq("id", it.id).eq("micromarket_id", numericId);
       }
-
-      await supabaseClient.from('commands').insert({
-        micromarket_id: marketId,
-        command_type: 'open',
-        status: 'pending'
-      });
-
-      // --- NEW: Mark pending order as completed so Cron ignores it ---
-      await supabaseClient
-        .from('pending_orders')
-        .update({ status: 'completed' })
-        .eq('orderid', orderid);
-
-      return new Response(JSON.stringify({ status: 'success' }), {
-        headers: { ...corsHeaders, 'Content-Type': 'application/json' }
-      });
+      return ok({ status: "success" });
     }
 
-    return new Response(JSON.stringify({ status: 'waiting', code: code, msg: result.msg }), {
-      headers: { ...corsHeaders, 'Content-Type': 'application/json' }
-    });
-
-  } catch (error) {
-    console.error("[VerifyPayment] Error:", error.message);
+    return ok({ status: "waiting", code, msg: result.msg });
+  } catch (error: any) {
     return new Response(JSON.stringify({ error: error.message }), {
-      status: 400,
-      headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-    })
+      status: 400, headers: { ...cors, "Content-Type": "application/json" },
+    });
   }
-})
+});

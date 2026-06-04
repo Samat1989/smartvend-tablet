@@ -189,7 +189,12 @@ function App() {
 
   const handleCheckout = async () => {
     if (Object.keys(cart).length === 0) return;
-    const marketId = marketInfo?.id || Object.values(cart)[0]?.micromarket_id || 1;
+    const marketId = currentMarketId || Object.values(cart)[0]?.micromarket_id;
+    if (!marketId) {
+      setPaymentStatus('error');
+      setErrorMessage('Не выбран аппарат — откройте витрину по QR-коду');
+      return;
+    }
     setPaymentStatus('processing');
     try {
       const { data, error } = await supabase.functions.invoke('create-payment', {

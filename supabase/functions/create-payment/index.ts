@@ -1,134 +1,120 @@
-import { serve } from "https://deno.land/std@0.168.0/http/server.ts"
-import { createClient } from "https://esm.sh/@supabase/supabase-js@2"
+import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
-const PAYMENT_URL = "https://levending.smartvend.kz/payment_request"
+// static_qr payment: the phone sends only machid + items (id + count). The
+// secret stays server-side; the amount is recomputed from inventory (never
+// trusted from the client). Initiates a SmartVend/Kaspi payment_request and
+// records a pending order so verify-payment can finalize from server data.
+const PAYMENT_URL = "https://levending.smartvend.kz/payment_request";
+const cors = {
+  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
+};
 
-const corsHeaders = {
-  'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
+async function sign(appkey: string, randstr: string, timestamp: string) {
+  const combined = [appkey, randstr, timestamp].sort().join("");
+  const buf = await crypto.subtle.digest("SHA-1", new TextEncoder().encode(combined));
+  return Array.from(new Uint8Array(buf)).map((b) => b.toString(16).padStart(2, "0")).join("");
 }
 
-serve(async (req) => {
-  if (req.method === 'OPTIONS') {
-    return new Response('ok', { headers: corsHeaders })
-  }
-
+Deno.serve(async (req) => {
+  if (req.method === "OPTIONS") return new Response("ok", { headers: cors });
   try {
-    const { marketId, items } = await req.json()
-    console.log(`[CreatePayment] Market: ${marketId}, Items: ${items?.length}`);
-
-    const supabaseClient = createClient(
-      Deno.env.get('SUPABASE_URL') ?? '',
-      Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? ''
-    )
-
-    // Принудительно ищем по числу, так как в базе int8
+    const { marketId, items } = await req.json();
     const numericId = parseInt(marketId);
-    const { data: market, error: marketError } = await supabaseClient
-      .from('micromarkets')
-      .select('secret')
-      .eq('id', numericId)
-      .single()
-
-    if (marketError || !market) {
-      throw new Error(`Market ${numericId} not found in DB`);
+    if (!numericId || !Array.isArray(items) || items.length === 0) {
+      throw new Error("marketId and items are required");
     }
 
-    const appkey = market.secret
-    const totalCents = items.length > 0 
-      ? items.reduce((sum: number, item: any) => sum + (item.price * item.count * 100), 0)
-      : 100; // Минимум 1 тенге для теста если корзина пуста
+    const supabase = createClient(
+      Deno.env.get("SUPABASE_URL") ?? "",
+      Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "",
+    );
 
-    const orderName = items.length > 0 
-      ? items.map((i: any) => i.name).join(", ").substring(0, 50)
-      : "Test Order";
+    const { data: market, error: mErr } = await supabase
+      .from("micromarkets").select("secret").eq("id", numericId).single();
+    if (mErr || !market) throw new Error(`Market ${numericId} not found`);
+    const appkey = (market.secret || "").trim();
 
-    // Точный формат даты как в успешном тесте
-    const timestamp = new Date().toISOString().replace(/[-:T]/g, '').split('.')[0].substring(0, 14);
-    const randstr = Math.random().toString(36).substring(2, 18).padEnd(16, '0')
-    const combined = [appkey, randstr, timestamp].sort().join("")
-    
-    const msgUint8 = new TextEncoder().encode(combined)
-    const hashBuffer = await crypto.subtle.digest("SHA-1", msgUint8)
-    const hashArray = Array.from(new Uint8Array(hashBuffer))
-    const sign = hashArray.map((b) => b.toString(16).padStart(2, "0")).join("")
+    // Authoritative price + stock from inventory (ignore any client prices).
+    const ids = items.map((i: any) => i.id).filter(Boolean);
+    const { data: invRows, error: invErr } = await supabase
+      .from("inventory").select("id, name, price, stock").in("id", ids).eq("micromarket_id", numericId);
+    if (invErr) throw new Error("inventory lookup failed");
+    const byId = new Map((invRows ?? []).map((r: any) => [r.id, r]));
 
-    const orderid = `${numericId}${timestamp}${randstr.substring(0, 6)}`.substring(0, 59)
+    let totalTenge = 0;
+    const cart: any[] = [];
+    const names: string[] = [];
+    for (const it of items) {
+      const row: any = byId.get(it.id);
+      if (!row) throw new Error("Товар недоступен в этом аппарате");
+      const qty = Math.max(1, parseInt(it.count) || 1);
+      if ((row.stock ?? 0) < qty) throw new Error(`Недостаточно товара: ${row.name}`);
+      totalTenge += Number(row.price) * qty;
+      cart.push({ id: row.id, price: Number(row.price), count: qty });
+      names.push(row.name);
+    }
+    if (totalTenge <= 0) throw new Error("Empty order");
+    const totalCents = Math.round(totalTenge * 100);
+    const orderName = names.join(", ").substring(0, 50) || "Micromart";
 
-    const formData = new URLSearchParams()
-    formData.append("ver", "v1")
-    formData.append("orderid", orderid)
-    formData.append("machid", numericId.toString())
-    formData.append("trackno", "01")
-    formData.append("name", orderName)
-    formData.append("price", totalCents.toString())
-    formData.append("channelid", "36") 
-    formData.append("randstr", randstr)
-    formData.append("timestamp", timestamp)
-    formData.append("sign", sign)
+    const timestamp = new Date().toISOString().replace(/[-:T]/g, "").split(".")[0].substring(0, 14);
+    const randstr = Math.random().toString(36).substring(2, 18).padEnd(16, "0");
+    const s = await sign(appkey, randstr, timestamp);
+    const orderid = `${numericId}${timestamp}${randstr.substring(0, 6)}`.substring(0, 59);
 
-    console.log(`[CreatePayment] Requesting SmartVend: Order: ${orderid}, Tot: ${totalCents}c`);
+    const form = new URLSearchParams();
+    form.append("ver", "v1");
+    form.append("orderid", orderid);
+    form.append("machid", String(numericId));
+    form.append("trackno", "01");
+    form.append("name", orderName);
+    form.append("price", String(totalCents));
+    form.append("channelid", "36");
+    form.append("randstr", randstr);
+    form.append("timestamp", timestamp);
+    form.append("sign", s);
 
-    // Add Timeout to Fetch
-    const controller = new AbortController()
-    const timeoutId = setTimeout(() => controller.abort(), 12000)
-
+    const controller = new AbortController();
+    const tid = setTimeout(() => controller.abort(), 12000);
+    let result: any;
     try {
-      const response = await fetch(PAYMENT_URL, {
+      const resp = await fetch(PAYMENT_URL, {
         method: "POST",
         headers: { "Content-Type": "application/x-www-form-urlencoded" },
-        body: formData.toString(),
-        signal: controller.signal
-      })
-
-      clearTimeout(timeoutId)
-      const text = await response.text();
-      console.log(`[CreatePayment] SmartVend Raw Res: ${text.substring(0, 300)}`);
-      
-      let result;
-      try {
-        result = JSON.parse(text);
-      } catch (pe) {
-        throw new Error(`Invalid JSON from Pay Gateway: ${text.substring(0, 50)}`);
-      }
-
-      if (result.code != 1) {
-        throw new Error(`SmartVend Error: ${result.msg || 'Unknown'} (Code: ${result.code})`);
-      }
-
-      // --- NEW: Save pending order to DB ---
-      const { error: dbError } = await supabaseClient
-        .from('pending_orders')
-        .insert({
-          orderid: result.orderid,
-          torderid: result.torderid,
-          market_id: numericId,
-          cart_data: items
-        });
-      
-      if (dbError) console.error(`[CreatePayment] DB Save Error: ${dbError.message}`);
-
-      return new Response(
-        JSON.stringify({
-          paymentUrl: result.twocode,
-          orderid: result.orderid,
-          torderid: result.torderid
-        }),
-        { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-      )
-    } catch (fetchErr: any) {
-      clearTimeout(timeoutId)
-      if (fetchErr.name === 'AbortError') {
-         throw new Error("Payment Gateway Timeout (12s limit reached). Try again later.");
-      }
-      throw fetchErr;
+        body: form.toString(),
+        signal: controller.signal,
+      });
+      clearTimeout(tid);
+      const text = await resp.text();
+      try { result = JSON.parse(text); }
+      catch { throw new Error(`Bad gateway response: ${text.substring(0, 60)}`); }
+    } catch (e: any) {
+      clearTimeout(tid);
+      if (e.name === "AbortError") throw new Error("Payment gateway timeout");
+      throw e;
     }
 
+    if (Number(result.code) !== 1) {
+      throw new Error(`SmartVend: ${result.msg || "error"} (code ${result.code})`);
+    }
+
+    await supabase.from("pending_orders").upsert({
+      orderid: result.orderid,
+      torderid: result.torderid,
+      micromarket_id: numericId,
+      amount: totalTenge,
+      cart,
+      status: "pending",
+    }, { onConflict: "orderid" });
+
+    return new Response(
+      JSON.stringify({ paymentUrl: result.twocode, orderid: result.orderid, torderid: result.torderid }),
+      { headers: { ...cors, "Content-Type": "application/json" } },
+    );
   } catch (error: any) {
-    console.error(`[CreatePayment] Fatal Catch: ${error.message}`);
     return new Response(JSON.stringify({ error: error.message }), {
-      status: 400,
-      headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-    })
+      status: 400, headers: { ...cors, "Content-Type": "application/json" },
+    });
   }
-})
+});
