@@ -16,12 +16,13 @@ function buildPdfBlobFromCanvas(canvas) {
   for (let i = 0; i < bin.length; i++) jpeg[i] = bin.charCodeAt(i);
 
   const W = canvas.width, H = canvas.height;
-  const pageW = 595.28, pageH = 841.89; // A4 portrait, points
-  const margin = 36;
-  const drawW = pageW - margin * 2;
-  const drawH = drawW * (H / W);
-  const x = margin;
-  const y = pageH - margin - drawH;
+  const CM = 28.3465; // points per cm
+  const pageW = 7 * CM, pageH = 15 * CM; // 7cm × 15cm label
+  // Canvas is authored at the same 7:15 aspect, so fill the page edge to edge.
+  const drawW = pageW;
+  const drawH = pageH;
+  const x = 0;
+  const y = 0;
   const content = `q\n${drawW.toFixed(2)} 0 0 ${drawH.toFixed(2)} ${x.toFixed(2)} ${y.toFixed(2)} cm\n/Im0 Do\nQ\n`;
 
   const enc = new TextEncoder();
@@ -74,19 +75,23 @@ async function buildMarketQrPdf(market, qrDataUrl) {
   const url = `${STOREFRONT_BASE}/micromarket?id=${market.id}`;
   if (!qrDataUrl) qrDataUrl = await QRCode.toDataURL(url, { width: 900, margin: 1, errorCorrectionLevel: 'M' });
 
+  // Canvas aspect = 7:15 to match the printed label (7cm wide × 15cm tall).
+  // 100 px per cm. QR is kept square so it scans reliably.
   const canvas = document.createElement('canvas');
-  canvas.width = 1000;
-  canvas.height = 1300;
+  canvas.width = 700;
+  canvas.height = 1500;
   const ctx = canvas.getContext('2d');
   ctx.fillStyle = '#ffffff';
   ctx.fillRect(0, 0, canvas.width, canvas.height);
   ctx.textAlign = 'center';
+  const cx = canvas.width / 2;
+
   ctx.fillStyle = '#111827';
-  ctx.font = 'bold 60px sans-serif';
-  ctx.fillText(market.name || `Аппарат №${market.id}`, 500, 110);
-  ctx.font = '34px sans-serif';
+  ctx.font = 'bold 44px sans-serif';
+  ctx.fillText(market.name || `Аппарат №${market.id}`, cx, 110);
+  ctx.font = '28px sans-serif';
   ctx.fillStyle = '#6b7280';
-  ctx.fillText(`Аппарат №${market.id}`, 500, 165);
+  ctx.fillText(`Аппарат №${market.id}`, cx, 158);
 
   // NB: `Image` is imported from lucide-react in this file, so use the global
   // browser constructor explicitly (new Image() would hit the lucide icon).
@@ -96,15 +101,16 @@ async function buildMarketQrPdf(market, qrDataUrl) {
     img.onerror = reject;
     img.src = qrDataUrl;
   });
-  const qrSize = 760;
-  ctx.drawImage(img, (1000 - qrSize) / 2, 220, qrSize, qrSize);
+  const qrSize = 620; // ~6.2 cm square
+  ctx.drawImage(img, (canvas.width - qrSize) / 2, 230, qrSize, qrSize);
 
   ctx.fillStyle = '#111827';
-  ctx.font = 'bold 46px sans-serif';
-  ctx.fillText('Отсканируйте, чтобы купить', 500, 1075);
+  ctx.font = 'bold 42px sans-serif';
+  ctx.fillText('Отсканируйте,', cx, 970);
+  ctx.fillText('чтобы купить', cx, 1020);
   ctx.fillStyle = '#9ca3af';
-  ctx.font = '26px sans-serif';
-  ctx.fillText(url, 500, 1135);
+  ctx.font = '20px sans-serif';
+  ctx.fillText(url, cx, 1080);
 
   return buildPdfBlobFromCanvas(canvas);
 }
