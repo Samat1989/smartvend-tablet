@@ -17,9 +17,9 @@ const STOREFRONT_BASE = import.meta.env.VITE_STOREFRONT_URL || (typeof window !=
 // Build + download a printable PDF with the machine's QR (encodes
 // <storefront>/?marketId=<id>). Rendered via canvas so Cyrillic text works
 // (jsPDF's built-in fonts don't support it).
-async function downloadMarketQrPdf(market) {
+async function buildMarketQrPdf(market, qrDataUrl) {
   const url = `${STOREFRONT_BASE}/micromarket?id=${market.id}`;
-  const qrDataUrl = await QRCode.toDataURL(url, { width: 900, margin: 1, errorCorrectionLevel: 'M' });
+  if (!qrDataUrl) qrDataUrl = await QRCode.toDataURL(url, { width: 900, margin: 1, errorCorrectionLevel: 'M' });
 
   const canvas = document.createElement('canvas');
   canvas.width = 1000;
@@ -57,21 +57,31 @@ async function downloadMarketQrPdf(market) {
   const imgW = pageW - margin * 2;
   const imgH = imgW * (canvas.height / canvas.width);
   doc.addImage(canvas.toDataURL('image/png'), 'PNG', margin, margin, imgW, imgH);
-  doc.save(`qr-apparat-${market.id}.pdf`);
+  return doc;
 }
 
 // Modal that previews a machine's QR (links to the storefront on this same
 // Vercel deployment) with a button to download it as a printable PDF.
 function QrModal({ market, onClose }) {
   const [qrSrc, setQrSrc] = useState(null);
+  const [pdfUrl, setPdfUrl] = useState(null);
   const url = `${STOREFRONT_BASE}/micromarket?id=${market.id}`;
   useEffect(() => {
     let alive = true;
-    QRCode.toDataURL(url, { width: 600, margin: 1, errorCorrectionLevel: 'M' })
-      .then((d) => { if (alive) setQrSrc(d); })
-      .catch(() => {});
-    return () => { alive = false; };
-  }, [url]);
+    let createdUrl = null;
+    (async () => {
+      const qr = await QRCode.toDataURL(url, { width: 600, margin: 1, errorCorrectionLevel: 'M' });
+      if (!alive) return;
+      setQrSrc(qr);
+      // Pre-build the PDF blob now (not on click) so the download is a plain
+      // anchor click — avoids browsers blocking a download triggered after await.
+      const doc = await buildMarketQrPdf(market, qr);
+      if (!alive) return;
+      createdUrl = URL.createObjectURL(doc.output('blob'));
+      setPdfUrl(createdUrl);
+    })().catch((e) => console.error('[QrModal] build failed', e));
+    return () => { alive = false; if (createdUrl) URL.revokeObjectURL(createdUrl); };
+  }, [url, market]);
 
   return (
     <div className="fixed inset-0 z-[60] bg-black/50 flex items-center justify-center p-4" onClick={onClose}>
@@ -92,12 +102,19 @@ function QrModal({ market, onClose }) {
           </div>
           <a href={url} target="_blank" rel="noreferrer" className="mt-3 block text-[11px] text-slate-400 hover:text-slate-600 break-all">{url}</a>
         </div>
-        <button
-          onClick={() => downloadMarketQrPdf(market)}
-          className="mt-5 w-full flex items-center justify-center gap-2 bg-slate-900 text-white py-3 rounded-xl font-bold hover:bg-slate-700 transition-all"
-        >
-          <Download size={18} /> Скачать QR (PDF)
-        </button>
+        {pdfUrl ? (
+          <a
+            href={pdfUrl}
+            download={`qr-apparat-${market.id}.pdf`}
+            className="mt-5 w-full flex items-center justify-center gap-2 bg-slate-900 text-white py-3 rounded-xl font-bold hover:bg-slate-700 transition-all"
+          >
+            <Download size={18} /> Скачать QR (PDF)
+          </a>
+        ) : (
+          <button disabled className="mt-5 w-full flex items-center justify-center gap-2 bg-slate-300 text-white py-3 rounded-xl font-bold cursor-wait">
+            <Loader2 size={18} className="animate-spin" /> Подготовка…
+          </button>
+        )}
       </div>
     </div>
   );
