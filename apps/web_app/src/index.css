@@ -7,12 +7,12 @@
   --font-body: "Inter", sans-serif;
   --font-lexend: "Lexend", sans-serif;
   
-  /* The Kinetic Gourmet Official Palette */
-  --color-primary: #9c3f00;
-  --color-primary-dim: #893600;
-  --color-primary-container: #ff7a2f;
-  --color-on-primary: #fff0ea;
-  --color-on-primary-fixed-variant: #4f1c00;
+  /* Graphite / monochrome accent (was burnt-orange). */
+  --color-primary: #1f2937;
+  --color-primary-dim: #0f172a;
+  --color-primary-container: #e5e7eb;
+  --color-on-primary: #ffffff;
+  --color-on-primary-fixed-variant: #1f2937;
   
   --color-secondary: #904800;
   --color-secondary-container: #ffc69f;

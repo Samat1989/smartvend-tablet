@@ -48,20 +48,18 @@ function App() {
   };
 
   useEffect(() => {
-    // 1. Get marketId from URL (e.g., ?marketId=123)
+    // The storefront only opens a machine when its id comes from the QR
+    // (?marketId=...). With no URL id we show the "scan QR" screen and never
+    // fall back to a saved/default market.
     const params = new URLSearchParams(window.location.search);
     const urlMarketId = params.get('marketId');
-    const savedId = localStorage.getItem('current_market_id');
-    const finalId = urlMarketId || savedId || '1';
-    
-    setCurrentMarketId(finalId);
-    
+
+    setCurrentMarketId(urlMarketId || null);
+
     if (urlMarketId) {
-      localStorage.setItem('current_market_id', urlMarketId);
+      fetchMarketInfo(urlMarketId);
+      fetchItems(urlMarketId);
     }
-    
-    fetchMarketInfo(finalId);
-    fetchItems(finalId);
     fetchCategories();
     
     const lng = i18n.language.toUpperCase().substring(0, 2);
@@ -221,6 +219,22 @@ function App() {
   });
 
   const chefsPick = items.find(i => i.stock > 0);
+
+  // No machine id in the URL → the storefront was opened without a QR.
+  // Don't show any machine's catalog; prompt the customer to scan the code.
+  if (!currentMarketId) {
+    return (
+      <div className="min-h-screen bg-background text-on-surface flex flex-col items-center justify-center px-6 text-center">
+        <div className="w-20 h-20 rounded-full bg-primary/10 flex items-center justify-center mb-6">
+          <ShoppingBag className="text-primary" size={36} />
+        </div>
+        <h1 className="text-primary font-lexend font-black text-2xl mb-3">Micromart</h1>
+        <p className="text-on-surface-variant font-lexend max-w-xs">
+          {t('scan_qr_prompt', { defaultValue: 'Отсканируйте QR-код на аппарате, чтобы открыть витрину.' })}
+        </p>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-background text-on-surface">

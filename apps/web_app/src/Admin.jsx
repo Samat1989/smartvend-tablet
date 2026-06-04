@@ -1,9 +1,12 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { supabase } from './supabaseClient';
-import { Image, Upload, Plus, Minus, Save, Trash2, X, Loader2, Pencil, Receipt, Calendar, ShoppingBag, History, Languages, CheckCircle2, XCircle, AlertTriangle } from 'lucide-react';
+import { Image, Upload, Plus, Minus, Save, Trash2, X, Loader2, Pencil, Receipt, Calendar, ShoppingBag, History, Languages, CheckCircle2, XCircle, AlertTriangle, ChevronRight, ChevronLeft, ChevronDown, Package } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import './i18n';
 import Cropper from 'react-easy-crop';
+
+// How many most-recent sales to load (avoid pulling the whole history).
+const SALES_PAGE_SIZE = 10;
 
 // Map an M102 poll result byte → i18n key. The codes are emitted by the
 // vending tablet's `BoardClient.dispense` and persisted to
@@ -150,10 +153,13 @@ export default function Admin() {
   const [newCatEn, setNewCatEn] = useState('');
   const [selectedCategoryFilter, setSelectedCategoryFilter] = useState('All');
   const [productToDelete, setProductToDelete] = useState(null);
-  const [activeTab, setActiveTab] = useState('inventory'); // 'inventory' | 'catalog' | 'sales'
+  const [activeTab, setActiveTab] = useState('sales'); // 'sales' | 'inventory' | 'catalog'
   const [sales, setSales] = useState([]);
-  const [timeFilter, setTimeFilter] = useState('all'); // 'all', 'day', 'week', 'month'
+  const [timeFilter, setTimeFilter] = useState('recent'); // 'recent'|'day'|'week'|'month'|'period'
+  const [periodFrom, setPeriodFrom] = useState('');
+  const [periodTo, setPeriodTo] = useState('');
   const [selectedSalesMarket, setSelectedSalesMarket] = useState('all');
+  const [expandedSaleId, setExpandedSaleId] = useState(null); // which sale's items are shown
 
   // Catalog tab — products table (SKU catalog, owner-scoped).
   // Separate from inventory: products are reusable across micromarkets
@@ -246,7 +252,8 @@ export default function Admin() {
     if (session && activeTab === 'sales') {
       fetchSales();
     }
-  }, [session, activeTab]);
+    // Re-query server-side whenever a sales filter changes.
+  }, [session, activeTab, timeFilter, selectedSalesMarket, periodFrom, periodTo]);
 
   useEffect(() => {
     if (session && activeTab === 'catalog') {
@@ -378,7 +385,7 @@ export default function Admin() {
   async function fetchSales() {
     setLoading(true);
     try {
-      const { data, error } = await supabase
+      let q = supabase
         .from('sales')
         .select(`
           *,
@@ -389,7 +396,34 @@ export default function Admin() {
           )
         `)
         .order('created_at', { ascending: false });
-      
+
+      // Machine filter
+      if (selectedSalesMarket !== 'all') {
+        q = q.eq('micromarket_id', selectedSalesMarket);
+      }
+
+      // Time filter (server-side)
+      let since = null;
+      if (timeFilter === 'day') {
+        const d = new Date(); d.setHours(0, 0, 0, 0); since = d.toISOString();
+      } else if (timeFilter === 'week') {
+        const d = new Date(); d.setDate(d.getDate() - 7); since = d.toISOString();
+      } else if (timeFilter === 'month') {
+        const d = new Date(); d.setMonth(d.getMonth() - 1); since = d.toISOString();
+      }
+      if (since) q = q.gte('created_at', since);
+      if (timeFilter === 'period') {
+        if (periodFrom) q = q.gte('created_at', new Date(periodFrom).toISOString());
+        if (periodTo) {
+          const to = new Date(periodTo); to.setHours(23, 59, 59, 999);
+          q = q.lte('created_at', to.toISOString());
+        }
+      }
+
+      // "recent" = just the last few; filtered views get a higher safety cap.
+      q = q.limit(timeFilter === 'recent' ? SALES_PAGE_SIZE : 500);
+
+      const { data, error } = await q;
       if (error) throw error;
       setSales(data || []);
     } catch (err) {
@@ -407,7 +441,8 @@ export default function Admin() {
         .select('id, name, layout_json');
       if (error) throw error;
       setMarkets(data || []);
-      if (data?.length > 0) setSelectedMarketId(data[0].id);
+      // No auto-select: the Inventory tab opens on the machine list and the
+      // operator drills into a specific machine. Sales/Catalog don't need one.
     } catch (err) {
       console.error('Error fetching markets:', err);
       alert('Could not load markets');
@@ -746,32 +781,9 @@ export default function Admin() {
       return la.localeCompare(lb, undefined, { numeric: true });
     });
 
-  const filteredSales = sales.filter(sale => {
-    // Фильтр по маркету
-    const matchesMarket = selectedSalesMarket === 'all' || sale.micromarket_id.toString() === selectedSalesMarket;
-    if (!matchesMarket) return false;
-
-    // Фильтр по времени
-    if (timeFilter === 'all') return true;
-    const saleDate = new Date(sale.created_at);
-    const now = new Date();
-    if (timeFilter === 'day') {
-      const startOfDay = new Date();
-      startOfDay.setHours(0, 0, 0, 0);
-      return saleDate >= startOfDay;
-    }
-    if (timeFilter === 'week') {
-      const lastWeek = new Date();
-      lastWeek.setDate(lastWeek.getDate() - 7);
-      return saleDate >= lastWeek;
-    }
-    if (timeFilter === 'month') {
-      const lastMonth = new Date();
-      lastMonth.setMonth(lastMonth.getMonth() - 1);
-      return saleDate >= lastMonth;
-    }
-    return true;
-  });
+  // Filtering (market + time/period) now happens server-side in fetchSales();
+  // render exactly what was loaded.
+  const filteredSales = sales;
 
   const totalSalesAmount = filteredSales.reduce((sum, s) => sum + (s.amount || 0), 0);
 
@@ -786,7 +798,13 @@ export default function Admin() {
           <div className="h-10 w-[1px] bg-slate-300 hidden sm:block"></div>
           <div className="flex bg-slate-200 p-1 rounded-xl border border-slate-300 w-full sm:w-auto">
             <button
-              onClick={() => setActiveTab('inventory')}
+              onClick={() => setActiveTab('sales')}
+              className={`flex-1 sm:flex-none px-2.5 sm:px-4 py-2 sm:py-1.5 rounded-lg font-bold transition-all text-xs ${activeTab === 'sales' ? 'bg-white text-primary shadow-md' : 'text-slate-600 hover:text-slate-900'}`}
+            >
+              {t('sales')}
+            </button>
+            <button
+              onClick={() => { setSelectedMarketId(null); setActiveTab('inventory'); }}
               className={`flex-1 sm:flex-none px-2.5 sm:px-4 py-2 sm:py-1.5 rounded-lg font-bold transition-all text-xs ${activeTab === 'inventory' ? 'bg-white text-primary shadow-md' : 'text-slate-600 hover:text-slate-900'}`}
             >
               {t('inventory')}
@@ -797,12 +815,6 @@ export default function Admin() {
             >
               Каталог
             </button>
-            <button
-              onClick={() => setActiveTab('sales')}
-              className={`flex-1 sm:flex-none px-2.5 sm:px-4 py-2 sm:py-1.5 rounded-lg font-bold transition-all text-xs ${activeTab === 'sales' ? 'bg-white text-primary shadow-md' : 'text-slate-600 hover:text-slate-900'}`}
-            >
-              {t('sales')}
-            </button>
           </div>
         </div>
         <div className="flex items-center gap-3">
@@ -810,15 +822,8 @@ export default function Admin() {
             <Languages size={16} className="text-slate-400" />
             <span className="text-[10px] font-black uppercase text-slate-400">{i18n.language}</span>
           </button>
-          <select 
-            className="p-2 text-xs rounded-lg border border-slate-200 bg-slate-50 font-bold focus:ring-2 focus:ring-primary/20 outline-none"
-            value={selectedMarketId || ''}
-            onChange={(e) => setSelectedMarketId(e.target.value)}
-          >
-            {markets.map(m => (
-              <option key={m.id} value={m.id}>{m.name || `${t('market')} #${m.id}`}</option>
-            ))}
-          </select>
+          {/* No global machine picker: Sales/Catalog don't need one, and the
+              Inventory tab has its own machine list to drill into. */}
           <button
             onClick={() => supabase.auth.signOut()}
             className="text-xs font-bold text-on-surface-variant hover:text-red-500 transition-colors ml-4"
@@ -828,8 +833,7 @@ export default function Admin() {
         </div>
       </header>
 
-      {selectedMarketId && (
-        <div className="bg-white rounded-2xl sm:rounded-3xl p-3 sm:p-4 md:p-8 shadow-lg border border-slate-300">
+      <div className="bg-white rounded-2xl sm:rounded-3xl p-3 sm:p-4 md:p-8 shadow-lg border border-slate-300">
           {activeTab === 'catalog' ? (
             <CatalogTab
               products={catalogProducts}
@@ -854,7 +858,40 @@ export default function Admin() {
               onDelete={deleteCatalogProduct}
             />
           ) : activeTab === 'inventory' ? (
+            !selectedMarketId ? (
+              <div>
+                <h2 className="text-2xl font-black text-slate-900 mb-1">{t('inventory')}</h2>
+                <p className="text-[11px] font-bold text-slate-500 uppercase tracking-widest mb-6">Выберите аппарат</p>
+                <div className="space-y-2">
+                  {markets.map(m => (
+                    <button
+                      key={m.id}
+                      onClick={() => setSelectedMarketId(m.id)}
+                      className="w-full flex items-center gap-3 p-4 rounded-2xl bg-slate-50 border-2 border-slate-200 hover:border-primary hover:bg-white hover:shadow-md transition-all text-left"
+                    >
+                      <div className="w-11 h-11 rounded-xl bg-indigo-600 text-white flex items-center justify-center shrink-0">
+                        <Package size={20} />
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <div className="font-bold text-slate-900 truncate">{m.name || `${t('market')} #${m.id}`}</div>
+                        <div className="text-[11px] font-bold text-slate-500 uppercase tracking-widest">{t('apparatus_no')}{m.id}</div>
+                      </div>
+                      <ChevronRight size={18} className="text-slate-400" />
+                    </button>
+                  ))}
+                  {markets.length === 0 && (
+                    <p className="text-sm text-slate-400 italic p-4">Нет аппаратов</p>
+                  )}
+                </div>
+              </div>
+            ) : (
             <>
+              <button
+                onClick={() => setSelectedMarketId(null)}
+                className="flex items-center gap-1.5 text-sm font-bold text-slate-500 hover:text-primary transition-colors mb-4"
+              >
+                <ChevronLeft size={16} /> Все аппараты
+              </button>
               <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 mb-8">
                 <div>
                   <h2 className="text-2xl font-black text-slate-900">{t('inventory')}</h2>
@@ -925,6 +962,7 @@ export default function Admin() {
                 />
               )}
             </>
+            )
           ) : (
             <div className="space-y-8">
               <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
@@ -946,12 +984,13 @@ export default function Admin() {
 
                   <div className="flex-1 sm:flex-none bg-slate-100 p-1 rounded-xl flex gap-1">
                     {[
+                      { id: 'recent', label: 'Последние' },
                       { id: 'day', label: t('today') },
                       { id: 'week', label: t('this_week') },
                       { id: 'month', label: t('this_month') },
-                      { id: 'all', label: t('all_time') }
+                      { id: 'period', label: 'Период' }
                     ].map(f => (
-                      <button 
+                      <button
                         key={f.id}
                         onClick={() => setTimeFilter(f.id)}
                         className={`flex-1 sm:flex-none px-3 py-1.5 rounded-lg text-[10px] font-black uppercase tracking-wider transition-all ${timeFilter === f.id ? 'bg-white text-primary shadow-sm' : 'text-slate-400 hover:text-slate-600'}`}
@@ -960,19 +999,36 @@ export default function Admin() {
                       </button>
                     ))}
                   </div>
+                  {timeFilter === 'period' && (
+                    <div className="flex items-center gap-1.5 w-full sm:w-auto">
+                      <input
+                        type="date"
+                        value={periodFrom}
+                        onChange={(e) => setPeriodFrom(e.target.value)}
+                        className="flex-1 sm:flex-none p-2 rounded-xl border border-slate-200 bg-slate-50 text-xs font-bold outline-none"
+                      />
+                      <span className="text-slate-400 text-xs">—</span>
+                      <input
+                        type="date"
+                        value={periodTo}
+                        onChange={(e) => setPeriodTo(e.target.value)}
+                        className="flex-1 sm:flex-none p-2 rounded-xl border border-slate-200 bg-slate-50 text-xs font-bold outline-none"
+                      />
+                    </div>
+                  )}
                   <button onClick={fetchSales} className="p-2.5 bg-slate-100 text-slate-500 rounded-xl hover:bg-primary/5 hover:text-primary transition-all"><History size={18}/></button>
                 </div>
               </div>
 
               {/* Статистика */}
               <div className="grid grid-cols-2 sm:grid-cols-3 gap-4">
-                <div className="bg-white border border-slate-100 rounded-2xl p-4 shadow-sm">
-                  <div className="text-[9px] font-black text-slate-300 uppercase tracking-widest mb-1">{t('revenue')}</div>
-                  <div className="text-xl font-black text-primary">{totalSalesAmount} <span className="text-xs">₸</span></div>
+                <div className="bg-white border border-slate-200 rounded-2xl p-4 shadow-sm">
+                  <div className="text-[10px] font-black text-slate-500 uppercase tracking-widest mb-1">{t('revenue')}</div>
+                  <div className="text-2xl font-black text-primary">{totalSalesAmount} <span className="text-sm">₸</span></div>
                 </div>
-                <div className="bg-white border border-slate-100 rounded-2xl p-4 shadow-sm">
-                  <div className="text-[9px] font-black text-slate-300 uppercase tracking-widest mb-1">{t('orders')}</div>
-                  <div className="text-xl font-black text-slate-800">{filteredSales.length}</div>
+                <div className="bg-white border border-slate-200 rounded-2xl p-4 shadow-sm">
+                  <div className="text-[10px] font-black text-slate-500 uppercase tracking-widest mb-1">{t('orders')}</div>
+                  <div className="text-2xl font-black text-slate-900">{filteredSales.length}</div>
                 </div>
               </div>
 
@@ -994,17 +1050,21 @@ export default function Admin() {
                     );
                     const inProgress = sale.status === 'in_progress';
                     return (
-                    <div key={sale.id} className="bg-white border border-slate-100 rounded-2xl p-4 md:p-6 hover:border-primary/20 transition-all">
-                      <div className="flex flex-wrap justify-between items-start gap-4 mb-6">
+                    <div key={sale.id} className="bg-white border-2 border-slate-200 rounded-2xl p-4 md:p-6 hover:border-primary/40 hover:shadow-md transition-all">
+                      <div
+                        className="flex flex-wrap justify-between items-start gap-4 cursor-pointer select-none"
+                        onClick={() => setExpandedSaleId(expandedSaleId === sale.id ? null : sale.id)}
+                      >
                         <div className="flex items-center gap-4">
-                          <div className="w-10 h-10 bg-slate-50 text-slate-400 rounded-xl flex items-center justify-center">
+                          <div className="w-10 h-10 bg-primary/10 text-primary rounded-xl flex items-center justify-center">
                             <Receipt size={20} />
                           </div>
                           <div>
-                            <div className="text-sm font-black text-slate-800">{sale.micromarkets?.name || `Аппарат #${sale.micromarket_id}`}</div>
-                            <div className="flex items-center gap-2 text-[10px] font-bold opacity-30 uppercase tracking-tighter">
+                            <div className="text-sm font-black text-slate-900">{sale.micromarkets?.name || `Аппарат #${sale.micromarket_id}`}</div>
+                            <div className="flex items-center gap-2 text-[10px] font-bold text-slate-500 uppercase tracking-tighter">
                               <Calendar size={10} />
                               {new Date(sale.created_at).toLocaleString('ru-RU')}
+                              <span className="text-slate-400">· {items.length} тов.</span>
                             </div>
                             {inProgress && (
                               <div className="mt-1 inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-amber-50 text-amber-700 text-[10px] font-black uppercase tracking-wider">
@@ -1014,18 +1074,25 @@ export default function Admin() {
                             )}
                           </div>
                         </div>
-                        <div className="text-right">
-                          <div className="text-xl font-black text-primary">{sale.amount} ₸</div>
-                          {failedItems.length > 0 && (
-                            <div className="mt-1 inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-rose-50 text-rose-600 text-[10px] font-black uppercase tracking-wider">
-                              <AlertTriangle size={11} />
-                              {t('refund_due')}: {refundTotal} ₸
-                            </div>
-                          )}
+                        <div className="flex items-center gap-3 shrink-0">
+                          <div className="text-right">
+                            <div className="text-xl font-black text-primary">{sale.amount} ₸</div>
+                            {failedItems.length > 0 && (
+                              <div className="mt-1 inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-rose-50 text-rose-600 text-[10px] font-black uppercase tracking-wider">
+                                <AlertTriangle size={11} />
+                                {t('refund_due')}: {refundTotal} ₸
+                              </div>
+                            )}
+                          </div>
+                          <ChevronDown
+                            size={18}
+                            className={`text-slate-400 transition-transform ${expandedSaleId === sale.id ? 'rotate-180' : ''}`}
+                          />
                         </div>
                       </div>
 
-                      <div className="space-y-3">
+                      {expandedSaleId === sale.id && (
+                      <div className="space-y-3 mt-6 pt-4 border-t border-slate-100">
                         {items.map(item => {
                           const failed = item.dispensed === false;
                           return (
@@ -1054,13 +1121,14 @@ export default function Admin() {
                           );
                         })}
                       </div>
+                      )}
                     </div>
                     );
                   })}
                   {sales.length === 0 && (
-                    <div className="text-center py-20 bg-slate-50 rounded-3xl border-2 border-dashed border-slate-100">
-                      <ShoppingBag size={40} className="mx-auto mb-4 opacity-10" />
-                      <p className="font-black opacity-20 text-sm uppercase tracking-widest">Нет данных за период</p>
+                    <div className="text-center py-20 bg-slate-50 rounded-3xl border-2 border-dashed border-slate-200">
+                      <ShoppingBag size={40} className="mx-auto mb-4 text-slate-300" />
+                      <p className="font-black text-slate-400 text-sm uppercase tracking-widest">Нет данных за период</p>
                     </div>
                   )}
                 </div>
@@ -1068,7 +1136,6 @@ export default function Admin() {
             </div>
           )}
         </div>
-      )}
 
       {/* Модалка редактирования — full-screen на мобильном, центр на десктопе. */}
       {editingProduct && (
@@ -1340,7 +1407,7 @@ export default function Admin() {
                       >
                         <div className="w-12 h-12 bg-white rounded-xl flex items-center justify-center overflow-hidden shrink-0 border-2 border-slate-200">
                           {p.image_url ? (
-                            <img src={p.image_url} alt={p.name} className="w-full h-full object-contain p-1" />
+                            <img src={p.image_url} alt={p.name} loading="lazy" className="w-full h-full object-contain p-1" />
                           ) : p.emoji ? (
                             <span className="text-2xl">{p.emoji}</span>
                           ) : (
@@ -1619,7 +1686,7 @@ function CatalogTab({
             >
               <div className="w-14 h-14 bg-white rounded-xl flex items-center justify-center overflow-hidden shrink-0 border-2 border-slate-200">
                 {p.image_url ? (
-                  <img src={p.image_url} alt={p.name} className="w-full h-full object-contain p-1" />
+                  <img src={p.image_url} alt={p.name} loading="lazy" className="w-full h-full object-contain p-1" />
                 ) : p.emoji ? (
                   <span className="text-2xl">{p.emoji}</span>
                 ) : (
@@ -1763,7 +1830,7 @@ function InventoryByLayout({ products, layout, categories, stockLabel, priceLabe
               >
                 <div className="w-10 h-10 bg-slate-50 rounded-lg flex items-center justify-center overflow-hidden shrink-0 border border-slate-200">
                   {p.image_url ? (
-                    <img src={p.image_url} alt={p.name} className="w-full h-full object-contain p-1" />
+                    <img src={p.image_url} alt={p.name} loading="lazy" className="w-full h-full object-contain p-1" />
                   ) : p.emoji ? (
                     <span className="text-xl">{p.emoji}</span>
                   ) : (
@@ -1835,7 +1902,7 @@ function InventoryRow({ slot, product, category, stockLabel, priceLabel, onEdit,
           {empty ? (
             <Image className="text-slate-200" size={20} />
           ) : product.image_url ? (
-            <img src={product.image_url} alt={product.name} className="w-full h-full object-contain p-1" />
+            <img src={product.image_url} alt={product.name} loading="lazy" className="w-full h-full object-contain p-1" />
           ) : product.emoji ? (
             <span className="text-2xl">{product.emoji}</span>
           ) : (
