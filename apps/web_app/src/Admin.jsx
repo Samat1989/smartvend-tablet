@@ -88,7 +88,9 @@ async function buildMarketQrPdf(market, qrDataUrl) {
   ctx.fillStyle = '#6b7280';
   ctx.fillText(`Аппарат №${market.id}`, 500, 165);
 
-  const img = new Image();
+  // NB: `Image` is imported from lucide-react in this file, so use the global
+  // browser constructor explicitly (new Image() would hit the lucide icon).
+  const img = new window.Image();
   await new Promise((resolve, reject) => {
     img.onload = resolve;
     img.onerror = reject;
