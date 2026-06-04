@@ -1,12 +1,107 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { supabase } from './supabaseClient';
-import { Image, Upload, Plus, Minus, Save, Trash2, X, Loader2, Pencil, Receipt, Calendar, ShoppingBag, History, Languages, CheckCircle2, XCircle, AlertTriangle, ChevronRight, ChevronLeft, ChevronDown, Package } from 'lucide-react';
+import { Image, Upload, Download, Plus, Minus, Save, Trash2, X, Loader2, Pencil, Receipt, Calendar, ShoppingBag, History, Languages, CheckCircle2, XCircle, AlertTriangle, ChevronRight, ChevronLeft, ChevronDown, Package, QrCode } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import './i18n';
 import Cropper from 'react-easy-crop';
+import QRCode from 'qrcode';
+import { jsPDF } from 'jspdf';
 
 // How many most-recent sales to load (avoid pulling the whole history).
 const SALES_PAGE_SIZE = 10;
+
+// Base URL the QR points at — the customer storefront. Set VITE_STOREFRONT_URL
+// to the deployed storefront origin; falls back to the current origin.
+const STOREFRONT_BASE = import.meta.env.VITE_STOREFRONT_URL || (typeof window !== 'undefined' ? window.location.origin : '');
+
+// Build + download a printable PDF with the machine's QR (encodes
+// <storefront>/?marketId=<id>). Rendered via canvas so Cyrillic text works
+// (jsPDF's built-in fonts don't support it).
+async function downloadMarketQrPdf(market) {
+  const url = `${STOREFRONT_BASE}/micromarket?id=${market.id}`;
+  const qrDataUrl = await QRCode.toDataURL(url, { width: 900, margin: 1, errorCorrectionLevel: 'M' });
+
+  const canvas = document.createElement('canvas');
+  canvas.width = 1000;
+  canvas.height = 1300;
+  const ctx = canvas.getContext('2d');
+  ctx.fillStyle = '#ffffff';
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  ctx.textAlign = 'center';
+  ctx.fillStyle = '#111827';
+  ctx.font = 'bold 60px sans-serif';
+  ctx.fillText(market.name || `Аппарат №${market.id}`, 500, 110);
+  ctx.font = '34px sans-serif';
+  ctx.fillStyle = '#6b7280';
+  ctx.fillText(`Аппарат №${market.id}`, 500, 165);
+
+  const img = new Image();
+  await new Promise((resolve, reject) => {
+    img.onload = resolve;
+    img.onerror = reject;
+    img.src = qrDataUrl;
+  });
+  const qrSize = 760;
+  ctx.drawImage(img, (1000 - qrSize) / 2, 220, qrSize, qrSize);
+
+  ctx.fillStyle = '#111827';
+  ctx.font = 'bold 46px sans-serif';
+  ctx.fillText('Отсканируйте, чтобы купить', 500, 1075);
+  ctx.fillStyle = '#9ca3af';
+  ctx.font = '26px sans-serif';
+  ctx.fillText(url, 500, 1135);
+
+  const doc = new jsPDF({ unit: 'mm', format: 'a4' });
+  const pageW = doc.internal.pageSize.getWidth();
+  const margin = 15;
+  const imgW = pageW - margin * 2;
+  const imgH = imgW * (canvas.height / canvas.width);
+  doc.addImage(canvas.toDataURL('image/png'), 'PNG', margin, margin, imgW, imgH);
+  doc.save(`qr-apparat-${market.id}.pdf`);
+}
+
+// Modal that previews a machine's QR (links to the storefront on this same
+// Vercel deployment) with a button to download it as a printable PDF.
+function QrModal({ market, onClose }) {
+  const [qrSrc, setQrSrc] = useState(null);
+  const url = `${STOREFRONT_BASE}/micromarket?id=${market.id}`;
+  useEffect(() => {
+    let alive = true;
+    QRCode.toDataURL(url, { width: 600, margin: 1, errorCorrectionLevel: 'M' })
+      .then((d) => { if (alive) setQrSrc(d); })
+      .catch(() => {});
+    return () => { alive = false; };
+  }, [url]);
+
+  return (
+    <div className="fixed inset-0 z-[60] bg-black/50 flex items-center justify-center p-4" onClick={onClose}>
+      <div className="bg-white rounded-3xl p-6 w-full max-w-sm shadow-2xl" onClick={(e) => e.stopPropagation()}>
+        <div className="flex items-center justify-between mb-4">
+          <h3 className="text-lg font-black text-slate-900">QR аппарата</h3>
+          <button onClick={onClose} className="p-2 text-slate-400 hover:text-slate-700 rounded-lg"><X size={20} /></button>
+        </div>
+        <div className="text-center">
+          <div className="font-bold text-slate-900">{market.name || `Аппарат №${market.id}`}</div>
+          <div className="text-[11px] font-bold text-slate-500 uppercase tracking-widest mb-4">Аппарат №{market.id}</div>
+          <div className="bg-white border-2 border-slate-200 rounded-2xl p-4 inline-block">
+            {qrSrc ? (
+              <img src={qrSrc} alt="QR" className="w-56 h-56" />
+            ) : (
+              <div className="w-56 h-56 flex items-center justify-center"><Loader2 className="animate-spin text-slate-300" size={32} /></div>
+            )}
+          </div>
+          <a href={url} target="_blank" rel="noreferrer" className="mt-3 block text-[11px] text-slate-400 hover:text-slate-600 break-all">{url}</a>
+        </div>
+        <button
+          onClick={() => downloadMarketQrPdf(market)}
+          className="mt-5 w-full flex items-center justify-center gap-2 bg-slate-900 text-white py-3 rounded-xl font-bold hover:bg-slate-700 transition-all"
+        >
+          <Download size={18} /> Скачать QR (PDF)
+        </button>
+      </div>
+    </div>
+  );
+}
 
 // Map an M102 poll result byte → i18n key. The codes are emitted by the
 // vending tablet's `BoardClient.dispense` and persisted to
@@ -160,6 +255,7 @@ export default function Admin() {
   const [periodTo, setPeriodTo] = useState('');
   const [selectedSalesMarket, setSelectedSalesMarket] = useState('all');
   const [expandedSaleId, setExpandedSaleId] = useState(null); // which sale's items are shown
+  const [qrModalMarket, setQrModalMarket] = useState(null); // machine whose QR modal is open
 
   // Catalog tab — products table (SKU catalog, owner-scoped).
   // Separate from inventory: products are reusable across micromarkets
@@ -899,6 +995,12 @@ export default function Admin() {
                 </div>
                 <div className="flex gap-2 w-full sm:w-auto items-center">
                   <button
+                    onClick={() => setQrModalMarket(markets.find(m => String(m.id) === String(selectedMarketId)) || { id: selectedMarketId })}
+                    className="flex-1 sm:flex-none flex items-center justify-center gap-2 bg-slate-900 text-white px-4 py-2.5 rounded-xl font-bold hover:bg-slate-700 transition-all text-sm"
+                  >
+                    <QrCode size={16} /> QR
+                  </button>
+                  <button
                     onClick={() => setShowCategoryManager(true)}
                     className="flex-1 sm:flex-none flex items-center justify-center gap-2 bg-slate-200 text-slate-700 border border-slate-300 px-4 py-2.5 rounded-xl font-bold hover:bg-slate-300 transition-all text-sm"
                   >
@@ -1339,6 +1441,10 @@ export default function Admin() {
       )}
 
       {/* Уведомления (Toast) */}
+      {qrModalMarket && (
+        <QrModal market={qrModalMarket} onClose={() => setQrModalMarket(null)} />
+      )}
+
       {toast && (
         <div className={`fixed bottom-6 left-1/2 -translate-x-1/2 px-6 py-3 rounded-full font-bold text-white shadow-xl z-[100] flex items-center gap-2 animate-in fade-in slide-in-from-bottom-5 ${toast.type === 'error' ? 'bg-red-500' : 'bg-primary'}`}>
           {toast.type === 'error' ? <X size={16} /> : <Save size={16} />}

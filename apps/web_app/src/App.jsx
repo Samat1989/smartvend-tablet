@@ -52,7 +52,7 @@ function App() {
     // (?marketId=...). With no URL id we show the "scan QR" screen and never
     // fall back to a saved/default market.
     const params = new URLSearchParams(window.location.search);
-    const urlMarketId = params.get('marketId');
+    const urlMarketId = params.get('id') || params.get('marketId');
 
     setCurrentMarketId(urlMarketId || null);
 
