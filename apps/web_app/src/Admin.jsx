@@ -5,19 +5,31 @@ import { useTranslation } from 'react-i18next';
 import './i18n';
 import Cropper from 'react-easy-crop';
 import QRCode from 'qrcode';
-import * as JsPdfNS from 'jspdf';
 
-// jspdf's export shape varies between dev (esbuild) and prod (rollup) bundles
-// ("Wn is not a constructor" in prod). Resolve the constructor at call time and
-// fail loudly with what we actually got.
-function resolveJsPDF() {
-  const c =
-    JsPdfNS.jsPDF ||
-    (JsPdfNS.default && (JsPdfNS.default.jsPDF || JsPdfNS.default));
-  if (typeof c !== 'function') {
-    throw new Error('jsPDF ctor not found (keys: ' + Object.keys(JsPdfNS).join(',') + ')');
+// Load jsPDF (UMD) from CDN at runtime. Bundling jspdf via npm produced an
+// unusable constructor in the Vercel/Node production build ("Gn is not a
+// constructor") regardless of import shape / alias, so we sidestep the bundler
+// entirely and use the UMD global, which is always a real constructor.
+let _jspdfPromise = null;
+function loadJsPDF() {
+  if (typeof window !== 'undefined' && window.jspdf && window.jspdf.jsPDF) {
+    return Promise.resolve(window.jspdf.jsPDF);
   }
-  return c;
+  if (!_jspdfPromise) {
+    _jspdfPromise = new Promise((resolve, reject) => {
+      const s = document.createElement('script');
+      s.src = 'https://cdn.jsdelivr.net/npm/jspdf@2.5.2/dist/jspdf.umd.min.js';
+      s.async = true;
+      s.onload = () => {
+        const C = window.jspdf && window.jspdf.jsPDF;
+        if (C) resolve(C);
+        else reject(new Error('jsPDF global missing after load'));
+      };
+      s.onerror = () => reject(new Error('jsPDF CDN load failed'));
+      document.head.appendChild(s);
+    });
+  }
+  return _jspdfPromise;
 }
 
 // How many most-recent sales to load (avoid pulling the whole history).
@@ -64,7 +76,7 @@ async function buildMarketQrPdf(market, qrDataUrl) {
   ctx.font = '26px sans-serif';
   ctx.fillText(url, 500, 1135);
 
-  const JsPDFCtor = resolveJsPDF();
+  const JsPDFCtor = await loadJsPDF();
   const doc = new JsPDFCtor({ unit: 'mm', format: 'a4' });
   const pageW = doc.internal.pageSize.getWidth();
   const margin = 15;
