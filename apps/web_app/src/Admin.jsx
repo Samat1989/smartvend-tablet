@@ -17,8 +17,8 @@ function buildPdfBlobFromCanvas(canvas) {
 
   const W = canvas.width, H = canvas.height;
   const CM = 28.3465; // points per cm
-  const pageW = 7 * CM, pageH = 15 * CM; // 7cm × 15cm label
-  // Canvas is authored at the same 7:15 aspect, so fill the page edge to edge.
+  const pageW = 7 * CM;          // 7cm wide
+  const pageH = pageW * (H / W); // height follows the canvas — no empty bottom
   const drawW = pageW;
   const drawH = pageH;
   const x = 0;
@@ -77,9 +77,11 @@ async function buildMarketQrPdf(market, qrDataUrl) {
 
   // Canvas aspect = 7:15 to match the printed label (7cm wide × 15cm tall).
   // 100 px per cm. QR is kept square so it scans reliably.
+  // 7cm wide; the height is trimmed to the content (no empty bottom). QR stays
+  // square so it scans. 100 px per cm.
   const canvas = document.createElement('canvas');
   canvas.width = 700;
-  canvas.height = 1500;
+  canvas.height = 920;
   const ctx = canvas.getContext('2d');
   ctx.fillStyle = '#ffffff';
   ctx.fillRect(0, 0, canvas.width, canvas.height);
@@ -87,11 +89,8 @@ async function buildMarketQrPdf(market, qrDataUrl) {
   const cx = canvas.width / 2;
 
   ctx.fillStyle = '#111827';
-  ctx.font = 'bold 44px sans-serif';
-  ctx.fillText(market.name || `Аппарат №${market.id}`, cx, 110);
-  ctx.font = '28px sans-serif';
-  ctx.fillStyle = '#6b7280';
-  ctx.fillText(`Аппарат №${market.id}`, cx, 158);
+  ctx.font = 'bold 42px sans-serif';
+  ctx.fillText(`Аппарат №${market.id}`, cx, 72);
 
   // NB: `Image` is imported from lucide-react in this file, so use the global
   // browser constructor explicitly (new Image() would hit the lucide icon).
@@ -102,15 +101,15 @@ async function buildMarketQrPdf(market, qrDataUrl) {
     img.src = qrDataUrl;
   });
   const qrSize = 620; // ~6.2 cm square
-  ctx.drawImage(img, (canvas.width - qrSize) / 2, 230, qrSize, qrSize);
+  ctx.drawImage(img, (canvas.width - qrSize) / 2, 110, qrSize, qrSize);
 
   ctx.fillStyle = '#111827';
   ctx.font = 'bold 42px sans-serif';
-  ctx.fillText('Отсканируйте,', cx, 970);
-  ctx.fillText('чтобы купить', cx, 1020);
+  ctx.fillText('Отсканируйте,', cx, 800);
+  ctx.fillText('чтобы купить', cx, 850);
   ctx.fillStyle = '#9ca3af';
   ctx.font = '20px sans-serif';
-  ctx.fillText(url, cx, 1080);
+  ctx.fillText(url, cx, 895);
 
   return buildPdfBlobFromCanvas(canvas);
 }
