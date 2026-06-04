@@ -5,7 +5,11 @@ import { useTranslation } from 'react-i18next';
 import './i18n';
 import Cropper from 'react-easy-crop';
 import QRCode from 'qrcode';
-import { jsPDF } from 'jspdf';
+import * as JsPdfNS from 'jspdf';
+// jspdf's export shape varies between dev (esbuild) and prod (rollup) bundles,
+// so resolve the constructor defensively — the named `{ jsPDF }` import alone
+// resolved to a non-constructor in the production build ("Wn is not a constructor").
+const JsPDF = JsPdfNS.jsPDF || JsPdfNS.default || JsPdfNS;
 
 // How many most-recent sales to load (avoid pulling the whole history).
 const SALES_PAGE_SIZE = 10;
@@ -51,7 +55,7 @@ async function buildMarketQrPdf(market, qrDataUrl) {
   ctx.font = '26px sans-serif';
   ctx.fillText(url, 500, 1135);
 
-  const doc = new jsPDF({ unit: 'mm', format: 'a4' });
+  const doc = new JsPDF({ unit: 'mm', format: 'a4' });
   const pageW = doc.internal.pageSize.getWidth();
   const margin = 15;
   const imgW = pageW - margin * 2;
