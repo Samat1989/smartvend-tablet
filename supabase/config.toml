@@ -12,6 +12,12 @@ verify_jwt = false
 enabled = true
 verify_jwt = false
 
+# Server-side reconciliation, invoked by the pg_cron job 'reconcile-payments'
+# (no JWT — called from the DB via net.http_post).
+[functions.cron-process-payments]
+enabled = true
+verify_jwt = false
+
 [functions.complete-order]
 enabled = true
 verify_jwt = true
