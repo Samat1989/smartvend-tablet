@@ -6,30 +6,58 @@ import './i18n';
 import Cropper from 'react-easy-crop';
 import QRCode from 'qrcode';
 
-// Load jsPDF (UMD) from CDN at runtime. Bundling jspdf via npm produced an
-// unusable constructor in the Vercel/Node production build ("Gn is not a
-// constructor") regardless of import shape / alias, so we sidestep the bundler
-// entirely and use the UMD global, which is always a real constructor.
-let _jspdfPromise = null;
-function loadJsPDF() {
-  if (typeof window !== 'undefined' && window.jspdf && window.jspdf.jsPDF) {
-    return Promise.resolve(window.jspdf.jsPDF);
-  }
-  if (!_jspdfPromise) {
-    _jspdfPromise = new Promise((resolve, reject) => {
-      const s = document.createElement('script');
-      s.src = 'https://cdn.jsdelivr.net/npm/jspdf@2.5.2/dist/jspdf.umd.min.js';
-      s.async = true;
-      s.onload = () => {
-        const C = window.jspdf && window.jspdf.jsPDF;
-        if (C) resolve(C);
-        else reject(new Error('jsPDF global missing after load'));
-      };
-      s.onerror = () => reject(new Error('jsPDF CDN load failed'));
-      document.head.appendChild(s);
-    });
-  }
-  return _jspdfPromise;
+// Build a minimal one-page A4 PDF Blob embedding `canvas` as a JPEG image.
+// Dependency-free (no jsPDF) — bundling jsPDF produced an unusable constructor
+// in the Vercel/Node production build, so we emit the PDF bytes ourselves.
+function buildPdfBlobFromCanvas(canvas) {
+  const jpegB64 = canvas.toDataURL('image/jpeg', 0.92).split(',')[1];
+  const bin = atob(jpegB64);
+  const jpeg = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) jpeg[i] = bin.charCodeAt(i);
+
+  const W = canvas.width, H = canvas.height;
+  const pageW = 595.28, pageH = 841.89; // A4 portrait, points
+  const margin = 36;
+  const drawW = pageW - margin * 2;
+  const drawH = drawW * (H / W);
+  const x = margin;
+  const y = pageH - margin - drawH;
+  const content = `q\n${drawW.toFixed(2)} 0 0 ${drawH.toFixed(2)} ${x.toFixed(2)} ${y.toFixed(2)} cm\n/Im0 Do\nQ\n`;
+
+  const enc = new TextEncoder();
+  const parts = [];
+  const offsets = [];
+  let length = 0;
+  const push = (u8) => { parts.push(u8); length += u8.length; };
+  const pushStr = (s) => push(enc.encode(s));
+  const addObj = (fn) => { offsets.push(length); fn(); };
+
+  pushStr('%PDF-1.3\n');
+  addObj(() => pushStr('1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n'));
+  addObj(() => pushStr('2 0 obj\n<< /Type /Pages /Kids [3 0 R] /Count 1 >>\nendobj\n'));
+  addObj(() => pushStr(`3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ${pageW} ${pageH}] /Resources << /XObject << /Im0 4 0 R >> >> /Contents 5 0 R >>\nendobj\n`));
+  addObj(() => {
+    pushStr(`4 0 obj\n<< /Type /XObject /Subtype /Image /Width ${W} /Height ${H} /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode /Length ${jpeg.length} >>\nstream\n`);
+    push(jpeg);
+    pushStr('\nendstream\nendobj\n');
+  });
+  const contentBytes = enc.encode(content);
+  addObj(() => {
+    pushStr(`5 0 obj\n<< /Length ${contentBytes.length} >>\nstream\n`);
+    push(contentBytes);
+    pushStr('\nendstream\nendobj\n');
+  });
+
+  const xrefStart = length;
+  let xref = 'xref\n0 6\n0000000000 65535 f \n';
+  for (const off of offsets) xref += String(off).padStart(10, '0') + ' 00000 n \n';
+  pushStr(xref);
+  pushStr(`trailer\n<< /Size 6 /Root 1 0 R >>\nstartxref\n${xrefStart}\n%%EOF`);
+
+  const out = new Uint8Array(length);
+  let pos = 0;
+  for (const p of parts) { out.set(p, pos); pos += p.length; }
+  return new Blob([out], { type: 'application/pdf' });
 }
 
 // How many most-recent sales to load (avoid pulling the whole history).
@@ -76,14 +104,7 @@ async function buildMarketQrPdf(market, qrDataUrl) {
   ctx.font = '26px sans-serif';
   ctx.fillText(url, 500, 1135);
 
-  const JsPDFCtor = await loadJsPDF();
-  const doc = new JsPDFCtor({ unit: 'mm', format: 'a4' });
-  const pageW = doc.internal.pageSize.getWidth();
-  const margin = 15;
-  const imgW = pageW - margin * 2;
-  const imgH = imgW * (canvas.height / canvas.width);
-  doc.addImage(canvas.toDataURL('image/png'), 'PNG', margin, margin, imgW, imgH);
-  return doc;
+  return buildPdfBlobFromCanvas(canvas);
 }
 
 // Modal that previews a machine's QR (links to the storefront on this same
@@ -102,9 +123,9 @@ function QrModal({ market, onClose }) {
       setQrSrc(qr);
       // Pre-build the PDF blob now (not on click) so the download is a plain
       // anchor click — avoids browsers blocking a download triggered after await.
-      const doc = await buildMarketQrPdf(market, qr);
+      const blob = await buildMarketQrPdf(market, qr);
       if (!alive) return;
-      createdUrl = URL.createObjectURL(doc.output('blob'));
+      createdUrl = URL.createObjectURL(blob);
       setPdfUrl(createdUrl);
     })().catch((e) => { console.error('[QrModal] build failed', e); if (alive) setPdfErr(String((e && e.message) || e)); });
     return () => { alive = false; if (createdUrl) URL.revokeObjectURL(createdUrl); };
