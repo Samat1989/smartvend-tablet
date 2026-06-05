@@ -513,9 +513,9 @@ function App() {
                     <p className="text-[10px] font-lexend font-bold opacity-40 uppercase tracking-widest">{t('total')}</p>
                     <p className="text-3xl font-lexend font-black text-on-surface">{cartTotal} <span className="text-sm opacity-20">₸</span></p>
                   </div>
-                  <button 
-                    onClick={handleCheckout} 
-                    disabled={paymentStatus === 'processing' || paymentStatus === 'awaiting_payment'}
+                  <button
+                    onClick={handleCheckout}
+                    disabled={paymentStatus === 'processing'}
                     className="flex-1 h-16 bg-[#F14635] text-white rounded-xl font-lexend font-black text-sm md:text-lg shadow-xl shadow-[#F14635]/20 flex items-center justify-center gap-3 active:scale-95 transition-all disabled:opacity-50"
                   >
                     {paymentStatus === 'processing' ? <Loader2 className="animate-spin" /> : (
