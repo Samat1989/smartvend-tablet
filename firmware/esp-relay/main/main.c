@@ -39,10 +39,14 @@ static const char *TAG = "relay_mart";
 
 #define LOCK_GPIO            GPIO_NUM_4
 #define UNLOCK_TIME_MS       3000
-// Re-provisioning trigger: power-cycle the device PROVISION_BOOT_COUNT times in
-// quick succession. A run longer than BOOTCNT_RESET_MS counts as a normal boot
-// and resets the counter. (We can't use the BOOT button: GPIO0 held low at
-// reset puts the chip into download mode, so the app never runs to sample it.)
+// Re-provisioning triggers (two ways):
+//  1. Press the BOOT button within the first BOOTCNT_RESET_MS AFTER power-on
+//     (the chip has already booted, so sampling GPIO0 here is safe — unlike
+//     holding it at reset, which would enter the ROM download mode instead).
+//  2. Power-cycle the device PROVISION_BOOT_COUNT times in quick succession
+//     (no button needed). A run longer than BOOTCNT_RESET_MS counts as normal
+//     and resets the counter.
+#define SETUP_BUTTON_GPIO    GPIO_NUM_0
 #define PROVISION_BOOT_COUNT 3
 #define BOOTCNT_RESET_MS     4000
 
@@ -604,6 +608,31 @@ static void bootcnt_reset_task(void *pv) {
     vTaskDelete(NULL);
 }
 
+// Watch the BOOT button for `window_ms` after power-on; return true if it is
+// pressed (held low ~0.5s, debounced) within that window.
+static bool button_window(int window_ms) {
+    gpio_config_t btn = {
+        .pin_bit_mask = 1ULL << SETUP_BUTTON_GPIO,
+        .mode = GPIO_MODE_INPUT,
+        .pull_up_en = GPIO_PULLUP_ENABLE,
+        .pull_down_en = GPIO_PULLDOWN_DISABLE,
+        .intr_type = GPIO_INTR_DISABLE,
+    };
+    gpio_config(&btn);
+    ESP_LOGI(TAG, "[Setup] press BOOT within %d s to enter provisioning...", window_ms / 1000);
+    int held = 0;
+    for (int t = 0; t < window_ms; t += 100) {
+        if (gpio_get_level(SETUP_BUTTON_GPIO) == 0) {   // BOOT pressed = low
+            held += 100;
+            if (held >= 500) return true;               // debounced press
+        } else {
+            held = 0;
+        }
+        vTaskDelay(pdMS_TO_TICKS(100));
+    }
+    return false;
+}
+
 // ============================ app_main ============================
 void app_main(void) {
     esp_err_t ret = nvs_flash_init();
@@ -649,6 +678,15 @@ void app_main(void) {
     } else {
         // If we keep running past the threshold, this was a normal boot.
         xTaskCreate(bootcnt_reset_task, "bootcnt", 2048, NULL, 5, NULL);
+    }
+
+    // On a configured device, give a short window to press BOOT for re-setup.
+    // (Skip on a fresh/empty device — it's heading to the portal anyway.)
+    if (have_cfg && button_window(BOOTCNT_RESET_MS)) {
+        ESP_LOGW(TAG, "[Setup] BOOT pressed — clearing config, entering provisioning");
+        clear_boot_count();
+        cfg_erase();
+        have_cfg = false;
     }
 
     if (!have_cfg) {
