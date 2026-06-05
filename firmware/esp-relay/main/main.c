@@ -24,6 +24,8 @@
 #include "esp_http_server.h"
 #include "esp_crt_bundle.h"
 
+#include "lwip/sockets.h"
+
 static const char *TAG = "relay_mart";
 
 // --- CONFIGURATION ---
@@ -258,7 +260,7 @@ static void mqtt_start(void) {
 // ============================ WiFi ============================
 static void wifi_event_handler(void* arg, esp_event_base_t base, int32_t id, void* data) {
     if (base == WIFI_EVENT && id == WIFI_EVENT_STA_START) {
-        esp_wifi_connect();
+        if (!g_provisioning) esp_wifi_connect();   // in setup we connect only after creds are entered
     } else if (base == WIFI_EVENT && id == WIFI_EVENT_STA_DISCONNECTED) {
         if (g_provisioning) {
             // Bounded retries so a wrong password reports back instead of looping.
@@ -351,7 +353,9 @@ static bool provision_fetch_and_store(const char* machid) {
 }
 
 // ============================ Setup portal (SoftAP + HTTP) ============================
-static const char SETUP_PAGE[] =
+// Page split around the SSID <datalist> so a fresh WiFi scan can be injected
+// as <option>s (a free-text input keeps hidden/manual SSIDs possible).
+static const char PAGE_HEAD[] =
     "<!DOCTYPE html><html><head><meta name=viewport content='width=device-width,initial-scale=1'>"
     "<title>SmartVend Setup</title><style>"
     "body{font-family:sans-serif;background:#1f2937;color:#fff;margin:0;padding:24px}"
@@ -360,15 +364,72 @@ static const char SETUP_PAGE[] =
     "button{width:100%;margin-top:20px;padding:14px;border:none;border-radius:8px;background:#F14635;color:#fff;font-size:16px;font-weight:bold}"
     "</style></head><body><h2>SmartVend — настройка</h2>"
     "<form method=POST action=/save>"
-    "<label>WiFi сеть (SSID)</label><input name=ssid required>"
+    "<label>WiFi сеть (SSID)</label><input name=ssid list=nets required autocomplete=off>"
+    "<datalist id=nets>";
+static const char PAGE_TAIL[] =
+    "</datalist>"
     "<label>WiFi пароль</label><input name=pass type=password>"
     "<label>Номер аппарата (Machine ID)</label><input name=machid required inputmode=numeric>"
     "<button type=submit>Сохранить и подключить</button></form></body></html>";
 
 static esp_err_t root_get_handler(httpd_req_t *req) {
     httpd_resp_set_type(req, "text/html; charset=utf-8");
-    httpd_resp_send(req, SETUP_PAGE, HTTPD_RESP_USE_STRLEN);
+    httpd_resp_sendstr_chunk(req, PAGE_HEAD);
+
+    // Scan nearby networks and offer them as datalist options.
+    wifi_scan_config_t sc = { .show_hidden = false };
+    if (esp_wifi_scan_start(&sc, true) == ESP_OK) {
+        uint16_t n = 0;
+        esp_wifi_scan_get_ap_num(&n);
+        if (n > 20) n = 20;
+        wifi_ap_record_t recs[20];
+        uint16_t got = n;
+        if (esp_wifi_scan_get_ap_records(&got, recs) == ESP_OK) {
+            for (uint16_t i = 0; i < got; i++) {
+                if (recs[i].ssid[0] == 0) continue;
+                char opt[80];
+                snprintf(opt, sizeof(opt), "<option value=\"%s\">", (char*)recs[i].ssid);
+                httpd_resp_sendstr_chunk(req, opt);
+            }
+        }
+    }
+
+    httpd_resp_sendstr_chunk(req, PAGE_TAIL);
+    httpd_resp_sendstr_chunk(req, NULL);   // end response
     return ESP_OK;
+}
+
+// Captive-portal: any unknown URL (OS connectivity probes) → redirect to the
+// setup form, so the captive sheet pops open automatically.
+static esp_err_t captive_redirect(httpd_req_t *req, httpd_err_code_t err) {
+    httpd_resp_set_status(req, "302 Found");
+    httpd_resp_set_hdr(req, "Location", "http://192.168.4.1/");
+    httpd_resp_send(req, NULL, 0);
+    return ESP_OK;
+}
+
+// Minimal DNS server: answer every A query with the AP IP (192.168.4.1) so the
+// phone resolves all probe domains to us and triggers the captive portal.
+static void dns_hijack_task(void *pv) {
+    int sock = socket(AF_INET, SOCK_DGRAM, IPPROTO_IP);
+    if (sock < 0) { vTaskDelete(NULL); return; }
+    struct sockaddr_in sa = { .sin_family = AF_INET, .sin_port = htons(53), .sin_addr.s_addr = htonl(INADDR_ANY) };
+    if (bind(sock, (struct sockaddr*)&sa, sizeof(sa)) < 0) { close(sock); vTaskDelete(NULL); return; }
+
+    uint8_t buf[512];
+    while (1) {
+        struct sockaddr_in client;
+        socklen_t cl = sizeof(client);
+        int len = recvfrom(sock, buf, sizeof(buf), 0, (struct sockaddr*)&client, &cl);
+        if (len < 12 || (size_t)len + 16 > sizeof(buf)) continue;   // need room for the answer
+        buf[2] = 0x81; buf[3] = 0x80;   // flags: standard query response, no error
+        buf[6] = 0x00; buf[7] = 0x01;   // ANCOUNT = 1
+        // Append an A answer pointing the queried name at 192.168.4.1.
+        uint8_t ans[16] = { 0xC0, 0x0C, 0x00, 0x01, 0x00, 0x01, 0x00, 0x00, 0x00, 0x3C,
+                            0x00, 0x04, 192, 168, 4, 1 };
+        memcpy(buf + len, ans, sizeof(ans));
+        sendto(sock, buf, len + sizeof(ans), 0, (struct sockaddr*)&client, cl);
+    }
 }
 
 // URL-decode src into dst (handles %XX and '+').
@@ -461,8 +522,21 @@ static void start_setup_portal(void) {
     g_provisioning = true;
 
     // SoftAP (open) + STA (so we can validate WiFi and reach Supabase).
-    esp_netif_create_default_wifi_ap();
+    esp_netif_t *ap_netif = esp_netif_create_default_wifi_ap();
     ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_APSTA));
+
+    // Hand out our own IP as the DNS server so every lookup hits the hijack
+    // server below → the phone's captive-portal check opens the setup page.
+    esp_netif_dns_info_t dns = {0};
+    dns.ip.type = ESP_IPADDR_TYPE_V4;
+    esp_ip4_addr_t apip;
+    esp_netif_str_to_ip4("192.168.4.1", &apip);
+    dns.ip.u_addr.ip4.addr = apip.addr;
+    esp_netif_dhcps_stop(ap_netif);
+    esp_netif_set_dns_info(ap_netif, ESP_NETIF_DNS_MAIN, &dns);
+    uint8_t offer_dns = 0x02;   // dhcps_offer_t OFFER_DNS — advertise DNS via DHCP
+    esp_netif_dhcps_option(ap_netif, ESP_NETIF_OP_SET, ESP_NETIF_DOMAIN_NAME_SERVER, &offer_dns, sizeof(offer_dns));
+    esp_netif_dhcps_start(ap_netif);
 
     uint8_t mac[6];
     esp_wifi_get_mac(WIFI_IF_AP, mac);
@@ -483,7 +557,12 @@ static void start_setup_portal(void) {
         httpd_uri_t save = { .uri = "/save", .method = HTTP_POST, .handler = save_post_handler };
         httpd_register_uri_handler(server, &root);
         httpd_register_uri_handler(server, &save);
+        // Redirect all other paths (OS probe URLs) to the form.
+        httpd_register_err_handler(server, HTTPD_404_NOT_FOUND, captive_redirect);
     }
+
+    // DNS hijack so probe domains resolve to us (captive portal trigger).
+    xTaskCreate(dns_hijack_task, "dns_hijack", 4096, NULL, 5, NULL);
 }
 
 // ============================ button ============================
