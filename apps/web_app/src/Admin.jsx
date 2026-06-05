@@ -1093,12 +1093,14 @@ export default function Admin() {
                       <Plus size={16} /> Добавить
                     </button>
                   )}
-                  <button
-                    onClick={() => setQrModalMarket(markets.find(m => String(m.id) === String(selectedMarketId)) || { id: selectedMarketId })}
-                    className="flex-1 sm:flex-none flex items-center justify-center gap-2 bg-slate-900 text-white px-4 py-2.5 rounded-xl font-bold hover:bg-slate-700 transition-all text-sm"
-                  >
-                    <QrCode size={16} /> QR
-                  </button>
+                  {isStaticMarket && (
+                    <button
+                      onClick={() => setQrModalMarket(markets.find(m => String(m.id) === String(selectedMarketId)) || { id: selectedMarketId })}
+                      className="flex-1 sm:flex-none flex items-center justify-center gap-2 bg-slate-900 text-white px-4 py-2.5 rounded-xl font-bold hover:bg-slate-700 transition-all text-sm"
+                    >
+                      <QrCode size={16} /> QR
+                    </button>
+                  )}
                   <button
                     onClick={() => setShowCategoryManager(true)}
                     className="flex-1 sm:flex-none flex items-center justify-center gap-2 bg-slate-200 text-slate-700 border border-slate-300 px-4 py-2.5 rounded-xl font-bold hover:bg-slate-300 transition-all text-sm"
