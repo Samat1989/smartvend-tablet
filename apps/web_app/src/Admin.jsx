@@ -610,7 +610,7 @@ export default function Admin() {
     try {
       const { data, error } = await supabase
         .from('micromarkets')
-        .select('id, name, layout_json');
+        .select('id, name, layout_json, kind');
       if (error) throw error;
       setMarkets(data || []);
       // No auto-select: the Inventory tab opens on the machine list and the
@@ -629,6 +629,18 @@ export default function Admin() {
     const market = markets.find(m => String(m.id) === String(selectedMarketId));
     return parseLayout(market?.layout_json);
   }, [markets, selectedMarketId]);
+
+  // Static micromarkets are open-shelf: no motors/cabinet layout, so the admin
+  // shows a flat product list (with add/edit/delete) instead of the cabinet view.
+  const selectedMarket = markets.find(m => String(m.id) === String(selectedMarketId));
+  const isStaticMarket = selectedMarket?.kind === 'micromarket_static';
+
+  function addStaticProduct() {
+    setEditingProduct({
+      id: 'new', product_id: null, name: '', price: 0, stock: 0,
+      image_url: '', emoji: '', category_id: null, motor_id: null,
+    });
+  }
 
   async function fetchProducts(marketId) {
     setLoading(true);
@@ -1048,6 +1060,9 @@ export default function Admin() {
                         <div className="font-bold text-slate-900 truncate">{m.name || `${t('market')} #${m.id}`}</div>
                         <div className="text-[11px] font-bold text-slate-500 uppercase tracking-widest">{t('apparatus_no')}{m.id}</div>
                       </div>
+                      <span className={`text-[9px] font-black uppercase tracking-wider px-2 py-1 rounded-lg shrink-0 ${m.kind === 'micromarket_static' ? 'bg-emerald-100 text-emerald-700' : 'bg-indigo-100 text-indigo-700'}`}>
+                        {m.kind === 'micromarket_static' ? 'Микромаркет' : 'Вендинг'}
+                      </span>
                       <ChevronRight size={18} className="text-slate-400" />
                     </button>
                   ))}
@@ -1070,6 +1085,14 @@ export default function Admin() {
                   <p className="text-[11px] font-bold text-slate-500 uppercase tracking-widest">{t('apparatus_no')}{selectedMarketId}</p>
                 </div>
                 <div className="flex gap-2 w-full sm:w-auto items-center">
+                  {isStaticMarket && (
+                    <button
+                      onClick={addStaticProduct}
+                      className="flex-1 sm:flex-none flex items-center justify-center gap-2 bg-primary text-white px-4 py-2.5 rounded-xl font-bold hover:opacity-90 transition-all text-sm"
+                    >
+                      <Plus size={16} /> Добавить
+                    </button>
+                  )}
                   <button
                     onClick={() => setQrModalMarket(markets.find(m => String(m.id) === String(selectedMarketId)) || { id: selectedMarketId })}
                     className="flex-1 sm:flex-none flex items-center justify-center gap-2 bg-slate-900 text-white px-4 py-2.5 rounded-xl font-bold hover:bg-slate-700 transition-all text-sm"
@@ -1104,10 +1127,9 @@ export default function Admin() {
                 ))}
               </div>
 
-              {/* Read-only note — admin can edit existing slots but
-                  cannot create new ones. New rows must come from the
-                  tablet's service-mode product editor so the operator
-                  on-site confirms motor_id maps to a real spiral. */}
+              {/* Vending only: admin can edit existing slots but new rows must
+                  come from the tablet (the operator maps motor_id on-site). */}
+              {!isStaticMarket && (
               <div className="mb-3 flex items-start gap-2 bg-sky-50 border-2 border-sky-300 rounded-xl p-3">
                 <Image size={16} className="text-sky-700 mt-0.5 shrink-0" />
                 <div className="text-[12px] text-sky-900 leading-relaxed">
@@ -1115,8 +1137,9 @@ export default function Admin() {
                   <span className="opacity-80"> Здесь можно редактировать цену, остаток и привязку к каталогу для уже существующих ячеек.</span>
                 </div>
               </div>
+              )}
 
-              {selectedMarketLayout._source === 'fallback' && (
+              {!isStaticMarket && selectedMarketLayout._source === 'fallback' && (
                 <div className="mb-6 flex items-start gap-2 bg-amber-50 border-2 border-amber-400 rounded-xl p-3">
                   <AlertTriangle size={16} className="text-amber-700 mt-0.5 shrink-0" />
                   <div className="text-[12px] text-amber-900 leading-relaxed">
@@ -1128,6 +1151,15 @@ export default function Admin() {
 
               {loading && !editingProduct ? (
                 <div className="flex justify-center p-20"><Loader2 className="animate-spin text-primary" size={32} /></div>
+              ) : isStaticMarket ? (
+                <StaticInventoryList
+                  products={filteredProducts}
+                  categories={categories}
+                  stockLabel={t('stock_label')}
+                  priceLabel={t('price_label')}
+                  onEdit={(p) => setEditingProduct(p)}
+                  onDelete={(p) => deleteProduct(p.id)}
+                />
               ) : (
                 <InventoryByLayout
                   products={filteredProducts}
@@ -1946,6 +1978,60 @@ function CatalogTab({
 // so the operator immediately sees which spirals need re-stocking.
 // Rows that point to a motor not present in the current layout get a
 // "Не привязано" section at the bottom.
+// Flat product list for open-shelf (static) micromarkets — no motors/slots.
+// Add is handled by the header button; rows support edit + delete.
+function StaticInventoryList({ products, categories, priceLabel, onEdit, onDelete }) {
+  if (!products || products.length === 0) {
+    return (
+      <div className="text-center py-16 bg-slate-50 rounded-3xl border-2 border-dashed border-slate-200">
+        <Package size={36} className="mx-auto mb-3 text-slate-300" />
+        <p className="font-black text-slate-400 text-sm uppercase tracking-widest">Нет товаров</p>
+        <p className="text-xs text-slate-400 mt-1">Нажмите «Добавить», чтобы внести товар</p>
+      </div>
+    );
+  }
+  return (
+    <div className="space-y-2">
+      {products.map(p => {
+        const lowStock = (p.stock ?? 0) < 5;
+        const cat = categories.find(c => c.id === p.category_id)?.name_ru;
+        return (
+          <div
+            key={p.id}
+            onClick={() => onEdit(p)}
+            className="flex items-center gap-3 p-2.5 sm:p-3 rounded-2xl border-2 border-slate-200 bg-slate-50 hover:border-primary hover:bg-white hover:shadow-md cursor-pointer transition-all"
+          >
+            <div className="w-12 h-12 sm:w-14 sm:h-14 rounded-xl flex items-center justify-center overflow-hidden shrink-0 border-2 border-slate-200 bg-white">
+              {p.image_url ? (
+                <img src={p.image_url} alt={p.name} loading="lazy" className="w-full h-full object-contain p-1" />
+              ) : p.emoji ? (
+                <span className="text-2xl">{p.emoji}</span>
+              ) : (
+                <Image className="text-slate-300" size={20} />
+              )}
+            </div>
+            <div className="flex-1 min-w-0">
+              <h4 className="font-bold text-sm text-slate-900 truncate">{p.name || '—'}</h4>
+              <div className="flex items-center gap-1.5 mt-1">
+                <span className={`text-[10px] font-black px-1.5 py-0.5 rounded tabular-nums ${lowStock ? 'bg-red-100 text-red-700' : 'bg-emerald-100 text-emerald-700'}`}>×{p.stock ?? 0}</span>
+                <span className="text-[9px] uppercase font-black text-slate-500 tracking-wider truncate">{cat || 'Без категории'}</span>
+              </div>
+            </div>
+            <div className="text-right px-2 sm:px-4 shrink-0">
+              <span className="hidden sm:block text-[9px] font-black text-slate-500 uppercase tracking-tighter">{priceLabel}</span>
+              <p className="text-base font-black text-primary tabular-nums">{p.price} ₸</p>
+            </div>
+            <div className="flex items-center gap-1 shrink-0">
+              <button onClick={(e) => { e.stopPropagation(); onEdit(p); }} className="p-2.5 bg-white border border-slate-300 text-slate-600 rounded-lg hover:bg-primary hover:border-primary hover:text-white transition-all"><Pencil size={14} /></button>
+              <button onClick={(e) => { e.stopPropagation(); onDelete(p); }} className="hidden sm:inline-flex p-2.5 bg-white border border-slate-300 text-slate-600 rounded-lg hover:bg-red-600 hover:border-red-600 hover:text-white transition-all"><Trash2 size={14} /></button>
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 function InventoryByLayout({ products, layout, categories, stockLabel, priceLabel, onEdit, onDelete }) {
   const productByMotor = new Map();
   for (const p of products) {
