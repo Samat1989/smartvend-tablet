@@ -37,10 +37,14 @@ static const char *TAG = "relay_mart";
 #define SUPABASE_BASE      "https://cgvfhtvdtdjsyluhlcbq.supabase.co/functions/v1"
 #define SUPABASE_ANON_KEY  "sb_publishable_84RnaNCrFwxKicybxLGL2w_StEYpHnD"
 
-#define LOCK_GPIO         GPIO_NUM_4
-#define SETUP_BUTTON_GPIO GPIO_NUM_0    // BOOT button: hold at power-on to re-provision
-#define SETUP_HOLD_MS     3000
-#define UNLOCK_TIME_MS    3000
+#define LOCK_GPIO            GPIO_NUM_4
+#define UNLOCK_TIME_MS       3000
+// Re-provisioning trigger: power-cycle the device PROVISION_BOOT_COUNT times in
+// quick succession. A run longer than BOOTCNT_RESET_MS counts as a normal boot
+// and resets the counter. (We can't use the BOOT button: GPIO0 held low at
+// reset puts the chip into download mode, so the app never runs to sample it.)
+#define PROVISION_BOOT_COUNT 3
+#define BOOTCNT_RESET_MS     4000
 
 #define NVS_CFG_NS        "cfg"
 // ---------------------
@@ -353,21 +357,21 @@ static bool provision_fetch_and_store(const char* machid) {
 }
 
 // ============================ Setup portal (SoftAP + HTTP) ============================
-// Page split around the SSID <datalist> so a fresh WiFi scan can be injected
-// as <option>s (a free-text input keeps hidden/manual SSIDs possible).
+// Page split around the SSID <select> so a fresh WiFi scan can be injected as
+// <option>s (a visible dropdown). A separate text field allows a hidden SSID.
 static const char PAGE_HEAD[] =
     "<!DOCTYPE html><html><head><meta name=viewport content='width=device-width,initial-scale=1'>"
     "<title>SmartVend Setup</title><style>"
     "body{font-family:sans-serif;background:#1f2937;color:#fff;margin:0;padding:24px}"
     "h2{margin-top:0}label{display:block;margin:14px 0 4px;font-size:14px;opacity:.8}"
-    "input{width:100%;box-sizing:border-box;padding:12px;border-radius:8px;border:none;font-size:16px}"
+    "input,select{width:100%;box-sizing:border-box;padding:12px;border-radius:8px;border:none;font-size:16px}"
     "button{width:100%;margin-top:20px;padding:14px;border:none;border-radius:8px;background:#F14635;color:#fff;font-size:16px;font-weight:bold}"
     "</style></head><body><h2>SmartVend — настройка</h2>"
     "<form method=POST action=/save>"
-    "<label>WiFi сеть (SSID)</label><input name=ssid list=nets required autocomplete=off>"
-    "<datalist id=nets>";
+    "<label>WiFi сеть</label><select name=ssid><option value=''>— выберите сеть —</option>";
 static const char PAGE_TAIL[] =
-    "</datalist>"
+    "</select>"
+    "<label>Скрытая сеть? Имя вручную</label><input name=ssid2 autocomplete=off placeholder='(необязательно)'>"
     "<label>WiFi пароль</label><input name=pass type=password>"
     "<label>Номер аппарата (Machine ID)</label><input name=machid required inputmode=numeric>"
     "<button type=submit>Сохранить и подключить</button></form></body></html>";
@@ -388,7 +392,7 @@ static esp_err_t root_get_handler(httpd_req_t *req) {
             for (uint16_t i = 0; i < got; i++) {
                 if (recs[i].ssid[0] == 0) continue;
                 char opt[80];
-                snprintf(opt, sizeof(opt), "<option value=\"%s\">", (char*)recs[i].ssid);
+                snprintf(opt, sizeof(opt), "<option>%s</option>", (char*)recs[i].ssid);
                 httpd_resp_sendstr_chunk(req, opt);
             }
         }
@@ -483,17 +487,19 @@ static void reboot_task(void *pv) {
 }
 
 static esp_err_t save_post_handler(httpd_req_t *req) {
-    char body[256];
+    char body[512];
     int len = httpd_req_recv(req, body, sizeof(body) - 1);
     if (len <= 0) return ESP_FAIL;
     body[len] = 0;
 
-    char ssid[64] = {0}, pass[64] = {0}, machid[16] = {0};
+    char ssid[64] = {0}, ssid2[64] = {0}, pass[64] = {0}, machid[16] = {0};
     form_field(body, "ssid", ssid, sizeof(ssid));
+    form_field(body, "ssid2", ssid2, sizeof(ssid2));   // manual / hidden SSID
     form_field(body, "pass", pass, sizeof(pass));
     form_field(body, "machid", machid, sizeof(machid));
+    if (ssid2[0]) strncpy(ssid, ssid2, sizeof(ssid) - 1);   // manual entry overrides dropdown
     if (ssid[0] == 0 || machid[0] == 0) {
-        return send_msg(req, "Ошибка", "Заполните SSID и номер аппарата. <a href=/>Назад</a>");
+        return send_msg(req, "Ошибка", "Выберите сеть (или впишите вручную) и номер аппарата. <a href=/>Назад</a>");
     }
     ESP_LOGI(TAG, "[Setup] ssid=%s machid=%s", ssid, machid);
 
@@ -565,22 +571,37 @@ static void start_setup_portal(void) {
     xTaskCreate(dns_hijack_task, "dns_hijack", 4096, NULL, 5, NULL);
 }
 
-// ============================ button ============================
-static bool setup_button_held(void) {
-    gpio_config_t btn = {
-        .pin_bit_mask = 1ULL << SETUP_BUTTON_GPIO,
-        .mode = GPIO_MODE_INPUT,
-        .pull_up_en = GPIO_PULLUP_ENABLE,
-        .pull_down_en = GPIO_PULLDOWN_DISABLE,
-        .intr_type = GPIO_INTR_DISABLE,
-    };
-    gpio_config(&btn);
-    // BOOT button reads 0 when pressed. Require it held for SETUP_HOLD_MS.
-    for (int waited = 0; waited < SETUP_HOLD_MS; waited += 100) {
-        if (gpio_get_level(SETUP_BUTTON_GPIO) != 0) return false;
-        vTaskDelay(pdMS_TO_TICKS(100));
+// ============================ boot-count provisioning trigger ============================
+static int bump_boot_count(void) {
+    nvs_handle_t h;
+    int cnt = 0;
+    if (nvs_open(NVS_CFG_NS, NVS_READWRITE, &h) == ESP_OK) {
+        int32_t v = 0;
+        nvs_get_i32(h, "bootcnt", &v);
+        cnt = v + 1;
+        nvs_set_i32(h, "bootcnt", cnt);
+        nvs_commit(h);
+        nvs_close(h);
     }
-    return true;
+    return cnt;
+}
+
+static void clear_boot_count(void) {
+    nvs_handle_t h;
+    if (nvs_open(NVS_CFG_NS, NVS_READWRITE, &h) == ESP_OK) {
+        nvs_set_i32(h, "bootcnt", 0);
+        nvs_commit(h);
+        nvs_close(h);
+    }
+}
+
+// After a normal sustained run, clear the counter so only *quick* repeated
+// power-cycles accumulate toward the provisioning threshold.
+static void bootcnt_reset_task(void *pv) {
+    vTaskDelay(pdMS_TO_TICKS(BOOTCNT_RESET_MS));
+    clear_boot_count();
+    ESP_LOGI(TAG, "[Boot] uptime ok — boot counter reset");
+    vTaskDelete(NULL);
 }
 
 // ============================ app_main ============================
@@ -616,11 +637,18 @@ void app_main(void) {
     s_wifi_eg = xEventGroupCreate();
 
     bool have_cfg = cfg_load();
-    bool force_setup = setup_button_held();
-    if (force_setup) {
-        ESP_LOGW(TAG, "[Setup] BOOT held — clearing config and entering provisioning");
+
+    // Quick power-cycle ×N forces re-provisioning even on a configured device.
+    int bc = bump_boot_count();
+    ESP_LOGI(TAG, "[Boot] count = %d (power-cycle %d times to re-provision)", bc, PROVISION_BOOT_COUNT);
+    if (bc >= PROVISION_BOOT_COUNT) {
+        ESP_LOGW(TAG, "[Setup] %d quick power-cycles — clearing config, entering provisioning", bc);
+        clear_boot_count();
         cfg_erase();
         have_cfg = false;
+    } else {
+        // If we keep running past the threshold, this was a normal boot.
+        xTaskCreate(bootcnt_reset_task, "bootcnt", 2048, NULL, 5, NULL);
     }
 
     if (!have_cfg) {
