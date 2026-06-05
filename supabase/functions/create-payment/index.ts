@@ -1,19 +1,94 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
 // static_qr payment: the phone sends only machid + items (id + count). The
-// secret stays server-side; the amount is recomputed from inventory (never
-// trusted from the client). Initiates a SmartVend/Kaspi payment_request and
-// records a pending order so verify-payment can finalize from server data.
+// secret stays server-side; the amount is recomputed from inventory. Initiates
+// a SmartVend/Kaspi payment_request, records a pending order, returns the Kaspi
+// link, and then KEEPS POLLING payment_result server-side in the background
+// (EdgeRuntime.waitUntil) — SmartVend auto-refunds if payment_result isn't
+// polled within ~1 min, and the customer's browser is asleep while they pay in
+// the Kaspi app, so the server must keep the confirmation window open itself.
 const PAYMENT_URL = "https://levending.smartvend.kz/payment_request";
+const RESULT_URL = "https://levending.smartvend.kz/payment_result";
 const cors = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
 };
 
-async function sign(appkey: string, randstr: string, timestamp: string) {
+async function sign(appkey, randstr, timestamp) {
   const combined = [appkey, randstr, timestamp].sort().join("");
   const buf = await crypto.subtle.digest("SHA-1", new TextEncoder().encode(combined));
   return Array.from(new Uint8Array(buf)).map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+// Poll payment_result once; if paid (code 1) claim the pending order and record
+// the sale + stock exactly once. Returns true when the order is settled (paid
+// and recorded, or already completed by another poller) so the caller can stop.
+async function finalizeIfPaid(supabase, orderid, machid, appkey) {
+  const { data: po } = await supabase
+    .from("pending_orders").select("*").eq("orderid", orderid).single();
+  if (!po) return true;                 // gone — stop
+  if (po.status === "completed") return true;
+
+  const timestamp = new Date().toISOString().replace(/[-:T]/g, "").split(".")[0];
+  const randstr = Math.random().toString(36).substring(2, 18).padEnd(16, "0");
+  const s = await sign(appkey, randstr, timestamp);
+  const form = new URLSearchParams();
+  form.append("ver", "v1");
+  form.append("orderid", orderid);
+  form.append("torderid", po.torderid ?? "");
+  form.append("machid", String(machid));
+  form.append("channelid", "36");
+  form.append("randstr", randstr);
+  form.append("timestamp", timestamp);
+  form.append("sign", s);
+
+  let res;
+  try {
+    const r = await fetch(RESULT_URL, {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: form.toString(),
+    });
+    res = await r.json();
+  } catch (_) {
+    return false; // transient — keep polling
+  }
+  if (parseInt(res.code) !== 1) return false;
+
+  const { data: claimed } = await supabase
+    .from("pending_orders").update({ status: "completed" })
+    .eq("orderid", orderid).eq("status", "pending").select();
+  if (!claimed || claimed.length === 0) return true; // finalized elsewhere
+
+  const cart = Array.isArray(claimed[0].cart) ? claimed[0].cart : [];
+  const { data: sale, error: saleErr } = await supabase.from("sales").insert({
+    micromarket_id: machid, amount: claimed[0].amount, status: "completed",
+    payment_id: claimed[0].torderid,
+  }).select().single();
+  if (saleErr) return true;
+  for (const it of cart) {
+    await supabase.from("sales_items").insert({
+      sale_id: sale.id, product_id: it.id, price: it.price, quantity: it.count,
+    });
+    const { data: inv } = await supabase
+      .from("inventory").select("stock").eq("id", it.id).single();
+    const newStock = Math.max(0, (inv?.stock ?? 0) - (it.count ?? 1));
+    await supabase.from("inventory").update({ stock: newStock })
+      .eq("id", it.id).eq("micromarket_id", machid);
+  }
+  return true;
+}
+
+// Keep the payment_result window open right after the QR is shown: poll every
+// 10s for ~90s (covers scan -> Kaspi app -> pay), independent of the browser.
+async function backgroundPoll(supabase, orderid, machid, appkey) {
+  const deadline = Date.now() + 90_000;
+  while (Date.now() < deadline) {
+    await new Promise((r) => setTimeout(r, 10_000));
+    try {
+      if (await finalizeIfPaid(supabase, orderid, machid, appkey)) return;
+    } catch (_) { /* keep going */ }
+  }
 }
 
 Deno.serve(async (req) => {
@@ -35,18 +110,17 @@ Deno.serve(async (req) => {
     if (mErr || !market) throw new Error(`Market ${numericId} not found`);
     const appkey = (market.secret || "").trim();
 
-    // Authoritative price + stock from inventory (ignore any client prices).
-    const ids = items.map((i: any) => i.id).filter(Boolean);
+    const ids = items.map((i) => i.id).filter(Boolean);
     const { data: invRows, error: invErr } = await supabase
       .from("inventory").select("id, name, price, stock").in("id", ids).eq("micromarket_id", numericId);
     if (invErr) throw new Error("inventory lookup failed");
-    const byId = new Map((invRows ?? []).map((r: any) => [r.id, r]));
+    const byId = new Map((invRows ?? []).map((r) => [r.id, r]));
 
     let totalTenge = 0;
-    const cart: any[] = [];
-    const names: string[] = [];
+    const cart = [];
+    const names = [];
     for (const it of items) {
-      const row: any = byId.get(it.id);
+      const row = byId.get(it.id);
       if (!row) throw new Error("Товар недоступен в этом аппарате");
       const qty = Math.max(1, parseInt(it.count) || 1);
       if ((row.stock ?? 0) < qty) throw new Error(`Недостаточно товара: ${row.name}`);
@@ -77,7 +151,7 @@ Deno.serve(async (req) => {
 
     const controller = new AbortController();
     const tid = setTimeout(() => controller.abort(), 12000);
-    let result: any;
+    let result;
     try {
       const resp = await fetch(PAYMENT_URL, {
         method: "POST",
@@ -89,7 +163,7 @@ Deno.serve(async (req) => {
       const text = await resp.text();
       try { result = JSON.parse(text); }
       catch { throw new Error(`Bad gateway response: ${text.substring(0, 60)}`); }
-    } catch (e: any) {
+    } catch (e) {
       clearTimeout(tid);
       if (e.name === "AbortError") throw new Error("Payment gateway timeout");
       throw e;
@@ -108,11 +182,21 @@ Deno.serve(async (req) => {
       status: "pending",
     }, { onConflict: "orderid" });
 
-    return new Response(
+    const response = new Response(
       JSON.stringify({ paymentUrl: result.twocode, orderid: result.orderid, torderid: result.torderid }),
       { headers: { ...cors, "Content-Type": "application/json" } },
     );
-  } catch (error: any) {
+
+    // Keep polling payment_result server-side so the payment is confirmed even
+    // if the customer never returns to the browser.
+    try {
+      globalThis.EdgeRuntime?.waitUntil(
+        backgroundPoll(supabase, result.orderid, numericId, appkey),
+      );
+    } catch (_) { /* waitUntil unavailable — cron backstop still covers it */ }
+
+    return response;
+  } catch (error) {
     return new Response(JSON.stringify({ error: error.message }), {
       status: 400, headers: { ...cors, "Content-Type": "application/json" },
     });
