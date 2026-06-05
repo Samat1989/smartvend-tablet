@@ -27,3 +27,12 @@ verify_jwt = false
 enabled = true
 verify_jwt = false
 entrypoint = "./functions/complete-order/index.ts"
+
+# Device provisioning: ESP32 sends a machid, gets back its MQTT identity
+# (uuid/secret/name) looked up from the public SmartVend machine list — the
+# device can't download that 1.85MB list itself. verify_jwt=false (publishable
+# key, not a JWT).
+[functions.device-provision]
+enabled = true
+verify_jwt = false
+entrypoint = "./functions/device-provision/index.ts"
