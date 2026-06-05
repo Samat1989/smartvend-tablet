@@ -249,11 +249,13 @@ function App() {
         token: marketToken, orderid: data.orderid, torderid: data.torderid, savedCart: cart, ts: Date.now()
       }));
       startPaymentPolling(marketToken, data.orderid);
-      // No programmatic redirect: by now ~2-3s have passed since the tap, so the
-      // user-gesture is gone and window.location wouldn't open the Kaspi app on
-      // iOS (it'd just load the web page). The big "pay_kaspi" link on the
-      // awaiting screen is a real tap → opens the app far more reliably, and our
-      // tab stays alive so polling + the success screen still work.
+      // Single-tap: go straight to Kaspi from the "Pay" button. Note the gesture
+      // has expired during the ~2-3s create-payment round-trip, so on iOS this
+      // often lands on the Kaspi web page (QR + pay button) rather than launching
+      // the app — an accepted fallback. If the app opens, our tab stays alive
+      // underneath (polling + success screen). The awaiting-screen "pay_kaspi"
+      // link remains as a manual retry when the user returns to our tab.
+      window.location.href = data.paymentUrl;
     } catch (err) {
       setPaymentStatus('error');
       setErrorMessage(err.message);
