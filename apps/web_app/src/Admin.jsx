@@ -72,7 +72,7 @@ const STOREFRONT_BASE = import.meta.env.VITE_STOREFRONT_URL || (typeof window !=
 // <storefront>/?marketId=<id>). Rendered via canvas so Cyrillic text works
 // (jsPDF's built-in fonts don't support it).
 async function buildMarketQrPdf(market, qrDataUrl) {
-  const url = `${STOREFRONT_BASE}/micromarket?id=${market.id}`;
+  const url = `${STOREFRONT_BASE}/micromarket?t=${market.qr_token}`;
   if (!qrDataUrl) qrDataUrl = await QRCode.toDataURL(url, { width: 900, margin: 1, errorCorrectionLevel: 'M' });
 
   // Canvas aspect = 7:15 to match the printed label (7cm wide × 15cm tall).
@@ -120,7 +120,7 @@ function QrModal({ market, onClose }) {
   const [qrSrc, setQrSrc] = useState(null);
   const [pdfUrl, setPdfUrl] = useState(null);
   const [pdfErr, setPdfErr] = useState(null);
-  const url = `${STOREFRONT_BASE}/micromarket?id=${market.id}`;
+  const url = `${STOREFRONT_BASE}/micromarket?t=${market.qr_token}`;
   useEffect(() => {
     let alive = true;
     let createdUrl = null;
@@ -610,7 +610,7 @@ export default function Admin() {
     try {
       const { data, error } = await supabase
         .from('micromarkets')
-        .select('id, name, layout_json, kind');
+        .select('id, name, layout_json, kind, qr_token');
       if (error) throw error;
       setMarkets(data || []);
       // No auto-select: the Inventory tab opens on the machine list and the

@@ -94,10 +94,9 @@ async function backgroundPoll(supabase, orderid, machid, appkey) {
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: cors });
   try {
-    const { marketId, items } = await req.json();
-    const numericId = parseInt(marketId);
-    if (!numericId || !Array.isArray(items) || items.length === 0) {
-      throw new Error("marketId and items are required");
+    const { token, marketId, items } = await req.json();
+    if (!Array.isArray(items) || items.length === 0) {
+      throw new Error("items are required");
     }
 
     const supabase = createClient(
@@ -105,9 +104,18 @@ Deno.serve(async (req) => {
       Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "",
     );
 
-    const { data: market, error: mErr } = await supabase
-      .from("micromarkets").select("secret").eq("id", numericId).single();
-    if (mErr || !market) throw new Error(`Market ${numericId} not found`);
+    // Resolve the machine by its unguessable qr_token (preferred — keeps the
+    // machid out of the browser) or by legacy marketId. The secret stays here.
+    let market, mErr;
+    if (token) {
+      ({ data: market, error: mErr } = await supabase
+        .from("micromarkets").select("id, secret").eq("qr_token", token).single());
+    } else {
+      ({ data: market, error: mErr } = await supabase
+        .from("micromarkets").select("id, secret").eq("id", parseInt(marketId)).single());
+    }
+    if (mErr || !market) throw new Error("Market not found");
+    const numericId = market.id;
     const appkey = (market.secret || "").trim();
 
     const ids = items.map((i) => i.id).filter(Boolean);

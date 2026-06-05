@@ -34,7 +34,8 @@ function App() {
   const [paymentStatus, setPaymentStatus] = useState('idle');
   const [errorMessage, setErrorMessage] = useState('');
   const [paymentData, setPaymentData] = useState(null);
-  const [currentMarketId, setCurrentMarketId] = useState(null);
+  const [currentMarketId, setCurrentMarketId] = useState(null);  // machid, for display only (from get_storefront)
+  const [marketToken, setMarketToken] = useState(null);          // unguessable QR token — the real key
   const pollingRef = useRef(null);
   const timeoutRef = useRef(null);
 
@@ -48,20 +49,18 @@ function App() {
   };
 
   useEffect(() => {
-    // The storefront only opens a machine when its id comes from the QR
-    // (?marketId=...). With no URL id we show the "scan QR" screen and never
-    // fall back to a saved/default market.
+    // The storefront opens a machine only via the QR token (?t=...). The token
+    // is unguessable, so machines can't be enumerated; the machid never appears
+    // in the URL. (We also accept ?id=/?marketId= as the token value for
+    // flexibility.) With no token we show the "scan QR" screen.
     const params = new URLSearchParams(window.location.search);
-    const urlMarketId = params.get('id') || params.get('marketId');
+    const urlToken = params.get('t') || params.get('id') || params.get('marketId');
 
-    setCurrentMarketId(urlMarketId || null);
+    setMarketToken(urlToken || null);
 
-    if (urlMarketId) {
-      fetchMarketInfo(urlMarketId);
-      fetchItems(urlMarketId);
-    }
+    if (urlToken) fetchStorefront(urlToken);
     fetchCategories();
-    
+
     const lng = i18n.language.toUpperCase().substring(0, 2);
     setLanguage(lng === 'KK' ? 'KZ' : lng === 'EN' ? 'EN' : 'RU');
 
@@ -72,12 +71,12 @@ function App() {
         // Only resume a payment that is recent (<15 min) AND for the machine
         // just scanned — otherwise a fresh scan would resurrect an old cart.
         const fresh = p.ts && (Date.now() - p.ts < 15 * 60 * 1000);
-        const sameMarket = String(p.marketId) === String(urlMarketId);
+        const sameMarket = String(p.token) === String(urlToken);
         if (fresh && sameMarket) {
           setCart(p.savedCart);
           setPaymentStatus('awaiting_payment');
           setIsCartOpen(true);
-          startPaymentPolling(p.marketId, p.orderid, p.torderid, p.savedCart);
+          startPaymentPolling(p.token, p.orderid);
         } else {
           localStorage.removeItem('micromart_pending_payment');
         }
@@ -95,19 +94,6 @@ function App() {
     };
   }, []);
 
-  async function fetchMarketInfo(id) {
-    try {
-      const { data } = await supabase
-        .from('market_settings')
-        .select('*')
-        .eq('id', id)
-        .single();
-      if (data) setMarketInfo(data);
-    } catch (err) {
-      console.error('Error fetching market info:', err);
-    }
-  }
-
   async function fetchCategories() {
     try {
       const { data, error } = await supabase.from('categories').select('*').order('name_ru');
@@ -117,29 +103,35 @@ function App() {
     }
   }
 
-  async function fetchItems(marketId) {
-    // Show cached items instantly (fast perceived load on rescan), then refresh.
-    const cacheKey = marketId ? `mm_items_${marketId}` : null;
+  // Token-gated storefront load: machine name + inventory via the get_storefront
+  // RPC (anon can't read inventory directly anymore). Cached by token for a fast
+  // perceived rescan.
+  async function fetchStorefront(token) {
+    const cacheKey = token ? `mm_sf_${token}` : null;
     let hadCache = false;
     if (cacheKey) {
       try {
         const cached = localStorage.getItem(cacheKey);
-        if (cached) { setItems(JSON.parse(cached)); hadCache = true; }
+        if (cached) {
+          const sf = JSON.parse(cached);
+          setItems(sf.items || []);
+          if (sf.machid) setCurrentMarketId(sf.machid);
+          if (sf.name) setMarketInfo({ name: sf.name, kind: sf.kind });
+          hadCache = true;
+        }
       } catch (_) {}
     }
     if (!hadCache) setLoading(true);
     try {
-      let query = supabase.from('inventory').select('*').order('name');
-      if (marketId) query = query.eq('micromarket_id', marketId);
-
-      const { data, error } = await query;
+      const { data, error } = await supabase.rpc('get_storefront', { p_token: token });
       if (error) throw error;
-      setItems(data || []);
-      if (cacheKey && data) {
-        try { localStorage.setItem(cacheKey, JSON.stringify(data)); } catch (_) {}
-      }
+      if (!data) { setItems([]); return; }   // unknown token
+      setItems(data.items || []);
+      setCurrentMarketId(data.machid);
+      setMarketInfo({ name: data.name, kind: data.kind });
+      if (cacheKey) { try { localStorage.setItem(cacheKey, JSON.stringify(data)); } catch (_) {} }
     } catch (error) {
-      console.error('Error fetching items:', error.message);
+      console.error('Error fetching storefront:', error.message);
     } finally {
       setLoading(false);
     }
@@ -177,7 +169,7 @@ function App() {
     if (timeoutRef.current) { clearTimeout(timeoutRef.current); timeoutRef.current = null; }
   };
 
-  const startPaymentPolling = (marketId, orderid, torderid, currentCart) => {
+  const startPaymentPolling = (token, orderid) => {
     stopPolling(); // Баг #5: сбрасываем и interval, и timeout перед новым запуском
     // Passive observer: the whole static_qr fleet is ESP32-relay, where the
     // device (via complete-order) is the single capture path — it takes the
@@ -193,7 +185,7 @@ function App() {
           localStorage.removeItem('micromart_pending_payment');
           setPaymentStatus('success');
           setCart({});
-          fetchItems(marketId); // Баг #2: передаем marketId чтобы загрузить товары нужного маркета
+          fetchStorefront(token); // refresh stock for this machine
         }
       } catch (err) {}
     }, 4000);
@@ -208,16 +200,16 @@ function App() {
 
   const handleCheckout = async () => {
     if (Object.keys(cart).length === 0) return;
-    const marketId = currentMarketId || Object.values(cart)[0]?.micromarket_id;
-    if (!marketId) {
+    if (!marketToken) {
       setPaymentStatus('error');
       setErrorMessage('Не выбран аппарат — откройте витрину по QR-коду');
       return;
     }
     setPaymentStatus('processing');
     try {
+      const items = Object.values(cart).map(i => ({ id: i.id, count: i.count }));
       const { data, error } = await supabase.functions.invoke('create-payment', {
-        body: { marketId: marketId.toString(), items: Object.values(cart) }
+        body: { token: marketToken, items }
       });
       if (error || !data?.paymentUrl) {
         // Surface the function's real error (e.g. the SmartVend gateway message).
@@ -228,9 +220,9 @@ function App() {
       setPaymentData(data);
       setPaymentStatus('awaiting_payment');
       localStorage.setItem('micromart_pending_payment', JSON.stringify({
-        marketId: marketId.toString(), orderid: data.orderid, torderid: data.torderid, savedCart: cart, ts: Date.now()
+        token: marketToken, orderid: data.orderid, torderid: data.torderid, savedCart: cart, ts: Date.now()
       }));
-      startPaymentPolling(marketId.toString(), data.orderid, data.torderid, cart);
+      startPaymentPolling(marketToken, data.orderid);
       setTimeout(() => window.location.href = data.paymentUrl, 800);
     } catch (err) {
       setPaymentStatus('error');
@@ -249,9 +241,9 @@ function App() {
 
   const chefsPick = items.find(i => i.stock > 0);
 
-  // No machine id in the URL → the storefront was opened without a QR.
+  // No QR token in the URL → the storefront was opened without a QR.
   // Don't show any machine's catalog; prompt the customer to scan the code.
-  if (!currentMarketId) {
+  if (!marketToken) {
     return (
       <div className="min-h-screen bg-background text-on-surface flex flex-col items-center justify-center px-6 text-center">
         <div className="w-20 h-20 rounded-full bg-primary/10 flex items-center justify-center mb-6">
