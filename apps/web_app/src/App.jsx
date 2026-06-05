@@ -94,6 +94,32 @@ function App() {
     };
   }, []);
 
+  // Idle reset: a static-QR tab can sit backgrounded for hours and come back
+  // with a stale cart open and stale stock. When the tab regains focus after
+  // being hidden a while, drop the cart, close it, and refresh the catalog —
+  // EXCEPT during an active payment (Kaspi -> back to tab), which we preserve.
+  useEffect(() => {
+    const IDLE_RESET_MS = 3 * 60 * 1000;
+    let hiddenAt = null;
+    const onVis = () => {
+      if (document.visibilityState === 'hidden') {
+        hiddenAt = Date.now();
+        return;
+      }
+      const idle = hiddenAt ? Date.now() - hiddenAt : 0;
+      hiddenAt = null;
+      if (paymentStatus === 'awaiting_payment' || paymentStatus === 'processing') return;
+      if (idle > IDLE_RESET_MS) {
+        setCart({});
+        setIsCartOpen(false);
+        setSearch('');
+        if (marketToken) fetchStorefront(marketToken);   // fresh stock/prices
+      }
+    };
+    document.addEventListener('visibilitychange', onVis);
+    return () => document.removeEventListener('visibilitychange', onVis);
+  }, [paymentStatus, marketToken]);
+
   async function fetchCategories() {
     try {
       const { data, error } = await supabase.from('categories').select('*').order('name_ru');
