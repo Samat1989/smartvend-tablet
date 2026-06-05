@@ -18,13 +18,12 @@ verify_jwt = false
 enabled = true
 verify_jwt = false
 
+# Push-based finalization from the ESP32 relay. On a SmartVend MQTT "Processed
+# order" event the device POSTs { orderid } here with the publishable key (not a
+# JWT) — so verify_jwt MUST be false. The function re-verifies the payment with
+# the gateway before recording, so the public endpoint can't be used to forge a
+# sale.
 [functions.complete-order]
 enabled = true
-verify_jwt = true
-import_map = "./functions/complete-order/deno.json"
-# Uncomment to specify a custom file path to the entrypoint.
-# Supported file extensions are: .ts, .js, .mjs, .jsx, .tsx
+verify_jwt = false
 entrypoint = "./functions/complete-order/index.ts"
-# Specifies static files to be bundled with the function. Supports glob patterns.
-# For example, if you want to serve static HTML pages in your function:
-# static_files = [ "./functions/complete-order/*.html" ]
