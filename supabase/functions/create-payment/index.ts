@@ -82,9 +82,9 @@ async function finalizeIfPaid(supabase, orderid, machid, appkey) {
 // Keep the payment_result window open right after the QR is shown: poll every
 // 10s for ~90s (covers scan -> Kaspi app -> pay), independent of the browser.
 async function backgroundPoll(supabase, orderid, machid, appkey) {
-  const deadline = Date.now() + 90_000;
+  const deadline = Date.now() + 60_000; // poll for ~1 minute
   while (Date.now() < deadline) {
-    await new Promise((r) => setTimeout(r, 10_000));
+    await new Promise((r) => setTimeout(r, 12_000)); // every 12s
     try {
       if (await finalizeIfPaid(supabase, orderid, machid, appkey)) return;
     } catch (_) { /* keep going */ }
