@@ -4,12 +4,13 @@ import './index.css'
 import './i18n'
 
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
-import Admin from './Admin.jsx'
 
 // A single deployment serves both surfaces — no separate storefront project:
 //   /admin        — operator admin panel (default landing)
 //   /micromarket  — customer storefront, opened from a machine's QR (?id=<machid>)
-// The storefront is lazy-loaded so the admin still loads fast.
+// Both are lazy-loaded (separate chunks) so each route ships only its own code —
+// the storefront no longer downloads the (large) admin bundle and vice versa.
+const Admin = lazy(() => import('./Admin.jsx'))
 const App = lazy(() => import('./App.jsx'))
 
 ReactDOM.createRoot(document.getElementById('root')).render(

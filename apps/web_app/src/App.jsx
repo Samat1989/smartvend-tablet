@@ -68,11 +68,19 @@ function App() {
     const saved = localStorage.getItem('micromart_pending_payment');
     if (saved) {
       try {
-        const { marketId, orderid, torderid, savedCart } = JSON.parse(saved);
-        setCart(savedCart);
-        setPaymentStatus('awaiting_payment');
-        setIsCartOpen(true);
-        startPaymentPolling(marketId, orderid, torderid, savedCart);
+        const p = JSON.parse(saved);
+        // Only resume a payment that is recent (<15 min) AND for the machine
+        // just scanned — otherwise a fresh scan would resurrect an old cart.
+        const fresh = p.ts && (Date.now() - p.ts < 15 * 60 * 1000);
+        const sameMarket = String(p.marketId) === String(urlMarketId);
+        if (fresh && sameMarket) {
+          setCart(p.savedCart);
+          setPaymentStatus('awaiting_payment');
+          setIsCartOpen(true);
+          startPaymentPolling(p.marketId, p.orderid, p.torderid, p.savedCart);
+        } else {
+          localStorage.removeItem('micromart_pending_payment');
+        }
       } catch (e) {
         localStorage.removeItem('micromart_pending_payment');
       }
@@ -110,14 +118,26 @@ function App() {
   }
 
   async function fetchItems(marketId) {
+    // Show cached items instantly (fast perceived load on rescan), then refresh.
+    const cacheKey = marketId ? `mm_items_${marketId}` : null;
+    let hadCache = false;
+    if (cacheKey) {
+      try {
+        const cached = localStorage.getItem(cacheKey);
+        if (cached) { setItems(JSON.parse(cached)); hadCache = true; }
+      } catch (_) {}
+    }
+    if (!hadCache) setLoading(true);
     try {
-      setLoading(true);
       let query = supabase.from('inventory').select('*').order('name');
       if (marketId) query = query.eq('micromarket_id', marketId);
-      
+
       const { data, error } = await query;
       if (error) throw error;
       setItems(data || []);
+      if (cacheKey && data) {
+        try { localStorage.setItem(cacheKey, JSON.stringify(data)); } catch (_) {}
+      }
     } catch (error) {
       console.error('Error fetching items:', error.message);
     } finally {
@@ -209,7 +229,7 @@ function App() {
       setPaymentData(data);
       setPaymentStatus('awaiting_payment');
       localStorage.setItem('micromart_pending_payment', JSON.stringify({
-        marketId: marketId.toString(), orderid: data.orderid, torderid: data.torderid, savedCart: cart
+        marketId: marketId.toString(), orderid: data.orderid, torderid: data.torderid, savedCart: cart, ts: Date.now()
       }));
       startPaymentPolling(marketId.toString(), data.orderid, data.torderid, cart);
       setTimeout(() => window.location.href = data.paymentUrl, 800);
