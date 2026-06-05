@@ -78,7 +78,11 @@ static void load_last_order_from_nvs(void) {
     }
 }
 
-static void notify_server_order_complete(const char* orderid) {
+// POST { orderid } to the complete-order edge function once. The function
+// re-verifies the payment with SmartVend (a ~2-3s round trip) before replying,
+// so the client timeout must be generous — too short and we'd give up before
+// the response even though the server still finalizes the sale.
+static esp_err_t post_order_once(const char* orderid) {
     char post_data[128];
     snprintf(post_data, sizeof(post_data), "{\"orderid\":\"%s\"}", orderid);
 
@@ -86,6 +90,7 @@ static void notify_server_order_complete(const char* orderid) {
         .url = SUPABASE_FUNC_URL,
         .method = HTTP_METHOD_POST,
         .crt_bundle_attach = esp_crt_bundle_attach,
+        .timeout_ms = 15000,
     };
     esp_http_client_handle_t client = esp_http_client_init(&config);
 
@@ -95,30 +100,38 @@ static void notify_server_order_complete(const char* orderid) {
     esp_http_client_set_post_field(client, post_data, strlen(post_data));
 
     esp_err_t err = esp_http_client_perform(client);
+    int status = esp_http_client_get_status_code(client);
     if (err == ESP_OK) {
-        ESP_LOGI(TAG, "HTTP POST Status = %d, content_length = %lld",
-                esp_http_client_get_status_code(client),
-                esp_http_client_get_content_length(client));
+        ESP_LOGI(TAG, "HTTP POST Status = %d", status);
     } else {
         ESP_LOGE(TAG, "HTTP POST request failed: %s", esp_err_to_name(err));
     }
-
     esp_http_client_cleanup(client);
+
+    // Treat a real 2xx as done; otherwise let the caller retry.
+    return (err == ESP_OK && status >= 200 && status < 300) ? ESP_OK : ESP_FAIL;
+}
+
+// Runs in its own task so the lock timing stays independent of the network:
+// the door opens/closes on schedule regardless of how long the POST takes.
+// Retries a few times so a transient Wi-Fi/TLS hiccup doesn't lose the sale.
+static void notify_task(void *pvParameters) {
+    char* orderid = (char*)pvParameters;
+    if (orderid) {
+        for (int attempt = 1; attempt <= 3; attempt++) {
+            if (post_order_once(orderid) == ESP_OK) break;
+            ESP_LOGW(TAG, "complete-order notify attempt %d failed, retrying...", attempt);
+            vTaskDelay(pdMS_TO_TICKS(3000));
+        }
+        free(orderid);
+    }
+    vTaskDelete(NULL);
 }
 
 static void trigger_lock(void *pvParameters) {
-    char* order_to_notify = (char*)pvParameters;
-    
     is_lock_active = true;
     ESP_LOGI(TAG, "🔓 TRIGGERING LOCK (GPIO 4) for %d ms", UNLOCK_TIME_MS);
     gpio_set_level(LOCK_GPIO, 1);
-
-    // Notify server while door is opening
-    if (order_to_notify) {
-        notify_server_order_complete(order_to_notify);
-        free(order_to_notify);
-    }
-
     vTaskDelay(pdMS_TO_TICKS(UNLOCK_TIME_MS));
     gpio_set_level(LOCK_GPIO, 0);
     ESP_LOGI(TAG, "🔒 LOCK CLOSED");
@@ -165,8 +178,13 @@ static void mqtt_event_handler(void *handler_args, esp_event_base_t base, int32_
                                 strncpy(last_order_id, orderid->valuestring, sizeof(last_order_id) - 1);
                                 save_last_order_to_nvs(last_order_id); // Сохраняем в постоянную память
                                 
+                                // Open the lock and notify the server on
+                                // separate tasks: the door timing must not wait
+                                // on the network, and the HTTPS/TLS POST needs a
+                                // larger stack than the lock task.
+                                xTaskCreate(trigger_lock, "lock_task", 4096, NULL, 5, NULL);
                                 char* id_copy = strdup(orderid->valuestring);
-                                xTaskCreate(trigger_lock, "lock_task", 4096, (void*)id_copy, 5, NULL);
+                                xTaskCreate(notify_task, "notify_task", 8192, (void*)id_copy, 5, NULL);
                             }
                         }
                     }
