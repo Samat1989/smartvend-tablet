@@ -187,13 +187,15 @@ Deno.serve(async (req) => {
       { headers: { ...cors, "Content-Type": "application/json" } },
     );
 
-    // Keep polling payment_result server-side so the payment is confirmed even
-    // if the customer never returns to the browser.
-    try {
-      globalThis.EdgeRuntime?.waitUntil(
-        backgroundPoll(supabase, result.orderid, numericId, appkey),
-      );
-    } catch (_) { /* waitUntil unavailable — cron backstop still covers it */ }
+    // TEMPORARILY DISABLED to test the ESP32-relay finalization path in
+    // isolation (the relay POSTs {orderid} to complete-order on MQTT payment).
+    // Re-enable to restore the server-side confirmation backstop for web-only
+    // markets without a relay.
+    // try {
+    //   globalThis.EdgeRuntime?.waitUntil(
+    //     backgroundPoll(supabase, result.orderid, numericId, appkey),
+    //   );
+    // } catch (_) { /* waitUntil unavailable */ }
 
     return response;
   } catch (error) {
