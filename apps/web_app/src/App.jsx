@@ -179,22 +179,21 @@ function App() {
 
   const startPaymentPolling = (marketId, orderid, torderid, currentCart) => {
     stopPolling(); // Баг #5: сбрасываем и interval, и timeout перед новым запуском
+    // Passive observer: the whole static_qr fleet is ESP32-relay, where the
+    // device (via complete-order) is the single capture path — it takes the
+    // payment only when the lock opens. The browser must NOT capture; it just
+    // reads the status the device set and shows success when the order closes.
+    // If the device is offline the order stays pending → SmartVend auto-refunds
+    // and we hit the timeout below (no money taken without the lock opening).
     pollingRef.current = setInterval(async () => {
       try {
-        const { data } = await supabase.functions.invoke('verify-payment', {
-          body: { marketId, orderid, torderid, cartItems: currentCart || cart }
-        });
-        if (data?.status === 'success') {
+        const { data: status } = await supabase.rpc('get_order_status', { p_orderid: orderid });
+        if (status === 'completed') {
           stopPolling();
           localStorage.removeItem('micromart_pending_payment');
           setPaymentStatus('success');
           setCart({});
           fetchItems(marketId); // Баг #2: передаем marketId чтобы загрузить товары нужного маркета
-        } else if (data?.status === 'error' || (data?.code && ![1, 2].includes(Number(data.code)))) {
-          stopPolling();
-          localStorage.removeItem('micromart_pending_payment');
-          setPaymentStatus('error');
-          setErrorMessage(data.msg || "Payment failed");
         }
       } catch (err) {}
     }, 4000);
