@@ -249,7 +249,11 @@ function App() {
         token: marketToken, orderid: data.orderid, torderid: data.torderid, savedCart: cart, ts: Date.now()
       }));
       startPaymentPolling(marketToken, data.orderid);
-      setTimeout(() => window.location.href = data.paymentUrl, 800);
+      // No programmatic redirect: by now ~2-3s have passed since the tap, so the
+      // user-gesture is gone and window.location wouldn't open the Kaspi app on
+      // iOS (it'd just load the web page). The big "pay_kaspi" link on the
+      // awaiting screen is a real tap → opens the app far more reliably, and our
+      // tab stays alive so polling + the success screen still work.
     } catch (err) {
       setPaymentStatus('error');
       setErrorMessage(err.message);
@@ -482,9 +486,20 @@ function App() {
 
                 {paymentStatus === 'awaiting_payment' && paymentData && (
                   <div className="mt-8 p-6 bg-white rounded-2xl flex flex-col items-center text-center product-card-shadow border border-primary/5">
-                    <Loader2 className="animate-spin text-primary mb-4" size={32} />
-                    <p className="font-lexend font-bold text-on-surface mb-6">{t('waiting_for_payment')}...</p>
-                    <a href={paymentData.paymentUrl} className="w-full signature-gradient py-4 rounded-xl text-white font-lexend font-bold shadow-lg mb-4">{t('pay_kaspi')}</a>
+                    {/* The actual app-open must be a real user tap: mobile OSes
+                        (esp. iOS) won't launch the Kaspi app from a programmatic
+                        redirect after the create-payment round-trip — the user
+                        gesture has expired. So this big button is the primary CTA. */}
+                    <a href={paymentData.paymentUrl} className="w-full signature-gradient py-5 rounded-xl text-white font-lexend font-black text-lg shadow-lg mb-3 active:scale-95 transition-all">
+                      {t('pay_kaspi')}
+                    </a>
+                    <p className="font-lexend text-on-surface-variant text-sm mb-5">
+                      {t('tap_to_open_kaspi', { defaultValue: 'Нажмите кнопку, чтобы открыть приложение Kaspi и оплатить' })}
+                    </p>
+                    <div className="flex items-center justify-center gap-2 text-on-surface-variant opacity-70 mb-4">
+                      <Loader2 className="animate-spin" size={16} />
+                      <span className="font-lexend text-sm">{t('waiting_for_payment')}...</span>
+                    </div>
                     <button onClick={() => { stopPolling(); setPaymentStatus('idle'); localStorage.removeItem('micromart_pending_payment'); }} className="text-on-surface-variant font-bold text-sm uppercase opacity-50">{t('cancel_payment')}</button>
                   </div>
                 )}
