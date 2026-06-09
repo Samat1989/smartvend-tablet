@@ -1,4 +1,4 @@
-#include <stdio.h>
+﻿#include <stdio.h>
 #include <stdint.h>
 #include <stddef.h>
 #include <stdlib.h>
@@ -23,6 +23,7 @@
 #include "esp_http_client.h"
 #include "esp_http_server.h"
 #include "esp_crt_bundle.h"
+#include "esp_https_ota.h"
 
 #include "lwip/sockets.h"
 
@@ -36,6 +37,17 @@ static const char *TAG = "relay_mart";
 
 #define SUPABASE_BASE      "https://cgvfhtvdtdjsyluhlcbq.supabase.co/functions/v1"
 #define SUPABASE_ANON_KEY  "sb_publishable_84RnaNCrFwxKicybxLGL2w_StEYpHnD"
+
+// --- Firmware version + OTA (GitHub Releases, tag prefix "relay-v") ---
+// FW_VERSION_CODE is the monotonic number compared against the release tag.
+// Bump both on every release (release-relay.ps1 does this automatically).
+// OTA shares the tablet's repo; firmware releases are tagged "relay-vX.Y.Z" and
+// carry an asset named OTA_ASSET_NAME, so they never collide with the APK.
+#define FW_VERSION_NAME    "1.0.1"
+#define FW_VERSION_CODE    10001
+#define OTA_OWNER_REPO     "Samat1989/smartvend-tablet"
+#define OTA_TAG_PREFIX     "relay-v"
+#define OTA_ASSET_NAME     "relay-mart.bin"
 
 // Latching (bistable) relay — pins reverse-engineered from the stock firmware
 // (see ../relay-test/README.md and esp32_dump/RELAY_CONTROL.md). DIR (IO2) sets
@@ -527,6 +539,129 @@ static bool provision_fetch_and_store(const char* machid) {
     return ok;
 }
 
+// ============================ OTA (GitHub Releases) ============================
+// Accumulate an HTTP response body into a bounded heap buffer.
+typedef struct { char *buf; int len; int cap; } http_accum_t;
+static esp_err_t ota_http_accum(esp_http_client_event_t *e) {
+    if (e->event_id == HTTP_EVENT_ON_DATA && e->user_data) {
+        http_accum_t *a = e->user_data;
+        if (a->len + e->data_len < a->cap) {
+            memcpy(a->buf + a->len, e->data, e->data_len);
+            a->len += e->data_len;
+        }
+    }
+    return ESP_OK;
+}
+
+// Parse a version code from a tag like "relay-v1.2.3" or "relay-v1.2.3+10203".
+// Returns -1 if the tag doesn't carry our prefix.
+static long ota_tag_code(const char *tag) {
+    size_t pl = strlen(OTA_TAG_PREFIX);
+    if (strncmp(tag, OTA_TAG_PREFIX, pl) != 0) return -1;
+    const char *v = tag + pl;
+    const char *plus = strchr(v, '+');
+    if (plus) return atol(plus + 1);             // explicit +<code>
+    int a = 0, b = 0, c = 0;                      // else derive X.Y.Z -> X*10000+Y*100+Z
+    sscanf(v, "%d.%d.%d", &a, &b, &c);
+    return (long)a * 10000 + b * 100 + c;
+}
+
+// Query GitHub for the newest "relay-v*" release. If its code beats ours, copy
+// the OTA_ASSET_NAME download URL into url_out and return true.
+static bool ota_find_update(char *url_out, size_t url_sz) {
+    char api[160];
+    snprintf(api, sizeof(api),
+             "https://api.github.com/repos/%s/releases?per_page=20", OTA_OWNER_REPO);
+
+    const int cap = 24576;
+    char *body = malloc(cap);
+    if (!body) return false;
+    http_accum_t acc = { .buf = body, .len = 0, .cap = cap };
+
+    esp_http_client_config_t cfg = {
+        .url = api,
+        .crt_bundle_attach = esp_crt_bundle_attach,
+        .event_handler = ota_http_accum,
+        .user_data = &acc,
+        .timeout_ms = 15000,
+    };
+    esp_http_client_handle_t cli = esp_http_client_init(&cfg);
+    esp_http_client_set_header(cli, "Accept", "application/vnd.github+json");
+    esp_http_client_set_header(cli, "User-Agent", "esp-relay-ota");
+    esp_err_t err = esp_http_client_perform(cli);
+    int status = esp_http_client_get_status_code(cli);
+    esp_http_client_cleanup(cli);
+
+    bool found = false;
+    if (err == ESP_OK && status == 200) {
+        acc.buf[acc.len < cap ? acc.len : cap - 1] = 0;
+        cJSON *root = cJSON_Parse(acc.buf);
+        if (root && cJSON_IsArray(root)) {
+            long best = FW_VERSION_CODE;
+            cJSON *rel;
+            cJSON_ArrayForEach(rel, root) {
+                cJSON *tag = cJSON_GetObjectItem(rel, "tag_name");
+                cJSON *pre = cJSON_GetObjectItem(rel, "prerelease");
+                if (!cJSON_IsString(tag) || cJSON_IsTrue(pre)) continue;
+                long code = ota_tag_code(tag->valuestring);
+                if (code <= best) continue;
+                cJSON *assets = cJSON_GetObjectItem(rel, "assets");
+                cJSON *as;
+                cJSON_ArrayForEach(as, assets) {
+                    cJSON *nm = cJSON_GetObjectItem(as, "name");
+                    cJSON *u  = cJSON_GetObjectItem(as, "browser_download_url");
+                    if (cJSON_IsString(nm) && cJSON_IsString(u) &&
+                        strcmp(nm->valuestring, OTA_ASSET_NAME) == 0) {
+                        strncpy(url_out, u->valuestring, url_sz - 1);
+                        url_out[url_sz - 1] = 0;
+                        best = code;
+                        found = true;
+                        ESP_LOGI(TAG, "OTA: found %s (code %ld)", tag->valuestring, code);
+                        break;
+                    }
+                }
+            }
+        }
+        if (root) cJSON_Delete(root);
+    } else {
+        ESP_LOGW(TAG, "OTA check failed: err=%s status=%d", esp_err_to_name(err), status);
+    }
+    free(body);
+    return found;
+}
+
+// Download + flash the firmware at `url` via esp_https_ota; reboots on success.
+static void ota_apply(const char *url) {
+    ESP_LOGW(TAG, "OTA: downloading & flashing %s", url);
+    esp_http_client_config_t http = {
+        .url = url,
+        .crt_bundle_attach = esp_crt_bundle_attach,
+        .timeout_ms = 30000,
+        .keep_alive_enable = true,
+    };
+    esp_https_ota_config_t ota = { .http_config = &http };
+    esp_err_t err = esp_https_ota(&ota);
+    if (err == ESP_OK) {
+        ESP_LOGW(TAG, "OTA OK — rebooting into new firmware");
+        esp_restart();
+    } else {
+        ESP_LOGE(TAG, "OTA failed: %s — keeping current firmware", esp_err_to_name(err));
+    }
+}
+
+// Check GitHub for a newer firmware and apply it. Requires WiFi up. Returns to
+// the caller only when there is no update (or it failed); reboots on success.
+static void ota_check_and_update(void) {
+    char url[256];
+    ESP_LOGI(TAG, "OTA: current v%s (code %d), checking %s ...",
+             FW_VERSION_NAME, FW_VERSION_CODE, OTA_OWNER_REPO);
+    if (ota_find_update(url, sizeof(url))) {
+        ota_apply(url);            // reboots on success
+    } else {
+        ESP_LOGI(TAG, "OTA: already up to date");
+    }
+}
+
 // ============================ Setup portal (SoftAP + HTTP) ============================
 // Page split around the SSID <select> so a fresh WiFi scan can be injected as
 // <option>s (a visible dropdown). A separate text field allows a hidden SSID.
@@ -659,9 +794,14 @@ static esp_err_t send_msg(httpd_req_t *req, const char *title, const char *body)
     return ESP_OK;
 }
 
-static void reboot_task(void *pv) {
-    vTaskDelay(pdMS_TO_TICKS(2000));
-    esp_restart();
+// After provisioning: let the reply flush, then check for a firmware update
+// (WiFi is already connected at this point). esp_https_ota reboots into the new
+// image on success; otherwise we reboot into normal mode. Needs a big stack for
+// the TLS + OTA download.
+static void provision_finish_task(void *pv) {
+    vTaskDelay(pdMS_TO_TICKS(2000));   // let the "Готово" page reach the phone
+    ota_check_and_update();             // reboots if a newer firmware is flashed
+    esp_restart();                      // no update -> reboot into normal mode
 }
 
 static esp_err_t save_post_handler(httpd_req_t *req) {
@@ -703,9 +843,9 @@ static esp_err_t save_post_handler(httpd_req_t *req) {
     cfg_set("pass", pass);
     cfg_set("machid", machid);
     cfg_set("opensec", osstr);
-    ESP_LOGI(TAG, "[Setup] provisioned OK, rebooting");
-    send_msg(req, "Готово!", "Аппарат настроен и перезагружается.");
-    xTaskCreate(reboot_task, "reboot", 2048, NULL, 5, NULL);
+    ESP_LOGI(TAG, "[Setup] provisioned OK — checking firmware update, then rebooting");
+    send_msg(req, "Готово!", "Аппарат настроен. Проверяю обновление прошивки и перезагружаюсь.");
+    xTaskCreate(provision_finish_task, "provfin", 10240, NULL, 5, NULL);
     return ESP_OK;
 }
 
