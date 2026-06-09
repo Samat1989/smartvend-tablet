@@ -85,3 +85,7 @@ Thumbs.db
 photo_*.jpg
 photo_*.jpeg
 photo_*.png
+
+# --- Firmware flash dump (NEVER commit) ---------------------------------
+# Full ESP32 flash read-back + extracted strings; large binary, contains secrets.
+esp32_dump/
