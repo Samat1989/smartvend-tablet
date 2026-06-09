@@ -638,6 +638,11 @@ static void ota_apply(const char *url) {
         .crt_bundle_attach = esp_crt_bundle_attach,
         .timeout_ms = 30000,
         .keep_alive_enable = true,
+        // GitHub 302-redirects to a very long objects.githubusercontent.com URL;
+        // the default 512 B TX buffer can't hold that request line ("Out of
+        // buffer"). Enlarge RX/TX so the redirected GET fits.
+        .buffer_size = 2048,
+        .buffer_size_tx = 4096,
     };
     esp_https_ota_config_t ota = { .http_config = &http };
     esp_err_t err = esp_https_ota(&ota);
@@ -660,6 +665,14 @@ static void ota_check_and_update(void) {
     } else {
         ESP_LOGI(TAG, "OTA: already up to date");
     }
+}
+
+// Startup OTA check: wait (bounded) for WiFi, then check once. Runs in the
+// background so MQTT/relay stay responsive; reboots into new firmware if any.
+static void ota_boot_task(void *pv) {
+    for (int i = 0; i < 60 && !g_has_ip; i++) vTaskDelay(pdMS_TO_TICKS(1000));
+    if (g_has_ip) ota_check_and_update();   // reboots on success; returns otherwise
+    vTaskDelete(NULL);
 }
 
 // ============================ Setup portal (SoftAP + HTTP) ============================
@@ -794,14 +807,11 @@ static esp_err_t send_msg(httpd_req_t *req, const char *title, const char *body)
     return ESP_OK;
 }
 
-// After provisioning: let the reply flush, then check for a firmware update
-// (WiFi is already connected at this point). esp_https_ota reboots into the new
-// image on success; otherwise we reboot into normal mode. Needs a big stack for
-// the TLS + OTA download.
+// After provisioning: let the reply reach the phone, then reboot into normal
+// mode. The firmware update check runs there (ota_boot_task), not here.
 static void provision_finish_task(void *pv) {
-    vTaskDelay(pdMS_TO_TICKS(2000));   // let the "Готово" page reach the phone
-    ota_check_and_update();             // reboots if a newer firmware is flashed
-    esp_restart();                      // no update -> reboot into normal mode
+    vTaskDelay(pdMS_TO_TICKS(2000));
+    esp_restart();
 }
 
 static esp_err_t save_post_handler(httpd_req_t *req) {
@@ -843,9 +853,9 @@ static esp_err_t save_post_handler(httpd_req_t *req) {
     cfg_set("pass", pass);
     cfg_set("machid", machid);
     cfg_set("opensec", osstr);
-    ESP_LOGI(TAG, "[Setup] provisioned OK — checking firmware update, then rebooting");
-    send_msg(req, "Готово!", "Аппарат настроен. Проверяю обновление прошивки и перезагружаюсь.");
-    xTaskCreate(provision_finish_task, "provfin", 10240, NULL, 5, NULL);
+    ESP_LOGI(TAG, "[Setup] provisioned OK, rebooting");
+    send_msg(req, "Готово!", "Аппарат настроен и перезагружается.");
+    xTaskCreate(provision_finish_task, "provfin", 2048, NULL, 5, NULL);
     return ESP_OK;
 }
 
@@ -996,6 +1006,10 @@ void app_main(void) {
     // Normal operation.
     wifi_start_normal();
     mqtt_start();
+
+    // Check for a firmware update once at startup (background, non-blocking).
+    xTaskCreate(ota_boot_task, "ota_boot", 10240, NULL, 4, NULL);
+
     ESP_LOGI(TAG, "Relay Mart System Started (DIR IO%d/PULSE IO%d, open %ds), machid=%s",
              RELAY_DIR_GPIO, RELAY_PULSE_GPIO, g_open_seconds, g_machid);
 }

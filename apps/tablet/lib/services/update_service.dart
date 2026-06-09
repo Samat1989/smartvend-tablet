@@ -56,7 +56,14 @@ class UpdateService {
     }
     final list = jsonDecode(resp.body) as List;
     final pick = list.firstWhere(
-      (r) => allowPrereleases || (r['prerelease'] == false),
+      (r) {
+        // The repo is shared with the esp-relay firmware, whose releases are
+        // tagged "relay-vX.Y.Z". Skip them — they carry no APK and must not
+        // shadow the latest tablet release.
+        final tag = (r['tag_name'] as String?) ?? '';
+        if (tag.startsWith('relay-')) return false;
+        return allowPrereleases || (r['prerelease'] == false);
+      },
       orElse: () => null,
     );
     if (pick == null) return null;

@@ -1,4 +1,7 @@
-# Name,   Type, SubType, Offset,  Size,    Flags
-nvs,      data, nvs,     0x9000,  0x6000,
-phy_init, data, phy,     0xf000,  0x1000,
-factory,  app,  factory, 0x10000, 0x1F0000,
+# Name,   Type, SubType, Offset,   Size,    Flags
+# OTA layout for 4 MB flash: two app slots + otadata (esp_https_ota ping-pongs
+# between ota_0 and ota_1). ~1.9 MB per slot — fits the WiFi+TLS+httpd app.
+nvs,      data, nvs,     0x9000,   0x5000,
+otadata,  data, ota,     0xe000,   0x2000,
+ota_0,    app,  ota_0,   0x10000,  0x1F0000,
+ota_1,    app,  ota_1,   0x200000, 0x1F0000,
