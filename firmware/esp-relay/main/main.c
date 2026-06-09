@@ -43,8 +43,8 @@ static const char *TAG = "relay_mart";
 // Bump both on every release (release-relay.ps1 does this automatically).
 // OTA shares the tablet's repo; firmware releases are tagged "relay-vX.Y.Z" and
 // carry an asset named OTA_ASSET_NAME, so they never collide with the APK.
-#define FW_VERSION_NAME    "1.0.3"
-#define FW_VERSION_CODE    10003
+#define FW_VERSION_NAME    "1.0.4"
+#define FW_VERSION_CODE    10004
 #define OTA_OWNER_REPO     "Samat1989/smartvend-tablet"
 #define OTA_TAG_PREFIX     "relay-v"
 #define OTA_ASSET_NAME     "relay-mart.bin"
@@ -570,12 +570,17 @@ static long ota_tag_code(const char *tag) {
 // the OTA_ASSET_NAME download URL into url_out and return true.
 static bool ota_find_update(char *url_out, size_t url_sz) {
     char api[160];
+    // Fetch only the newest few releases (newest-first). The latest relay-v
+    // release is normally at/near the top, and fewer releases => no truncation.
     snprintf(api, sizeof(api),
-             "https://api.github.com/repos/%s/releases?per_page=20", OTA_OWNER_REPO);
+             "https://api.github.com/repos/%s/releases?per_page=15", OTA_OWNER_REPO);
 
-    const int cap = 24576;
+    // GitHub's /releases JSON is verbose (author/uploader/body per release), so
+    // a small buffer truncates the array mid-element and cJSON_Parse then fails
+    // on the whole thing -> no update ever found. Give it real room.
+    const int cap = 49152;
     char *body = malloc(cap);
-    if (!body) return false;
+    if (!body) { ESP_LOGE(TAG, "OTA: no heap for release list"); return false; }
     http_accum_t acc = { .buf = body, .len = 0, .cap = cap };
 
     esp_http_client_config_t cfg = {
@@ -594,16 +599,22 @@ static bool ota_find_update(char *url_out, size_t url_sz) {
 
     bool found = false;
     if (err == ESP_OK && status == 200) {
+        if (acc.len >= cap - 1)
+            ESP_LOGW(TAG, "OTA: release list hit %d-byte cap, may be truncated", cap);
         acc.buf[acc.len < cap ? acc.len : cap - 1] = 0;
         cJSON *root = cJSON_Parse(acc.buf);
         if (root && cJSON_IsArray(root)) {
             long best = FW_VERSION_CODE;
+            int scanned = 0, relay_seen = 0;
             cJSON *rel;
             cJSON_ArrayForEach(rel, root) {
+                scanned++;
                 cJSON *tag = cJSON_GetObjectItem(rel, "tag_name");
                 cJSON *pre = cJSON_GetObjectItem(rel, "prerelease");
                 if (!cJSON_IsString(tag) || cJSON_IsTrue(pre)) continue;
                 long code = ota_tag_code(tag->valuestring);
+                if (code < 0) continue;            // not a relay-v* tag
+                relay_seen++;
                 if (code <= best) continue;
                 cJSON *assets = cJSON_GetObjectItem(rel, "assets");
                 cJSON *as;
@@ -621,6 +632,10 @@ static bool ota_find_update(char *url_out, size_t url_sz) {
                     }
                 }
             }
+            ESP_LOGI(TAG, "OTA: scanned %d releases (%d relay-v, %d bytes), best code %ld",
+                     scanned, relay_seen, acc.len, best);
+        } else {
+            ESP_LOGW(TAG, "OTA: failed to parse release list (%d bytes) - buffer too small?", acc.len);
         }
         if (root) cJSON_Delete(root);
     } else {
