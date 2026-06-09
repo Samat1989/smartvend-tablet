@@ -43,8 +43,8 @@ static const char *TAG = "relay_mart";
 // Bump both on every release (release-relay.ps1 does this automatically).
 // OTA shares the tablet's repo; firmware releases are tagged "relay-vX.Y.Z" and
 // carry an asset named OTA_ASSET_NAME, so they never collide with the APK.
-#define FW_VERSION_NAME    "1.0.2"
-#define FW_VERSION_CODE    10002
+#define FW_VERSION_NAME    "1.0.3"
+#define FW_VERSION_CODE    10003
 #define OTA_OWNER_REPO     "Samat1989/smartvend-tablet"
 #define OTA_TAG_PREFIX     "relay-v"
 #define OTA_ASSET_NAME     "relay-mart.bin"
@@ -676,24 +676,36 @@ static void ota_boot_task(void *pv) {
 }
 
 // ============================ Setup portal (SoftAP + HTTP) ============================
-// Page split around the SSID <select> so a fresh WiFi scan can be injected as
-// <option>s (a visible dropdown). A separate text field allows a hidden SSID.
+// The page is sent in three chunks: PAGE_HEAD (styles + the network list opens),
+// then one row per scanned network (radio + signal bars), then PAGE_TAIL_*
+// (password / machine id / relay time / submit).
 static const char PAGE_HEAD[] =
     "<!DOCTYPE html><html><head><meta name=viewport content='width=device-width,initial-scale=1'>"
     "<title>SmartVend Setup</title><style>"
-    "body{font-family:sans-serif;background:#1f2937;color:#fff;margin:0;padding:24px}"
-    "h2{margin-top:0}label{display:block;margin:14px 0 4px;font-size:14px;opacity:.8}"
-    "input,select{width:100%;box-sizing:border-box;padding:12px;border-radius:8px;border:none;font-size:16px}"
-    "button{width:100%;margin-top:20px;padding:14px;border:none;border-radius:8px;background:#F14635;color:#fff;font-size:16px;font-weight:bold}"
+    "*{box-sizing:border-box}"
+    "body{font-family:system-ui,-apple-system,sans-serif;background:#0f172a;color:#e2e8f0;margin:0 auto;padding:22px;max-width:460px}"
+    "h2{font-size:19px;font-weight:600;margin:0 0 18px}"
+    ".lbl{display:block;margin:16px 0 6px;font-size:13px;color:#94a3b8}"
+    "input{width:100%;padding:12px;border-radius:10px;border:1px solid #334155;background:#1e293b;color:#fff;font-size:16px}"
+    "#nets{display:flex;flex-direction:column;gap:8px}"
+    ".net{display:flex;align-items:center;gap:12px;padding:12px 14px;border:1px solid #334155;border-radius:10px;background:#1e293b;cursor:pointer}"
+    ".net input{display:none}"
+    ".net:has(:checked){border-color:#F14635;background:#3a2020}"
+    ".net .nm{flex:1;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;font-size:15px}"
+    ".bars{display:flex;align-items:flex-end;gap:2px;height:16px}"
+    ".bars i{width:4px;border-radius:1px;background:#475569}"
+    ".bars i.on{background:#22c55e}"
+    ".bars i:nth-child(1){height:6px}.bars i:nth-child(2){height:10px}"
+    ".bars i:nth-child(3){height:13px}.bars i:nth-child(4){height:16px}"
+    "button{width:100%;margin-top:22px;padding:14px;border:none;border-radius:10px;background:#F14635;color:#fff;font-size:16px;font-weight:600}"
     "</style></head><body><h2>SmartVend — настройка</h2>"
     "<form method=POST action=/save>"
-    "<label>WiFi сеть</label><select name=ssid><option value=''>— выберите сеть —</option>";
+    "<span class=lbl>WiFi сеть</span><div id=nets>";
 static const char PAGE_TAIL_A[] =
-    "</select>"
-    "<label>Скрытая сеть? Имя вручную</label><input name=ssid2 autocomplete=off placeholder='(необязательно)'>"
-    "<label>WiFi пароль</label><input name=pass type=password>"
-    "<label>Номер аппарата (Machine ID)</label><input name=machid required inputmode=numeric>"
-    "<label>Время включения реле, сек</label>"
+    "</div>"
+    "<span class=lbl>WiFi пароль</span><input name=pass type=password>"
+    "<span class=lbl>Номер аппарата (Machine ID)</span><input name=machid required inputmode=numeric>"
+    "<span class=lbl>Время включения реле, сек</span>"
     "<input name=opensec type=number min=1 max=600 inputmode=numeric value='";
 static const char PAGE_TAIL_B[] =
     "'><button type=submit>Сохранить и подключить</button></form></body></html>";
@@ -702,7 +714,8 @@ static esp_err_t root_get_handler(httpd_req_t *req) {
     httpd_resp_set_type(req, "text/html; charset=utf-8");
     httpd_resp_sendstr_chunk(req, PAGE_HEAD);
 
-    // Scan nearby networks and offer them as datalist options.
+    // Scan nearby networks (returned strongest-first) and render each as a
+    // selectable row with 4 signal bars filled by RSSI.
     wifi_scan_config_t sc = { .show_hidden = false };
     if (esp_wifi_scan_start(&sc, true) == ESP_OK) {
         uint16_t n = 0;
@@ -713,9 +726,18 @@ static esp_err_t root_get_handler(httpd_req_t *req) {
         if (esp_wifi_scan_get_ap_records(&got, recs) == ESP_OK) {
             for (uint16_t i = 0; i < got; i++) {
                 if (recs[i].ssid[0] == 0) continue;
-                char opt[80];
-                snprintf(opt, sizeof(opt), "<option>%s</option>", (char*)recs[i].ssid);
-                httpd_resp_sendstr_chunk(req, opt);
+                int r = recs[i].rssi;
+                int lvl = r >= -55 ? 4 : r >= -65 ? 3 : r >= -72 ? 2 : 1;
+                char row[320];
+                snprintf(row, sizeof(row),
+                    "<label class=net><input type=radio name=ssid value=\"%s\" required>"
+                    "<span class=nm>%s</span><span class=bars>"
+                    "<i class=\"%s\"></i><i class=\"%s\"></i><i class=\"%s\"></i><i class=\"%s\"></i>"
+                    "</span></label>",
+                    (char*)recs[i].ssid, (char*)recs[i].ssid,
+                    lvl >= 1 ? "on" : "", lvl >= 2 ? "on" : "",
+                    lvl >= 3 ? "on" : "", lvl >= 4 ? "on" : "");
+                httpd_resp_sendstr_chunk(req, row);
             }
         }
     }
@@ -820,15 +842,13 @@ static esp_err_t save_post_handler(httpd_req_t *req) {
     if (len <= 0) return ESP_FAIL;
     body[len] = 0;
 
-    char ssid[64] = {0}, ssid2[64] = {0}, pass[64] = {0}, machid[16] = {0}, opensec[8] = {0};
+    char ssid[64] = {0}, pass[64] = {0}, machid[16] = {0}, opensec[8] = {0};
     form_field(body, "ssid", ssid, sizeof(ssid));
-    form_field(body, "ssid2", ssid2, sizeof(ssid2));   // manual / hidden SSID
     form_field(body, "pass", pass, sizeof(pass));
     form_field(body, "machid", machid, sizeof(machid));
     form_field(body, "opensec", opensec, sizeof(opensec));
-    if (ssid2[0]) strncpy(ssid, ssid2, sizeof(ssid) - 1);   // manual entry overrides dropdown
     if (ssid[0] == 0 || machid[0] == 0) {
-        return send_msg(req, "Ошибка", "Выберите сеть (или впишите вручную) и номер аппарата. <a href=/>Назад</a>");
+        return send_msg(req, "Ошибка", "Выберите сеть и впишите номер аппарата. <a href=/>Назад</a>");
     }
     ESP_LOGI(TAG, "[Setup] ssid=%s machid=%s", ssid, machid);
 
