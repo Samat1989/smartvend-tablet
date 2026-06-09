@@ -20,6 +20,10 @@
               color:#fff;font-size:16px;font-weight:600;cursor:pointer}
     .note{font-size:12px;color:#64748b;margin-top:16px}
     code{background:#0b1220;padding:2px 6px;border-radius:5px;font-size:13px}
+    .drv{display:block;text-align:center;text-decoration:none;margin:8px 0;padding:12px;
+         border:1px solid #334155;border-radius:10px;background:#0b1220;color:#e2e8f0;font-size:14px}
+    .drv b{color:#fff}
+    .ttl{font-weight:600;margin:0 0 4px}
   </style>
 </head>
 <body>
@@ -40,8 +44,16 @@
     </esp-web-install-button>
   </div>
 
+  <div class="card">
+    <p class="ttl">Порт не виден? Поставьте драйвер USB-UART</p>
+    <p style="font-size:13px;color:#94a3b8;margin:0 0 12px">
+      Скачайте драйвер своего чипа, установите, переподключите плату и обновите страницу.
+    </p>
+    <a class="drv" href="drivers/CP210x.zip" download><b>CP210x</b> — Silicon Labs (.zip)</a>
+    <a class="drv" href="drivers/CH341SER.EXE" download><b>CH340 / CH341</b> — WCH (.exe)</a>
+  </div>
+
   <p class="note">
-    Если порт не появляется — поставьте драйвер USB-UART (<code>CP210x</code> или <code>CH340</code>).
     После первой установки обновления приходят по воздуху (OTA), USB больше не нужен.
   </p>
 </body>
