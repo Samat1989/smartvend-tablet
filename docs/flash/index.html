@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>SmartVend Relay — прошивка платы</title>
+  <!-- ESP Web Tools: flashes over Web Serial straight from the browser -->
+  <script type="module" src="https://unpkg.com/esp-web-tools@10/dist/web/install-button.js?module"></script>
+  <style>
+    *{box-sizing:border-box}
+    body{font-family:system-ui,-apple-system,sans-serif;background:#0f172a;color:#e2e8f0;
+         margin:0 auto;max-width:520px;padding:28px 22px;line-height:1.5}
+    h1{font-size:22px;font-weight:600;margin:0 0 6px}
+    p.sub{color:#94a3b8;margin:0 0 22px;font-size:14px}
+    ol{padding-left:20px;color:#cbd5e1}
+    ol li{margin:8px 0}
+    .card{background:#1e293b;border:1px solid #334155;border-radius:12px;padding:18px;margin:18px 0}
+    esp-web-install-button{--esp-tools-button-color:#fff;--esp-tools-button-text-color:#fff}
+    button.go{width:100%;padding:15px;border:none;border-radius:10px;background:#F14635;
+              color:#fff;font-size:16px;font-weight:600;cursor:pointer}
+    .note{font-size:12px;color:#64748b;margin-top:16px}
+    code{background:#0b1220;padding:2px 6px;border-radius:5px;font-size:13px}
+  </style>
+</head>
+<body>
+  <h1>Прошивка платы реле</h1>
+  <p class="sub">SmartVend Relay (ESP32) — установка по USB прямо из браузера.</p>
+
+  <div class="card">
+    <ol>
+      <li>Подключите плату к компьютеру по <b>USB</b>.</li>
+      <li>Откройте эту страницу в <b>Chrome</b> или <b>Edge</b> на компьютере.</li>
+      <li>Нажмите кнопку ниже и выберите <b>COM-порт</b> платы.</li>
+      <li>Дождитесь окончания записи — плата сама перезагрузится.</li>
+    </ol>
+    <esp-web-install-button manifest="./manifest.json">
+      <button class="go" slot="activate">Установить прошивку</button>
+      <span slot="unsupported">Браузер не поддерживает Web Serial — откройте в Chrome или Edge на компьютере (не на телефоне).</span>
+      <span slot="not-allowed">Нужен защищённый доступ (HTTPS) и десктопный Chrome/Edge.</span>
+    </esp-web-install-button>
+  </div>
+
+  <p class="note">
+    Если порт не появляется — поставьте драйвер USB-UART (<code>CP210x</code> или <code>CH340</code>).
+    После первой установки обновления приходят по воздуху (OTA), USB больше не нужен.
+  </p>
+</body>
+</html>

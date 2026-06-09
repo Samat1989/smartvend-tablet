@@ -1,0 +1,13 @@
+{
+  "name": "SmartVend Relay",
+  "version": "1.0.4",
+  "new_install_prompt_erase": true,
+  "builds": [
+    {
+      "chipFamily": "ESP32",
+      "parts": [
+        { "path": "relay-merged.bin", "offset": 0 }
+      ]
+    }
+  ]
+}
