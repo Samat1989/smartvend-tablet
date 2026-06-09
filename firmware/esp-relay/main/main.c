@@ -37,18 +37,36 @@ static const char *TAG = "relay_mart";
 #define SUPABASE_BASE      "https://cgvfhtvdtdjsyluhlcbq.supabase.co/functions/v1"
 #define SUPABASE_ANON_KEY  "sb_publishable_84RnaNCrFwxKicybxLGL2w_StEYpHnD"
 
-#define LOCK_GPIO            GPIO_NUM_4
-#define UNLOCK_TIME_MS       3000
-// Re-provisioning triggers (two ways):
-//  1. Press the BOOT button within the first BOOTCNT_RESET_MS AFTER power-on
-//     (the chip has already booted, so sampling GPIO0 here is safe — unlike
-//     holding it at reset, which would enter the ROM download mode instead).
-//  2. Power-cycle the device PROVISION_BOOT_COUNT times in quick succession
-//     (no button needed). A run longer than BOOTCNT_RESET_MS counts as normal
-//     and resets the counter.
+// Latching (bistable) relay — pins reverse-engineered from the stock firmware
+// (see ../relay-test/README.md and esp32_dump/RELAY_CONTROL.md). DIR (IO2) sets
+// the direction; a short pulse on PULSE (IO16) throws the relay, which then
+// holds its state with no coil current.
+#define RELAY_DIR_GPIO       GPIO_NUM_2    // IO2 — direction
+#define RELAY_PULSE_GPIO     GPIO_NUM_16   // IO16 — coil pulse
+#define RELAY_SETTLE_MS      100
+#define RELAY_PULSE_MS       50
+#define DEFAULT_OPEN_SECONDS 20            // relay hold time if not provisioned
+
+// External hardware watchdog (ported from C:\smartvend\esp rtos.c): a WD chip
+// reboots the board unless EXT_WD is pulsed HIGH for WD_PULSE_MS at least once
+// every WD_RESET_MS. NOTE: GPIO32 exists only on classic ESP32 — build for the
+// esp32 target (the relay board), not C3. Verify the pin against your wiring.
+#define EXT_WD_GPIO          GPIO_NUM_32
+#define WD_RESET_MS          120000        // kick interval
+#define WD_PULSE_MS          500           // kick pulse width
+
+// Network status LED (GPIO33) — background blink patterns for at-a-glance
+// diagnostics: blink count encodes the connection stage. GPIO33 is classic-
+// ESP32 only (like EXT_WD); build for the esp32 target.
+#define STATUS_LED_GPIO      GPIO_NUM_33
+
+// Re-provisioning trigger: within PROVISION_WINDOW_MS after power-on, tap the
+// BOOT button (GPIO0) more than PROVISION_PRESS_COUNT times. (Sampling GPIO0
+// here, after the chip has booted, is safe — holding it at reset instead would
+// enter the ROM download mode.)
 #define SETUP_BUTTON_GPIO    GPIO_NUM_0
-#define PROVISION_BOOT_COUNT 3
-#define BOOTCNT_RESET_MS     4000
+#define PROVISION_WINDOW_MS  4000   // press-counting window after boot
+#define PROVISION_PRESS_COUNT 3     // > this many presses -> provisioning
 
 #define NVS_CFG_NS        "cfg"
 // ---------------------
@@ -64,6 +82,15 @@ static char g_mqtt_topic[80]  = {0};   // vending/<uuid>/in
 static bool g_provisioning = false;
 static bool is_lock_active = false;
 static char last_order_id[64] = {0};
+
+// Live connection state for the diagnostic LED. The LED task derives the blink
+// pattern from these flags every cycle, so it always reflects the ACTUAL state
+// regardless of the order wifi/mqtt events arrive in — e.g. a WiFi drop clears
+// both flags, so MQTT's later disconnect event can't leave a stale "got IP".
+//   neither -> 1 blink,  has IP -> 2,  + MQTT -> 3,  provisioning -> 5 + solid.
+static volatile bool g_has_ip  = false;   // WiFi associated + IP acquired
+static volatile bool g_mqtt_up = false;   // MQTT session connected
+static int  g_open_seconds = DEFAULT_OPEN_SECONDS;  // relay hold time (provisioned)
 
 // WiFi STA connection signalling (used while provisioning to know if the
 // entered credentials actually work before we commit them).
@@ -103,6 +130,11 @@ static void cfg_erase(void) {
 
 // Returns true when a complete config is present (wifi + machine identity).
 static bool cfg_load(void) {
+    char osbuf[8];
+    if (cfg_get("opensec", osbuf, sizeof(osbuf)) == ESP_OK) {
+        int v = atoi(osbuf);
+        if (v >= 1 && v <= 600) g_open_seconds = v;
+    }
     if (cfg_get("ssid", g_wifi_ssid, sizeof(g_wifi_ssid)) != ESP_OK) return false;
     cfg_get("pass", g_wifi_pass, sizeof(g_wifi_pass));   // empty pass allowed
     if (cfg_get("machid", g_machid, sizeof(g_machid)) != ESP_OK) return false;
@@ -179,15 +211,143 @@ static void notify_task(void *pvParameters) {
     vTaskDelete(NULL);
 }
 
+// ============================ Relay (latching) ============================
+// Configure both relay pins as outputs, driven low. Safe to call once at boot.
+static void relay_pins_init(void) {
+    gpio_config_t io = {
+        .pin_bit_mask = (1ULL << RELAY_DIR_GPIO) | (1ULL << RELAY_PULSE_GPIO),
+        .mode = GPIO_MODE_OUTPUT,
+        .pull_up_en = GPIO_PULLUP_DISABLE,
+        .pull_down_en = GPIO_PULLDOWN_DISABLE,
+        .intr_type = GPIO_INTR_DISABLE,
+    };
+    gpio_config(&io);
+    gpio_set_level(RELAY_DIR_GPIO, 0);
+    gpio_set_level(RELAY_PULSE_GPIO, 0);
+}
+
+// Latching ACTIVATE: DIR HIGH, settle, pulse coil, settle, DIR LOW.
+static void relay_on(void) {
+    gpio_set_level(RELAY_DIR_GPIO, 1);   vTaskDelay(pdMS_TO_TICKS(RELAY_SETTLE_MS));
+    gpio_set_level(RELAY_PULSE_GPIO, 1); vTaskDelay(pdMS_TO_TICKS(RELAY_PULSE_MS));
+    gpio_set_level(RELAY_PULSE_GPIO, 0); vTaskDelay(pdMS_TO_TICKS(RELAY_SETTLE_MS));
+    gpio_set_level(RELAY_DIR_GPIO, 0);
+}
+
+// Latching DEACTIVATE: DIR(IO2) LOW, settle, pulse coil. Leaves DIR low.
+static void relay_off(void) {
+    gpio_set_level(RELAY_DIR_GPIO, 0);   vTaskDelay(pdMS_TO_TICKS(RELAY_SETTLE_MS));
+    gpio_set_level(RELAY_PULSE_GPIO, 1); vTaskDelay(pdMS_TO_TICKS(RELAY_PULSE_MS));
+    gpio_set_level(RELAY_PULSE_GPIO, 0);
+}
+
+// Open the relay for the provisioned hold time, then latch it closed.
 static void trigger_lock(void *pvParameters) {
     is_lock_active = true;
-    ESP_LOGI(TAG, "🔓 TRIGGERING LOCK (GPIO %d) for %d ms", LOCK_GPIO, UNLOCK_TIME_MS);
-    gpio_set_level(LOCK_GPIO, 1);
-    vTaskDelay(pdMS_TO_TICKS(UNLOCK_TIME_MS));
-    gpio_set_level(LOCK_GPIO, 0);
-    ESP_LOGI(TAG, "🔒 LOCK CLOSED");
+    ESP_LOGI(TAG, "🔓 RELAY ON (DIR IO%d / PULSE IO%d) for %d s",
+             RELAY_DIR_GPIO, RELAY_PULSE_GPIO, g_open_seconds);
+    relay_on();
+    vTaskDelay(pdMS_TO_TICKS((uint32_t)g_open_seconds * 1000));
+    relay_off();
+    ESP_LOGI(TAG, "🔒 RELAY OFF");
     is_lock_active = false;
     vTaskDelete(NULL);
+}
+
+// ============================ External watchdog ============================
+// Keep the hardware WD chip satisfied so it never reboots the board: every
+// WD_RESET_MS drive EXT_WD HIGH for WD_PULSE_MS, then back LOW.
+static void ext_wd_task(void *arg) {
+    const TickType_t reset_ticks = pdMS_TO_TICKS(WD_RESET_MS);
+    const TickType_t pulse_ticks = pdMS_TO_TICKS(WD_PULSE_MS);
+    TickType_t last_reset = xTaskGetTickCount();
+    TickType_t last_pulse = last_reset;
+    bool wd_high = false;
+
+    gpio_set_level(EXT_WD_GPIO, 0);
+
+    while (1) {
+        TickType_t now = xTaskGetTickCount();
+
+        if (!wd_high && (now - last_reset) >= reset_ticks) {
+            gpio_set_level(EXT_WD_GPIO, 1);
+            ESP_LOGI(TAG, "ext wd reset, level HIGH");
+            last_pulse = now;
+            last_reset = now;
+            wd_high = true;
+        }
+
+        if (wd_high && (now - last_pulse) >= pulse_ticks) {
+            gpio_set_level(EXT_WD_GPIO, 0);
+            ESP_LOGI(TAG, "ext wd level LOW");
+            wd_high = false;
+        }
+
+        vTaskDelay(pdMS_TO_TICKS(50));
+    }
+}
+
+// Configure EXT_WD, give a boot kick, and start the keep-alive task. Must run in
+// every mode (incl. provisioning) or the WD reboots the board mid-setup.
+static void ext_wd_start(void) {
+    gpio_config_t io = {
+        .pin_bit_mask = 1ULL << EXT_WD_GPIO,
+        .mode = GPIO_MODE_OUTPUT,
+        .pull_up_en = GPIO_PULLUP_DISABLE,
+        .pull_down_en = GPIO_PULLDOWN_DISABLE,
+        .intr_type = GPIO_INTR_DISABLE,
+    };
+    gpio_config(&io);
+    gpio_set_level(EXT_WD_GPIO, 0);
+
+    // Initial kick so the WD doesn't fire while we boot.
+    gpio_set_level(EXT_WD_GPIO, 1);
+    vTaskDelay(pdMS_TO_TICKS(WD_PULSE_MS));
+    gpio_set_level(EXT_WD_GPIO, 0);
+    ESP_LOGI(TAG, "ext wd boot kick: HIGH then LOW");
+
+    xTaskCreate(ext_wd_task, "ext_wd", 2048, NULL, 5, NULL);
+}
+
+// ============================ Network status LED ============================
+static void led_blink(int times, int on_ms, int off_ms) {
+    for (int i = 0; i < times; i++) {
+        gpio_set_level(STATUS_LED_GPIO, 1);
+        vTaskDelay(pdMS_TO_TICKS(on_ms));
+        gpio_set_level(STATUS_LED_GPIO, 0);
+        if (off_ms) vTaskDelay(pdMS_TO_TICKS(off_ms));
+    }
+}
+
+// Background diagnostics LED: the blink count tells the connection stage at a
+// glance — 1 = no link, 2 = got IP, 3 = MQTT up (each + 1 s pause). During
+// provisioning: 5 fast blinks once, then the LED stays solid ON.
+static void status_led_task(void *arg) {
+    gpio_config_t io = {
+        .pin_bit_mask = 1ULL << STATUS_LED_GPIO,
+        .mode = GPIO_MODE_OUTPUT,
+        .pull_up_en = GPIO_PULLUP_DISABLE,
+        .pull_down_en = GPIO_PULLDOWN_DISABLE,
+        .intr_type = GPIO_INTR_DISABLE,
+    };
+    gpio_config(&io);
+    gpio_set_level(STATUS_LED_GPIO, 0);
+
+    bool prev_provision = false;
+    while (1) {
+        if (g_provisioning) {
+            if (!prev_provision) led_blink(5, 80, 80);  // announce entry once
+            prev_provision = true;
+            gpio_set_level(STATUS_LED_GPIO, 1);         // solid ON during setup
+            vTaskDelay(pdMS_TO_TICKS(300));
+            continue;
+        }
+        prev_provision = false;
+        // Blink count = live connection stage, recomputed every cycle.
+        int n = g_mqtt_up ? 3 : g_has_ip ? 2 : 1;
+        led_blink(n, 100, 150);
+        vTaskDelay(pdMS_TO_TICKS(1500));                // 1.5 s pause between groups
+    }
 }
 
 // ============================ MQTT ============================
@@ -199,11 +359,13 @@ static void mqtt_event_handler(void *handler_args, esp_event_base_t base, int32_
     switch ((esp_mqtt_event_id_t)event_id) {
         case MQTT_EVENT_CONNECTED:
             ESP_LOGI(TAG, "MQTT Connected");
+            g_mqtt_up = true;
             msg_id = esp_mqtt_client_subscribe(client, g_mqtt_topic, 0);
             ESP_LOGI(TAG, "Subscribed to %s, msg_id=%d", g_mqtt_topic, msg_id);
             break;
         case MQTT_EVENT_DISCONNECTED:
             ESP_LOGI(TAG, "MQTT Disconnected");
+            g_mqtt_up = false;
             break;
         case MQTT_EVENT_DATA: {
             cJSON *json = cJSON_ParseWithLength(event->data, event->data_len);
@@ -281,11 +443,16 @@ static void wifi_event_handler(void* arg, esp_event_base_t base, int32_t id, voi
         } else {
             esp_wifi_connect();   // normal mode: keep trying forever
             ESP_LOGI(TAG, "Retry connecting to WiFi...");
+            // Lost link: clear both flags. MQTT's own disconnect event will also
+            // fire, but order no longer matters — the LED drops to 1 blink.
+            g_has_ip = false;
+            g_mqtt_up = false;
         }
     } else if (base == IP_EVENT && id == IP_EVENT_STA_GOT_IP) {
         ip_event_got_ip_t* e = (ip_event_got_ip_t*) data;
         ESP_LOGI(TAG, "Got IP: " IPSTR, IP2STR(&e->ip_info.ip));
         s_sta_retries = 0;
+        g_has_ip = true;
         if (s_wifi_eg) xEventGroupSetBits(s_wifi_eg, WIFI_CONNECTED_BIT);
     }
 }
@@ -373,12 +540,15 @@ static const char PAGE_HEAD[] =
     "</style></head><body><h2>SmartVend — настройка</h2>"
     "<form method=POST action=/save>"
     "<label>WiFi сеть</label><select name=ssid><option value=''>— выберите сеть —</option>";
-static const char PAGE_TAIL[] =
+static const char PAGE_TAIL_A[] =
     "</select>"
     "<label>Скрытая сеть? Имя вручную</label><input name=ssid2 autocomplete=off placeholder='(необязательно)'>"
     "<label>WiFi пароль</label><input name=pass type=password>"
     "<label>Номер аппарата (Machine ID)</label><input name=machid required inputmode=numeric>"
-    "<button type=submit>Сохранить и подключить</button></form></body></html>";
+    "<label>Время включения реле, сек</label>"
+    "<input name=opensec type=number min=1 max=600 inputmode=numeric value='";
+static const char PAGE_TAIL_B[] =
+    "'><button type=submit>Сохранить и подключить</button></form></body></html>";
 
 static esp_err_t root_get_handler(httpd_req_t *req) {
     httpd_resp_set_type(req, "text/html; charset=utf-8");
@@ -402,7 +572,11 @@ static esp_err_t root_get_handler(httpd_req_t *req) {
         }
     }
 
-    httpd_resp_sendstr_chunk(req, PAGE_TAIL);
+    httpd_resp_sendstr_chunk(req, PAGE_TAIL_A);
+    char osval[8];
+    snprintf(osval, sizeof(osval), "%d", g_open_seconds);
+    httpd_resp_sendstr_chunk(req, osval);
+    httpd_resp_sendstr_chunk(req, PAGE_TAIL_B);
     httpd_resp_sendstr_chunk(req, NULL);   // end response
     return ESP_OK;
 }
@@ -496,11 +670,12 @@ static esp_err_t save_post_handler(httpd_req_t *req) {
     if (len <= 0) return ESP_FAIL;
     body[len] = 0;
 
-    char ssid[64] = {0}, ssid2[64] = {0}, pass[64] = {0}, machid[16] = {0};
+    char ssid[64] = {0}, ssid2[64] = {0}, pass[64] = {0}, machid[16] = {0}, opensec[8] = {0};
     form_field(body, "ssid", ssid, sizeof(ssid));
     form_field(body, "ssid2", ssid2, sizeof(ssid2));   // manual / hidden SSID
     form_field(body, "pass", pass, sizeof(pass));
     form_field(body, "machid", machid, sizeof(machid));
+    form_field(body, "opensec", opensec, sizeof(opensec));
     if (ssid2[0]) strncpy(ssid, ssid2, sizeof(ssid) - 1);   // manual entry overrides dropdown
     if (ssid[0] == 0 || machid[0] == 0) {
         return send_msg(req, "Ошибка", "Выберите сеть (или впишите вручную) и номер аппарата. <a href=/>Назад</a>");
@@ -518,10 +693,16 @@ static esp_err_t save_post_handler(httpd_req_t *req) {
                         "Номер не найден в системе или нет связи. <a href=/>Назад</a>");
     }
 
-    // 3) Commit WiFi + machid; reboot into normal mode.
+    // 3) Commit WiFi + machid + relay hold time; reboot into normal mode.
+    int osv = atoi(opensec);
+    if (osv < 1 || osv > 600) osv = DEFAULT_OPEN_SECONDS;
+    g_open_seconds = osv;
+    char osstr[8];
+    snprintf(osstr, sizeof(osstr), "%d", osv);
     cfg_set("ssid", ssid);
     cfg_set("pass", pass);
     cfg_set("machid", machid);
+    cfg_set("opensec", osstr);
     ESP_LOGI(TAG, "[Setup] provisioned OK, rebooting");
     send_msg(req, "Готово!", "Аппарат настроен и перезагружается.");
     xTaskCreate(reboot_task, "reboot", 2048, NULL, 5, NULL);
@@ -529,7 +710,7 @@ static esp_err_t save_post_handler(httpd_req_t *req) {
 }
 
 static void start_setup_portal(void) {
-    g_provisioning = true;
+    g_provisioning = true;   // LED task picks this up: 5 fast blinks, then solid ON
 
     // SoftAP (open) + STA (so we can validate WiFi and reach Supabase).
     esp_netif_t *ap_netif = esp_netif_create_default_wifi_ap();
@@ -575,42 +756,11 @@ static void start_setup_portal(void) {
     xTaskCreate(dns_hijack_task, "dns_hijack", 4096, NULL, 5, NULL);
 }
 
-// ============================ boot-count provisioning trigger ============================
-static int bump_boot_count(void) {
-    nvs_handle_t h;
-    int cnt = 0;
-    if (nvs_open(NVS_CFG_NS, NVS_READWRITE, &h) == ESP_OK) {
-        int32_t v = 0;
-        nvs_get_i32(h, "bootcnt", &v);
-        cnt = v + 1;
-        nvs_set_i32(h, "bootcnt", cnt);
-        nvs_commit(h);
-        nvs_close(h);
-    }
-    return cnt;
-}
-
-static void clear_boot_count(void) {
-    nvs_handle_t h;
-    if (nvs_open(NVS_CFG_NS, NVS_READWRITE, &h) == ESP_OK) {
-        nvs_set_i32(h, "bootcnt", 0);
-        nvs_commit(h);
-        nvs_close(h);
-    }
-}
-
-// After a normal sustained run, clear the counter so only *quick* repeated
-// power-cycles accumulate toward the provisioning threshold.
-static void bootcnt_reset_task(void *pv) {
-    vTaskDelay(pdMS_TO_TICKS(BOOTCNT_RESET_MS));
-    clear_boot_count();
-    ESP_LOGI(TAG, "[Boot] uptime ok — boot counter reset");
-    vTaskDelete(NULL);
-}
-
-// Watch the BOOT button for `window_ms` after power-on; return true if it is
-// pressed (held low ~0.5s, debounced) within that window.
-static bool button_window(int window_ms) {
+// ============================ button provisioning trigger ============================
+// Count debounced BOOT (GPIO0) presses during a `window_ms` window after
+// power-on. A press = a released→pressed transition that stays stable for the
+// debounce time. Returns the number of presses seen.
+static int button_press_count(int window_ms) {
     gpio_config_t btn = {
         .pin_bit_mask = 1ULL << SETUP_BUTTON_GPIO,
         .mode = GPIO_MODE_INPUT,
@@ -619,18 +769,34 @@ static bool button_window(int window_ms) {
         .intr_type = GPIO_INTR_DISABLE,
     };
     gpio_config(&btn);
-    ESP_LOGI(TAG, "[Setup] press BOOT within %d s to enter provisioning...", window_ms / 1000);
-    int held = 0;
-    for (int t = 0; t < window_ms; t += 100) {
-        if (gpio_get_level(SETUP_BUTTON_GPIO) == 0) {   // BOOT pressed = low
-            held += 100;
-            if (held >= 500) return true;               // debounced press
+    ESP_LOGI(TAG, "[Setup] tap BOOT >%d times within %d s to (re)provision...",
+             PROVISION_PRESS_COUNT, window_ms / 1000);
+
+    const int step = 20;          // sample period, ms
+    const int debounce = 40;      // a level must hold this long to count, ms
+    int count = 0;
+    int pressed = 0;              // debounced state: 1 = pressed (pin low)
+    int last_raw = 0;            // last raw reading (1 = pressed)
+    int stable = 0;
+
+    for (int t = 0; t < window_ms; t += step) {
+        int raw = (gpio_get_level(SETUP_BUTTON_GPIO) == 0) ? 1 : 0;  // pull-up: low = pressed
+        if (raw == last_raw) {
+            stable += step;
+            if (stable >= debounce && raw != pressed) {
+                pressed = raw;
+                if (pressed) {                       // released -> pressed edge
+                    count++;
+                    ESP_LOGI(TAG, "[Setup] BOOT press %d", count);
+                }
+            }
         } else {
-            held = 0;
+            last_raw = raw;
+            stable = 0;
         }
-        vTaskDelay(pdMS_TO_TICKS(100));
+        vTaskDelay(pdMS_TO_TICKS(step));
     }
-    return false;
+    return count;
 }
 
 // ============================ app_main ============================
@@ -644,16 +810,20 @@ void app_main(void) {
 
     load_last_order_from_nvs();
 
-    // Lock GPIO.
-    gpio_config_t lock_cfg = {
-        .pin_bit_mask = 1ULL << LOCK_GPIO,
-        .mode = GPIO_MODE_OUTPUT,
-        .pull_up_en = GPIO_PULLUP_DISABLE,
-        .pull_down_en = GPIO_PULLDOWN_DISABLE,
-        .intr_type = GPIO_INTR_DISABLE,
-    };
-    ESP_ERROR_CHECK(gpio_config(&lock_cfg));
-    gpio_set_level(LOCK_GPIO, 0);
+    // Relay pins + force the relay OFF on every boot. The relay is bistable, so
+    // it powers up in whatever state it was left in — we always latch it closed
+    // at startup (DIR=IO2 low, then an off pulse) so a reboot never leaves the
+    // door open.
+    relay_pins_init();
+    relay_off();
+    ESP_LOGI(TAG, "[Boot] relay forced OFF (DIR IO%d low)", RELAY_DIR_GPIO);
+
+    // External hardware watchdog — start early and keep it alive in all modes
+    // (provisioning included), or the WD reboots the board mid-operation.
+    ext_wd_start();
+
+    // Network status LED — background diagnostics, runs through every mode.
+    xTaskCreate(status_led_task, "status_led", 2048, NULL, 4, NULL);
 
     // Networking stack.
     ESP_ERROR_CHECK(esp_netif_init());
@@ -667,24 +837,12 @@ void app_main(void) {
 
     bool have_cfg = cfg_load();
 
-    // Quick power-cycle ×N forces re-provisioning even on a configured device.
-    int bc = bump_boot_count();
-    ESP_LOGI(TAG, "[Boot] count = %d (power-cycle %d times to re-provision)", bc, PROVISION_BOOT_COUNT);
-    if (bc >= PROVISION_BOOT_COUNT) {
-        ESP_LOGW(TAG, "[Setup] %d quick power-cycles — clearing config, entering provisioning", bc);
-        clear_boot_count();
-        cfg_erase();
-        have_cfg = false;
-    } else {
-        // If we keep running past the threshold, this was a normal boot.
-        xTaskCreate(bootcnt_reset_task, "bootcnt", 2048, NULL, 5, NULL);
-    }
-
-    // On a configured device, give a short window to press BOOT for re-setup.
-    // (Skip on a fresh/empty device — it's heading to the portal anyway.)
-    if (have_cfg && button_window(BOOTCNT_RESET_MS)) {
-        ESP_LOGW(TAG, "[Setup] BOOT pressed — clearing config, entering provisioning");
-        clear_boot_count();
+    // 4 s window after power-on: more than PROVISION_PRESS_COUNT BOOT(GPIO0)
+    // taps forces (re)provisioning, even on an already-configured device. The
+    // portal then writes a fresh config (overwriting any existing one).
+    int presses = button_press_count(PROVISION_WINDOW_MS);
+    if (presses > PROVISION_PRESS_COUNT) {
+        ESP_LOGW(TAG, "[Setup] %d BOOT presses — clearing config, entering provisioning", presses);
         cfg_erase();
         have_cfg = false;
     }
@@ -698,5 +856,6 @@ void app_main(void) {
     // Normal operation.
     wifi_start_normal();
     mqtt_start();
-    ESP_LOGI(TAG, "Relay Mart System Started (GPIO%d), machid=%s", LOCK_GPIO, g_machid);
+    ESP_LOGI(TAG, "Relay Mart System Started (DIR IO%d/PULSE IO%d, open %ds), machid=%s",
+             RELAY_DIR_GPIO, RELAY_PULSE_GPIO, g_open_seconds, g_machid);
 }
