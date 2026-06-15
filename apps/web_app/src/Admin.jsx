@@ -1008,6 +1008,14 @@ export default function Admin() {
           </button>
           {/* No global machine picker: Sales/Catalog don't need one, and the
               Inventory tab has its own machine list to drill into. */}
+          {session?.user?.email && (
+            <span
+              className="text-[11px] font-medium text-slate-400 max-w-[180px] truncate"
+              title={session.user.email}
+            >
+              {session.user.email}
+            </span>
+          )}
           <button
             onClick={() => supabase.auth.signOut()}
             className="text-xs font-bold text-on-surface-variant hover:text-red-500 transition-colors ml-4"
