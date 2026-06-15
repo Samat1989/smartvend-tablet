@@ -71,7 +71,7 @@ const STOREFRONT_BASE = import.meta.env.VITE_STOREFRONT_URL || (typeof window !=
 // Build + download a printable PDF with the machine's QR (encodes
 // <storefront>/?marketId=<id>). Rendered via canvas so Cyrillic text works
 // (jsPDF's built-in fonts don't support it).
-async function buildMarketQrPdf(market, qrDataUrl) {
+async function buildMarketQrPdf(market, qrDataUrl, t) {
   const url = `${STOREFRONT_BASE}/micromarket?t=${market.qr_token}`;
   if (!qrDataUrl) qrDataUrl = await QRCode.toDataURL(url, { width: 900, margin: 1, errorCorrectionLevel: 'M' });
 
@@ -90,7 +90,7 @@ async function buildMarketQrPdf(market, qrDataUrl) {
 
   ctx.fillStyle = '#111827';
   ctx.font = 'bold 42px sans-serif';
-  ctx.fillText(`Аппарат №${market.id}`, cx, 72);
+  ctx.fillText(`${t('apparatus_no')}${market.id}`, cx, 72);
 
   // NB: `Image` is imported from lucide-react in this file, so use the global
   // browser constructor explicitly (new Image() would hit the lucide icon).
@@ -105,8 +105,8 @@ async function buildMarketQrPdf(market, qrDataUrl) {
 
   ctx.fillStyle = '#111827';
   ctx.font = 'bold 42px sans-serif';
-  ctx.fillText('Отсканируйте,', cx, 800);
-  ctx.fillText('чтобы купить', cx, 850);
+  ctx.fillText(t('qr_scan_to'), cx, 800);
+  ctx.fillText(t('qr_to_buy'), cx, 850);
   ctx.fillStyle = '#9ca3af';
   ctx.font = '20px sans-serif';
   ctx.fillText(url, cx, 895);
@@ -117,6 +117,7 @@ async function buildMarketQrPdf(market, qrDataUrl) {
 // Modal that previews a machine's QR (links to the storefront on this same
 // Vercel deployment) with a button to download it as a printable PDF.
 function QrModal({ market, onClose }) {
+  const { t } = useTranslation();
   const [qrSrc, setQrSrc] = useState(null);
   const [pdfUrl, setPdfUrl] = useState(null);
   const [pdfErr, setPdfErr] = useState(null);
@@ -130,7 +131,7 @@ function QrModal({ market, onClose }) {
       setQrSrc(qr);
       // Pre-build the PDF blob now (not on click) so the download is a plain
       // anchor click — avoids browsers blocking a download triggered after await.
-      const blob = await buildMarketQrPdf(market, qr);
+      const blob = await buildMarketQrPdf(market, qr, t);
       if (!alive) return;
       createdUrl = URL.createObjectURL(blob);
       setPdfUrl(createdUrl);
@@ -142,12 +143,12 @@ function QrModal({ market, onClose }) {
     <div className="fixed inset-0 z-[60] bg-black/50 flex items-center justify-center p-4" onClick={onClose}>
       <div className="bg-white rounded-3xl p-6 w-full max-w-sm shadow-2xl" onClick={(e) => e.stopPropagation()}>
         <div className="flex items-center justify-between mb-4">
-          <h3 className="text-lg font-black text-slate-900">QR аппарата</h3>
+          <h3 className="text-lg font-black text-slate-900">{t('qr_machine')}</h3>
           <button onClick={onClose} className="p-2 text-slate-400 hover:text-slate-700 rounded-lg"><X size={20} /></button>
         </div>
         <div className="text-center">
-          <div className="font-bold text-slate-900">{market.name || `Аппарат №${market.id}`}</div>
-          <div className="text-[11px] font-bold text-slate-500 uppercase tracking-widest mb-4">Аппарат №{market.id}</div>
+          <div className="font-bold text-slate-900">{market.name || `${t('apparatus_no')}${market.id}`}</div>
+          <div className="text-[11px] font-bold text-slate-500 uppercase tracking-widest mb-4">{t('apparatus_no')}{market.id}</div>
           <div className="bg-white border-2 border-slate-200 rounded-2xl p-4 inline-block">
             {qrSrc ? (
               <img src={qrSrc} alt="QR" className="w-56 h-56" />
@@ -163,15 +164,15 @@ function QrModal({ market, onClose }) {
             download={`qr-apparat-${market.id}.pdf`}
             className="mt-5 w-full flex items-center justify-center gap-2 bg-slate-900 text-white py-3 rounded-xl font-bold hover:bg-slate-700 transition-all"
           >
-            <Download size={18} /> Скачать QR (PDF)
+            <Download size={18} /> {t('download_qr_pdf')}
           </a>
         ) : pdfErr ? (
           <div className="mt-5 w-full text-center bg-rose-50 border border-rose-200 text-rose-700 py-3 px-3 rounded-xl text-xs font-bold break-words">
-            Ошибка PDF: {pdfErr}
+            {t('pdf_error')}: {pdfErr}
           </div>
         ) : (
           <button disabled className="mt-5 w-full flex items-center justify-center gap-2 bg-slate-300 text-white py-3 rounded-xl font-bold cursor-wait">
-            <Loader2 size={18} className="animate-spin" /> Подготовка…
+            <Loader2 size={18} className="animate-spin" /> {t('preparing')}
           </button>
         )}
       </div>
@@ -371,7 +372,7 @@ export default function Admin() {
         if (error) throw error;
         setPickerProducts(data || []);
       } catch (err) {
-        showToast('Ошибка загрузки каталога', 'error');
+        showToast(t('catalog_load_error'), 'error');
         setPickerProducts([]);
       }
     }
@@ -451,14 +452,14 @@ export default function Admin() {
       setCatalogProducts(data || []);
     } catch (err) {
       console.error('Error fetching catalog:', err);
-      showToast('Ошибка загрузки каталога', 'error');
+      showToast(t('catalog_load_error'), 'error');
     } finally {
       setLoading(false);
     }
   }
 
   async function saveCatalogProduct() {
-    if (!editingCatalog?.name?.trim()) return showToast('Название обязательно', 'error');
+    if (!editingCatalog?.name?.trim()) return showToast(t('name_required'), 'error');
     setLoading(true);
     try {
       const payload = {
@@ -481,20 +482,20 @@ export default function Admin() {
           is_draft: false, // admin-created rows are published immediately
         });
         if (error) throw error;
-        showToast('Товар добавлен');
+        showToast(t('product_added'));
       } else {
         const { error } = await supabase
           .from('products')
           .update(payload)
           .eq('id', editingCatalog.id);
         if (error) throw error;
-        showToast('Товар сохранён');
+        showToast(t('product_saved'));
       }
       setEditingCatalog(null);
       fetchCatalogProducts();
     } catch (err) {
       console.error('Save catalog error:', err);
-      showToast('Ошибка: ' + err.message, 'error');
+      showToast(t('save_error') + ': ' + err.message, 'error');
     } finally {
       setLoading(false);
     }
@@ -507,10 +508,10 @@ export default function Admin() {
         .update({ is_archived: !p.is_archived })
         .eq('id', p.id);
       if (error) throw error;
-      showToast(p.is_archived ? 'Восстановлен' : 'В архив');
+      showToast(p.is_archived ? t('restored') : t('archived_toast'));
       fetchCatalogProducts();
     } catch (err) {
-      showToast('Ошибка: ' + err.message, 'error');
+      showToast(t('save_error') + ': ' + err.message, 'error');
     }
   }
 
@@ -521,22 +522,22 @@ export default function Admin() {
         .update({ is_draft: false })
         .eq('id', p.id);
       if (error) throw error;
-      showToast('Опубликован');
+      showToast(t('published'));
       fetchCatalogProducts();
     } catch (err) {
-      showToast('Ошибка: ' + err.message, 'error');
+      showToast(t('save_error') + ': ' + err.message, 'error');
     }
   }
 
   async function deleteCatalogProduct(p) {
-    if (!confirm(`Удалить «${p.name}» из каталога? Все слоты на эту запись потеряют ссылку.`)) return;
+    if (!confirm(`${t('delete_catalog_confirm_prefix')}${p.name}${t('delete_catalog_confirm_suffix')}`)) return;
     try {
       const { error } = await supabase.from('products').delete().eq('id', p.id);
       if (error) throw error;
-      showToast('Удалён');
+      showToast(t('deleted_toast'));
       fetchCatalogProducts();
     } catch (err) {
-      showToast('Не удалось удалить — возможно есть связанный inventory. Используйте «В архив».', 'error');
+      showToast(t('delete_catalog_failed'), 'error');
     }
   }
 
@@ -600,7 +601,7 @@ export default function Admin() {
       setSales(data || []);
     } catch (err) {
       console.error('Error fetching sales:', err);
-      showToast('Ошибка при загрузке продаж', 'error');
+      showToast(t('sales_load_error'), 'error');
     } finally {
       setLoading(false);
     }
@@ -617,7 +618,7 @@ export default function Admin() {
       // operator drills into a specific machine. Sales/Catalog don't need one.
     } catch (err) {
       console.error('Error fetching markets:', err);
-      alert('Could not load markets');
+      alert(t('could_not_load_markets'));
     }
   }
 
@@ -724,8 +725,10 @@ export default function Admin() {
 
       const { error: uploadError } = await supabase.storage
         .from('product-images')
-        .upload(filePath, processedBlob, { 
-          cacheControl: '3600', 
+        .upload(filePath, processedBlob, {
+          // Filenames are random + upsert:false, so each URL is immutable —
+          // safe to cache for a year (was 3600 = 1h, far too short).
+          cacheControl: '31536000',
           upsert: false,
           contentType: 'image/webp'
         });
@@ -743,18 +746,18 @@ export default function Admin() {
       setCropTarget('inventory');
     } catch (err) {
       console.error('Error uploading image:', err);
-      alert('Ошибка загрузки фото: ' + (err.message || JSON.stringify(err)));
-      showToast('Ошибка при загрузке фото', 'error');
+      alert(t('photo_upload_error') + ': ' + (err.message || JSON.stringify(err)));
+      showToast(t('photo_upload_error_toast'), 'error');
     } finally {
       setUploadingImage(false);
     }
   };
 
   async function addCategory() {
-    if (!newCatRu.trim() || !newCatKz.trim() || !newCatEn.trim()) return alert('Заполните все языки');
+    if (!newCatRu.trim() || !newCatKz.trim() || !newCatEn.trim()) return alert(t('fill_all_languages'));
     try {
       const ownerId = session?.user?.id;
-      if (!ownerId) return alert('Сессия не активна');
+      if (!ownerId) return alert(t('session_inactive'));
       const { error } = await supabase.from('categories').insert({
         name_ru: newCatRu.trim(),
         name_kz: newCatKz.trim(),
@@ -764,29 +767,29 @@ export default function Admin() {
       if (error) throw error;
       setNewCatRu(''); setNewCatKz(''); setNewCatEn('');
       fetchCategories();
-      showToast('Категория добавлена');
+      showToast(t('category_added'));
     } catch (err) {
-      alert('Ошибка: ' + err.message);
+      alert(t('save_error') + ': ' + err.message);
     }
   }
 
   async function deleteCategory(id) {
-    if (!confirm('Точно удалить категорию? (Товары в ней останутся)')) return;
+    if (!confirm(t('delete_category_confirm'))) return;
     try {
       await supabase.from('categories').delete().eq('id', id);
       fetchCategories();
-      showToast('Категория удалена');
+      showToast(t('category_deleted'));
     } catch (err) {
-      alert('Ошибка удаления');
+      alert(t('category_delete_error'));
     }
   }
 
   async function saveProduct() {
     if (!editingProduct.product_id) {
-      return alert('Выберите товар из каталога');
+      return alert(t('pick_product_from_catalog'));
     }
     if (editingProduct.price == null || editingProduct.price === '') {
-      return alert('Укажите цену');
+      return alert(t('specify_price'));
     }
 
     setLoading(true);
@@ -825,7 +828,7 @@ export default function Admin() {
       fetchProducts(selectedMarketId);
     } catch (err) {
       console.error('Error saving product:', err);
-      alert('Ошибка сохранения: ' + (err.message || JSON.stringify(err)));
+      alert(t('save_product_error') + ': ' + (err.message || JSON.stringify(err)));
     } finally {
       setLoading(false);
     }
@@ -861,12 +864,12 @@ export default function Admin() {
       
       if (error) throw error;
       
-      showToast('Товар удален');
+      showToast(t('product_deleted'));
       setProductToDelete(null);
       fetchProducts(selectedMarketId);
     } catch (err) {
       console.error('Подробная ошибка удаления:', err);
-      showToast('Ошибка при удалении: ' + err.message, 'error');
+      showToast(t('delete_error') + ': ' + err.message, 'error');
       setProductToDelete(null);
     }
   }
@@ -878,10 +881,10 @@ export default function Admin() {
     try {
       const { error } = await supabase.from('inventory').update({ stock: newStock }).eq('id', product.id);
       if (error) throw error;
-      showToast('Остаток сохранен!');
+      showToast(t('stock_saved'));
     } catch (err) {
       console.error('Error updating stock:', err);
-      showToast('Ошибка сохранения остатка', 'error');
+      showToast(t('stock_save_error'), 'error');
       fetchProducts(selectedMarketId); // Revert on error
     }
   }
@@ -893,10 +896,10 @@ export default function Admin() {
     try {
       const { error } = await supabase.from('inventory').update({ price: newPrice }).eq('id', product.id);
       if (error) throw error;
-      showToast('Цена успешно изменена!');
+      showToast(t('price_changed'));
     } catch (err) {
       console.error('Error updating price:', err);
-      showToast('Ошибка сохранения цены', 'error');
+      showToast(t('price_save_error'), 'error');
       fetchProducts(selectedMarketId); // Revert on error
     }
   }
@@ -911,7 +914,7 @@ export default function Admin() {
     return (
       <div className="min-h-screen bg-surface-container-lowest flex items-center justify-center p-5 font-lexend">
         <div className="bg-white p-8 rounded-3xl shadow-2xl max-w-sm w-full border border-surface-container-high">
-          <h2 className="text-2xl font-black text-primary mb-6 text-center">Вход в Админку</h2>
+          <h2 className="text-2xl font-black text-primary mb-6 text-center">{t('login_title')}</h2>
           <div className="space-y-4">
             <div>
               <label className="text-xs font-bold opacity-50 ml-2">Email</label>
@@ -923,7 +926,7 @@ export default function Admin() {
               />
             </div>
             <div>
-              <label className="text-xs font-bold opacity-50 ml-2">Пароль</label>
+              <label className="text-xs font-bold opacity-50 ml-2">{t('password')}</label>
               <input
                 type="password"
                 value={password}
@@ -935,13 +938,13 @@ export default function Admin() {
               onClick={async () => {
                 setAuthLoading(true);
                 const { error } = await supabase.auth.signInWithPassword({ email, password });
-                if (error) alert('Ошибка входа: ' + error.message);
+                if (error) alert(t('login_error') + ': ' + error.message);
                 setAuthLoading(false);
               }}
               disabled={authLoading}
               className="w-full bg-primary text-white py-3 rounded-xl font-black shadow-lg shadow-primary/20 active:scale-95 transition-all mt-4 flex justify-center"
             >
-              {authLoading ? <Loader2 className="animate-spin" /> : 'Войти'}
+              {authLoading ? <Loader2 className="animate-spin" /> : t('login_btn')}
             </button>
           </div>
         </div>
@@ -991,13 +994,13 @@ export default function Admin() {
               onClick={() => { setSelectedMarketId(null); setActiveTab('inventory'); }}
               className={`flex-1 sm:flex-none px-2.5 sm:px-4 py-2 sm:py-1.5 rounded-lg font-bold transition-all text-xs ${activeTab === 'inventory' ? 'bg-white text-primary shadow-md' : 'text-slate-600 hover:text-slate-900'}`}
             >
-              {t('inventory')}
+              {t('devices')}
             </button>
             <button
               onClick={() => setActiveTab('catalog')}
               className={`flex-1 sm:flex-none px-2.5 sm:px-4 py-2 sm:py-1.5 rounded-lg font-bold transition-all text-xs ${activeTab === 'catalog' ? 'bg-white text-primary shadow-md' : 'text-slate-600 hover:text-slate-900'}`}
             >
-              Каталог
+              {t('tab_catalog')}
             </button>
           </div>
         </div>
@@ -1052,8 +1055,8 @@ export default function Admin() {
           ) : activeTab === 'inventory' ? (
             !selectedMarketId ? (
               <div>
-                <h2 className="text-2xl font-black text-slate-900 mb-1">{t('inventory')}</h2>
-                <p className="text-[11px] font-bold text-slate-500 uppercase tracking-widest mb-6">Выберите аппарат</p>
+                <h2 className="text-2xl font-black text-slate-900 mb-1">{t('devices')}</h2>
+                <p className="text-[11px] font-bold text-slate-500 uppercase tracking-widest mb-6">{t('select_machine')}</p>
                 <div className="space-y-2">
                   {markets.map(m => (
                     <button
@@ -1069,13 +1072,13 @@ export default function Admin() {
                         <div className="text-[11px] font-bold text-slate-500 uppercase tracking-widest">{t('apparatus_no')}{m.id}</div>
                       </div>
                       <span className={`text-[9px] font-black uppercase tracking-wider px-2 py-1 rounded-lg shrink-0 ${m.kind === 'micromarket_static' ? 'bg-emerald-100 text-emerald-700' : 'bg-indigo-100 text-indigo-700'}`}>
-                        {m.kind === 'micromarket_static' ? 'Микромаркет' : 'Вендинг'}
+                        {m.kind === 'micromarket_static' ? t('badge_micromarket') : t('badge_vending')}
                       </span>
                       <ChevronRight size={18} className="text-slate-400" />
                     </button>
                   ))}
                   {markets.length === 0 && (
-                    <p className="text-sm text-slate-400 italic p-4">Нет аппаратов</p>
+                    <p className="text-sm text-slate-400 italic p-4">{t('no_machines')}</p>
                   )}
                 </div>
               </div>
@@ -1085,7 +1088,7 @@ export default function Admin() {
                 onClick={() => setSelectedMarketId(null)}
                 className="flex items-center gap-1.5 text-sm font-bold text-slate-500 hover:text-primary transition-colors mb-4"
               >
-                <ChevronLeft size={16} /> Все аппараты
+                <ChevronLeft size={16} /> {t('all_machines_back')}
               </button>
               <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 mb-8">
                 <div>
@@ -1098,7 +1101,7 @@ export default function Admin() {
                       onClick={addStaticProduct}
                       className="flex-1 sm:flex-none flex items-center justify-center gap-2 bg-primary text-white px-4 py-2.5 rounded-xl font-bold hover:opacity-90 transition-all text-sm"
                     >
-                      <Plus size={16} /> Добавить
+                      <Plus size={16} /> {t('add')}
                     </button>
                   )}
                   {isStaticMarket && (
@@ -1143,8 +1146,8 @@ export default function Admin() {
               <div className="mb-3 flex items-start gap-2 bg-sky-50 border-2 border-sky-300 rounded-xl p-3">
                 <Image size={16} className="text-sky-700 mt-0.5 shrink-0" />
                 <div className="text-[12px] text-sky-900 leading-relaxed">
-                  <span className="font-black">Добавление новых слотов — только с планшета.</span>
-                  <span className="opacity-80"> Здесь можно редактировать цену, остаток и привязку к каталогу для уже существующих ячеек.</span>
+                  <span className="font-black">{t('new_slots_tablet_only')}</span>
+                  <span className="opacity-80">{t('new_slots_tablet_hint')}</span>
                 </div>
               </div>
               )}
@@ -1153,8 +1156,8 @@ export default function Admin() {
                 <div className="mb-6 flex items-start gap-2 bg-amber-50 border-2 border-amber-400 rounded-xl p-3">
                   <AlertTriangle size={16} className="text-amber-700 mt-0.5 shrink-0" />
                   <div className="text-[12px] text-amber-900 leading-relaxed">
-                    <span className="font-black">Раскладка показывается по умолчанию (заводская 6×6).</span>
-                    <span className="opacity-80">{' '}Реальная раскладка с планшета ещё не пришла в БД — перезапустите приложение на планшете или нажмите «Сохранить» в редакторе раскладки.</span>
+                    <span className="font-black">{t('layout_fallback_title')}</span>
+                    <span className="opacity-80">{t('layout_fallback_hint')}</span>
                   </div>
                 </div>
               )}
@@ -1204,11 +1207,11 @@ export default function Admin() {
 
                   <div className="flex-1 sm:flex-none bg-slate-100 p-1 rounded-xl flex gap-1">
                     {[
-                      { id: 'recent', label: 'Последние' },
+                      { id: 'recent', label: t('recent') },
                       { id: 'day', label: t('today') },
                       { id: 'week', label: t('this_week') },
                       { id: 'month', label: t('this_month') },
-                      { id: 'period', label: 'Период' }
+                      { id: 'period', label: t('period') }
                     ].map(f => (
                       <button
                         key={f.id}
@@ -1280,11 +1283,11 @@ export default function Admin() {
                             <Receipt size={20} />
                           </div>
                           <div>
-                            <div className="text-sm font-black text-slate-900">{sale.micromarkets?.name || `Аппарат #${sale.micromarket_id}`}</div>
+                            <div className="text-sm font-black text-slate-900">{sale.micromarkets?.name || `${t('apparatus_no')}${sale.micromarket_id}`}</div>
                             <div className="flex items-center gap-2 text-[10px] font-bold text-slate-500 uppercase tracking-tighter">
                               <Calendar size={10} />
                               {new Date(sale.created_at).toLocaleString('ru-RU')}
-                              <span className="text-slate-400">· {items.length} тов.</span>
+                              <span className="text-slate-400">· {items.length} {t('items_short')}</span>
                             </div>
                             {inProgress && (
                               <div className="mt-1 inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-amber-50 text-amber-700 text-[10px] font-black uppercase tracking-wider">
@@ -1328,7 +1331,7 @@ export default function Admin() {
                                 <CheckCircle2 size={14} className="shrink-0 mt-px text-emerald-500" />
                               )}
                               <div className="min-w-0 flex-1">
-                                <div className="font-bold text-slate-600 truncate">{item.inventory?.name || 'Удаленный товар'}</div>
+                                <div className="font-bold text-slate-600 truncate">{item.inventory?.name || t('deleted_product')}</div>
                                 {failed && (
                                   <div className="text-[10px] font-bold text-rose-500 mt-0.5 truncate">
                                     {resultLabel(t, item)}
@@ -1348,7 +1351,7 @@ export default function Admin() {
                   {sales.length === 0 && (
                     <div className="text-center py-20 bg-slate-50 rounded-3xl border-2 border-dashed border-slate-200">
                       <ShoppingBag size={40} className="mx-auto mb-4 text-slate-300" />
-                      <p className="font-black text-slate-400 text-sm uppercase tracking-widest">Нет данных за период</p>
+                      <p className="font-black text-slate-400 text-sm uppercase tracking-widest">{t('no_data_period')}</p>
                     </div>
                   )}
                 </div>
@@ -1362,7 +1365,7 @@ export default function Admin() {
         <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-sm sm:flex sm:items-center sm:justify-center sm:p-4">
           <div className="bg-white w-full h-full sm:h-auto sm:max-w-md sm:rounded-3xl sm:shadow-2xl sm:border-2 sm:border-slate-300 flex flex-col">
             <div className="flex justify-between items-center px-5 py-4 sm:px-6 sm:py-5 border-b-2 border-slate-200 sm:border-b-0">
-              <h3 className="font-black text-lg sm:text-xl text-slate-900">{editingProduct.id === 'new' ? 'Новый товар' : 'Редактировать товар'}</h3>
+              <h3 className="font-black text-lg sm:text-xl text-slate-900">{editingProduct.id === 'new' ? t('new_product') : t('edit_product_title')}</h3>
               <button onClick={() => setEditingProduct(null)} className="p-2.5 bg-slate-200 border border-slate-300 text-slate-700 rounded-full hover:bg-slate-300 active:scale-95"><X size={20} /></button>
             </div>
 
@@ -1384,16 +1387,16 @@ export default function Admin() {
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-1.5">
                       <CheckCircle2 size={12} className="text-emerald-700" />
-                      <span className="text-[9px] uppercase font-black tracking-widest text-emerald-800">Из каталога</span>
+                      <span className="text-[9px] uppercase font-black tracking-widest text-emerald-800">{t('from_catalog')}</span>
                     </div>
                     <h4 className="font-black text-sm truncate text-slate-900">{editingProduct.name}</h4>
                     <span className="text-[10px] font-bold text-slate-600">
-                      {categories.find(c => c.id === editingProduct.category_id)?.name_ru || 'Без категории'}
+                      {categories.find(c => c.id === editingProduct.category_id)?.name_ru || t('no_category')}
                     </span>
                   </div>
                   <button
                     onClick={openCatalogPicker}
-                    title="Сменить товар"
+                    title={t('change_product')}
                     className="p-2 bg-white border border-emerald-300 text-emerald-700 rounded-lg hover:bg-emerald-600 hover:text-white hover:border-emerald-600 transition-all"
                   >
                     <Pencil size={14} />
@@ -1409,8 +1412,8 @@ export default function Admin() {
                       <ShoppingBag size={20} className="text-indigo-600" />
                     </div>
                     <div>
-                      <div className="font-black text-sm text-indigo-900">Выбрать из каталога</div>
-                      <div className="text-[11px] text-indigo-600 font-medium">Подтянуть фото и название из готового товара</div>
+                      <div className="font-black text-sm text-indigo-900">{t('pick_from_catalog')}</div>
+                      <div className="text-[11px] text-indigo-600 font-medium">{t('pick_from_catalog_hint')}</div>
                     </div>
                   </div>
                   <Plus size={16} className="text-indigo-600" />
@@ -1429,9 +1432,9 @@ export default function Admin() {
                     {motorToSlotLabel(editingProduct.motor_id) ?? '?'}
                   </div>
                   <div className="flex-1 min-w-0">
-                    <div className="text-[10px] font-black uppercase tracking-widest text-slate-600">Слот в аппарате</div>
+                    <div className="text-[10px] font-black uppercase tracking-widest text-slate-600">{t('slot_in_machine')}</div>
                     <div className="text-xs text-slate-700 leading-snug">
-                      Привязка к мотору меняется только с планшета («Настройка моторов»).
+                      {t('motor_link_tablet_only')}
                     </div>
                   </div>
                 </div>
@@ -1439,7 +1442,7 @@ export default function Admin() {
 
               <div className="flex gap-4">
                 <div className="flex-1">
-                  <label className="text-xs font-bold text-slate-700 ml-2 mb-1 block">Цена (₸)</label>
+                  <label className="text-xs font-bold text-slate-700 ml-2 mb-1 block">{t('price_kzt')}</label>
                   <input
                     type="number"
                     className="w-full p-2.5 border-2 border-slate-300 focus:border-primary focus:outline-none rounded-xl font-bold text-slate-900 bg-white"
@@ -1448,7 +1451,7 @@ export default function Admin() {
                   />
                 </div>
                 <div className="flex-1">
-                  <label className="text-xs font-bold text-slate-700 ml-2 mb-1 block">Остаток (шт)</label>
+                  <label className="text-xs font-bold text-slate-700 ml-2 mb-1 block">{t('stock_pcs')}</label>
                   <input
                     type="number"
                     className="w-full p-2.5 border-2 border-slate-300 focus:border-primary focus:outline-none rounded-xl font-bold text-slate-900 bg-white"
@@ -1459,7 +1462,7 @@ export default function Admin() {
               </div>
 
               <div className="text-[11px] text-slate-600 leading-relaxed bg-slate-100 border border-slate-300 rounded-xl p-2.5">
-                Чтобы изменить фото или название — отредактируйте товар во вкладке «Каталог».
+                {t('edit_photo_in_catalog')}
               </div>
 
             </div>
@@ -1472,7 +1475,7 @@ export default function Admin() {
                 className="w-full bg-primary text-white py-3.5 rounded-xl font-black text-base sm:text-lg flex justify-center items-center gap-2 shadow-lg shadow-primary/30 active:scale-95 transition-all disabled:opacity-50 disabled:cursor-not-allowed border-2 border-primary"
               >
                 {loading ? <Loader2 className="animate-spin" /> : <Save size={20} />}
-                Сохранить
+                {t('save')}
               </button>
             </div>
           </div>
@@ -1484,30 +1487,30 @@ export default function Admin() {
         <div className="fixed inset-0 z-[60] bg-black/50 backdrop-blur-sm flex items-center justify-center p-4">
           <div className="bg-white rounded-3xl p-6 w-full max-w-sm shadow-2xl">
             <div className="flex justify-between items-center mb-6">
-              <h3 className="font-black text-xl">Категории</h3>
+              <h3 className="font-black text-xl">{t('categories')}</h3>
               <button onClick={() => setShowCategoryManager(false)} className="p-2 bg-surface-container-low rounded-full"><X size={18} /></button>
             </div>
             
             <div className="flex flex-col gap-2 mb-4">
               <input 
-                placeholder="Название (RU)" 
+                placeholder={t('name_ru')}
                 className="p-2 border border-surface-container-high rounded-xl font-bold text-sm"
                 value={newCatRu}
                 onChange={e => setNewCatRu(e.target.value)}
               />
               <input 
-                placeholder="Название (KZ)" 
+                placeholder={t('name_kz')}
                 className="p-2 border border-surface-container-high rounded-xl font-bold text-sm"
                 value={newCatKz}
                 onChange={e => setNewCatKz(e.target.value)}
               />
               <input 
-                placeholder="Название (EN)" 
+                placeholder={t('name_en')}
                 className="p-2 border border-surface-container-high rounded-xl font-bold text-sm"
                 value={newCatEn}
                 onChange={e => setNewCatEn(e.target.value)}
               />
-              <button onClick={addCategory} className="bg-primary text-white p-2 rounded-xl mt-2 font-bold"><Plus size={20} className="inline mr-2"/> Добавить</button>
+              <button onClick={addCategory} className="bg-primary text-white p-2 rounded-xl mt-2 font-bold"><Plus size={20} className="inline mr-2"/> {t('add')}</button>
             </div>
 
             <div className="max-h-60 overflow-y-auto flex flex-col gap-2">
@@ -1520,7 +1523,7 @@ export default function Admin() {
                   <button onClick={() => deleteCategory(c.id)} className="text-red-500 hover:bg-red-50 p-2 rounded-lg transition-colors"><Trash2 size={16}/></button>
                 </div>
               ))}
-              {categories.length === 0 && <p className="text-center text-xs opacity-50 py-4">Нет категорий</p>}
+              {categories.length === 0 && <p className="text-center text-xs opacity-50 py-4">{t('no_categories')}</p>}
             </div>
           </div>
         </div>
@@ -1545,14 +1548,14 @@ export default function Admin() {
               onClick={() => { setCropImageSrc(null); setCropTarget('inventory'); }}
               className="px-6 py-3 font-bold text-on-surface-variant hover:text-black transition-colors"
             >
-              Отмена
+              {t('cancel')}
             </button>
             <button 
               onClick={handleUploadCrop}
               disabled={uploadingImage}
               className="bg-primary text-white px-8 py-3 rounded-xl font-black shadow-lg shadow-primary/20 flex items-center gap-2 active:scale-95 transition-all"
             >
-              {uploadingImage ? <Loader2 className="animate-spin" /> : 'Сохранить и загрузить'}
+              {uploadingImage ? <Loader2 className="animate-spin" /> : t('save_and_upload')}
             </button>
           </div>
         </div>
@@ -1578,9 +1581,9 @@ export default function Admin() {
           <div className="bg-white rounded-3xl w-full max-w-lg shadow-2xl border-2 border-slate-300 max-h-[85vh] flex flex-col">
             <div className="flex justify-between items-center px-6 pt-6 pb-4 border-b-2 border-slate-200">
               <div>
-                <h3 className="font-black text-xl text-slate-900">Каталог</h3>
+                <h3 className="font-black text-xl text-slate-900">{t('tab_catalog')}</h3>
                 <span className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">
-                  Выберите готовый товар
+                  {t('pick_ready_product')}
                 </span>
               </div>
               <button
@@ -1593,7 +1596,7 @@ export default function Admin() {
 
             <div className="px-6 py-4 bg-slate-50 border-b border-slate-200">
               <input
-                placeholder="Поиск…"
+                placeholder={t('search_placeholder_short')}
                 value={pickerSearch}
                 onChange={e => setPickerSearch(e.target.value)}
                 className="w-full p-2.5 border-2 border-slate-300 focus:border-primary focus:outline-none rounded-xl font-medium text-sm bg-white text-slate-900 placeholder-slate-400"
@@ -1610,10 +1613,10 @@ export default function Admin() {
                 <div className="text-center py-10 bg-slate-50 border-2 border-dashed border-slate-300 rounded-2xl">
                   <Image className="mx-auto mb-3 text-slate-300" size={40} />
                   <p className="text-xs font-bold text-slate-500 uppercase tracking-widest">
-                    Каталог пуст
+                    {t('catalog_empty')}
                   </p>
                   <p className="text-[11px] text-slate-600 mt-1">
-                    Создайте товары во вкладке «Каталог»
+                    {t('catalog_empty_hint')}
                   </p>
                 </div>
               ) : (
@@ -1642,11 +1645,11 @@ export default function Admin() {
                           <div className="font-bold text-sm truncate text-slate-900">{p.name}</div>
                           <div className="flex items-center gap-2 mt-1">
                             <span className="text-[9px] uppercase font-black text-slate-600 tracking-wider px-1.5 py-0.5 bg-white border border-slate-300 rounded">
-                              {categories.find(c => c.id === p.category_id)?.name_ru || 'Без категории'}
+                              {categories.find(c => c.id === p.category_id)?.name_ru || t('no_category')}
                             </span>
                             {p.volume_ml != null && (
                               <span className="text-[10px] font-bold text-slate-700 bg-white border border-slate-300 px-1.5 py-0.5 rounded">
-                                {p.volume_ml} мл
+                                {p.volume_ml} {t('unit_ml')}
                               </span>
                             )}
                           </div>
@@ -1669,7 +1672,7 @@ export default function Admin() {
           <div className="bg-white rounded-3xl p-6 w-full max-w-md shadow-2xl border-2 border-slate-300 max-h-[90vh] overflow-y-auto">
             <div className="flex justify-between items-center mb-6">
               <h3 className="font-black text-xl text-slate-900">
-                {editingCatalog.id === 'new' ? 'Новый товар в каталог' : 'Редактировать товар'}
+                {editingCatalog.id === 'new' ? t('new_catalog_product') : t('edit_product_title')}
               </h3>
               <button onClick={() => setEditingCatalog(null)} className="p-2 bg-slate-200 border border-slate-300 text-slate-700 rounded-full hover:bg-slate-300">
                 <X size={18} />
@@ -1689,7 +1692,7 @@ export default function Admin() {
                   ) : (
                     <>
                       <Upload className="text-primary mb-1" size={20} />
-                      <span className="text-[10px] font-bold text-primary">Фото</span>
+                      <span className="text-[10px] font-bold text-primary">{t('photo')}</span>
                     </>
                   )}
                   <input
@@ -1702,7 +1705,7 @@ export default function Admin() {
                 </div>
                 <div className="flex-1 space-y-2 flex flex-col">
                   <input
-                    placeholder="Название (Coca-Cola 0.5)"
+                    placeholder={t('name_coca_example')}
                     className="w-full p-2.5 border-2 border-slate-300 focus:border-primary focus:outline-none rounded-xl font-bold text-slate-900 bg-white placeholder-slate-400"
                     value={editingCatalog.name || ''}
                     onChange={e => setEditingCatalog({ ...editingCatalog, name: e.target.value })}
@@ -1712,7 +1715,7 @@ export default function Admin() {
                     value={editingCatalog.category_id || ''}
                     onChange={e => setEditingCatalog({ ...editingCatalog, category_id: e.target.value || null })}
                   >
-                    <option value="">Без категории</option>
+                    <option value="">{t('no_category')}</option>
                     {categories.map(c => (
                       <option key={c.id} value={c.id}>{c.name_ru}</option>
                     ))}
@@ -1722,7 +1725,7 @@ export default function Admin() {
 
               <div className="flex gap-3">
                 <div className="flex-1">
-                  <label className="text-xs font-bold text-slate-700 ml-2 mb-1 block">Объём (мл)</label>
+                  <label className="text-xs font-bold text-slate-700 ml-2 mb-1 block">{t('volume_ml')}</label>
                   <input
                     type="number"
                     placeholder="500"
@@ -1732,7 +1735,7 @@ export default function Admin() {
                   />
                 </div>
                 <div className="flex-1">
-                  <label className="text-xs font-bold text-slate-700 ml-2 mb-1 block">Emoji (fallback)</label>
+                  <label className="text-xs font-bold text-slate-700 ml-2 mb-1 block">{t('emoji_fallback')}</label>
                   <input
                     placeholder="🥤"
                     maxLength={4}
@@ -1744,7 +1747,7 @@ export default function Admin() {
               </div>
 
               <div>
-                <label className="text-xs font-bold text-slate-700 ml-2 mb-1 block">Описание (опционально)</label>
+                <label className="text-xs font-bold text-slate-700 ml-2 mb-1 block">{t('description_optional')}</label>
                 <textarea
                   rows={2}
                   className="w-full p-2.5 border-2 border-slate-300 focus:border-primary focus:outline-none rounded-xl text-sm text-slate-900 bg-white"
@@ -1757,7 +1760,7 @@ export default function Admin() {
                 <div className="flex items-center gap-2 bg-amber-100 border-2 border-amber-400 rounded-xl px-3 py-2.5">
                   <AlertTriangle size={16} className="text-amber-700" />
                   <span className="text-xs font-bold text-amber-900">
-                    Черновик — создан с планшета. Заполните и опубликуйте.
+                    {t('draft_from_tablet')}
                   </span>
                 </div>
               )}
@@ -1769,14 +1772,14 @@ export default function Admin() {
                   className="w-full bg-primary text-white py-3 rounded-xl font-black text-lg flex justify-center items-center gap-2 shadow-xl shadow-primary/30 active:scale-95 transition-all disabled:opacity-50 border-2 border-primary"
                 >
                   {loading ? <Loader2 className="animate-spin" /> : <Save size={20} />}
-                  Сохранить
+                  {t('save')}
                 </button>
                 {editingCatalog.is_draft && editingCatalog.id !== 'new' && (
                   <button
                     onClick={() => { publishDraft(editingCatalog); setEditingCatalog(null); }}
                     className="w-full bg-emerald-600 text-white py-2.5 rounded-xl font-bold text-sm flex justify-center items-center gap-2 hover:bg-emerald-700 transition-all border-2 border-emerald-600"
                   >
-                    <CheckCircle2 size={16} /> Опубликовать
+                    <CheckCircle2 size={16} /> {t('publish')}
                   </button>
                 )}
               </div>
@@ -1792,20 +1795,20 @@ export default function Admin() {
             <div className="w-16 h-16 bg-red-100 text-red-600 rounded-full flex items-center justify-center mx-auto mb-4">
               <Trash2 size={32} />
             </div>
-            <h3 className="text-xl font-black mb-2 text-on-surface">Удалить товар?</h3>
-            <p className="text-sm text-on-surface-variant opacity-70 mb-6">Это действие нельзя будет отменить. Вы уверены?</p>
+            <h3 className="text-xl font-black mb-2 text-on-surface">{t('delete_product_title')}</h3>
+            <p className="text-sm text-on-surface-variant opacity-70 mb-6">{t('delete_product_confirm')}</p>
             <div className="flex gap-3">
               <button 
                 onClick={() => setProductToDelete(null)}
                 className="flex-1 py-3 px-4 bg-surface-container-high rounded-xl font-bold text-on-surface hover:bg-surface-container-highest transition-all"
               >
-                Отмена
+                {t('cancel')}
               </button>
               <button 
                 onClick={confirmDelete}
                 className="flex-1 py-3 px-4 bg-red-600 text-white rounded-xl font-bold hover:bg-red-700 shadow-lg shadow-red-200 transition-all active:scale-95"
               >
-                Да, удалить
+                {t('yes_delete')}
               </button>
             </div>
           </div>
@@ -1832,6 +1835,7 @@ function CatalogTab({
   onPublish,
   onDelete,
 }) {
+  const { t } = useTranslation();
   const visible = products.filter(p => {
     if (filter === 'drafts') return p.is_draft && !p.is_archived;
     if (filter === 'archived') return p.is_archived;
@@ -1848,24 +1852,24 @@ function CatalogTab({
     <>
       <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 mb-8">
         <div>
-          <h2 className="text-2xl font-black text-slate-900">Каталог товаров</h2>
+          <h2 className="text-2xl font-black text-slate-900">{t('catalog_products_title')}</h2>
           <p className="text-[11px] font-bold text-slate-500 uppercase tracking-widest">
-            SKU для всех ваших аппаратов
+            {t('catalog_products_subtitle')}
           </p>
         </div>
         <button
           onClick={onCreate}
           className="flex items-center justify-center gap-2 bg-primary text-white px-5 py-2.5 rounded-xl font-bold hover:brightness-110 transition-all shadow-lg shadow-primary/30 text-sm border-2 border-primary"
         >
-          <Plus size={16} /> Добавить товар
+          <Plus size={16} /> {t('add_product')}
         </button>
       </div>
 
       <div className="flex gap-2 mb-8 border-b-2 border-slate-200 pb-3 overflow-x-auto no-scrollbar">
         {[
-          { id: 'active', label: 'Активные', count: counts.active },
-          { id: 'drafts', label: 'Черновики', count: counts.drafts },
-          { id: 'archived', label: 'Архив', count: counts.archived },
+          { id: 'active', label: t('filter_active'), count: counts.active },
+          { id: 'drafts', label: t('filter_drafts'), count: counts.drafts },
+          { id: 'archived', label: t('filter_archived'), count: counts.archived },
         ].map(tab => (
           <button
             key={tab.id}
@@ -1892,7 +1896,7 @@ function CatalogTab({
         <div className="text-center py-20 bg-slate-50 border-2 border-dashed border-slate-300 rounded-2xl">
           <Image className="mx-auto mb-3 text-slate-300" size={48} />
           <p className="font-black text-slate-500 text-sm uppercase tracking-widest">
-            {filter === 'drafts' ? 'Черновиков нет' : filter === 'archived' ? 'Архив пуст' : 'Каталог пуст'}
+            {filter === 'drafts' ? t('no_drafts') : filter === 'archived' ? t('archive_empty') : t('catalog_empty')}
           </p>
         </div>
       ) : (
@@ -1923,21 +1927,21 @@ function CatalogTab({
                   <h4 className="font-bold text-sm text-slate-900 truncate pr-1">{p.name}</h4>
                   {p.is_draft && (
                     <span className="text-[9px] uppercase font-black bg-amber-600 text-white px-1.5 py-0.5 rounded">
-                      Draft
+                      {t('badge_draft')}
                     </span>
                   )}
                   {p.is_archived && (
                     <span className="text-[9px] uppercase font-black bg-slate-600 text-white px-1.5 py-0.5 rounded">
-                      Архив
+                      {t('badge_archived')}
                     </span>
                   )}
                 </div>
                 <div className="flex items-center gap-2 mt-1">
                   <span className="text-[9px] uppercase font-black text-slate-600 tracking-wider px-1.5 py-0.5 bg-white border border-slate-300 rounded">
-                    {categories.find(c => c.id === p.category_id)?.name_ru || 'Без категории'}
+                    {categories.find(c => c.id === p.category_id)?.name_ru || t('no_category')}
                   </span>
                   {p.volume_ml != null && (
-                    <span className="text-[10px] font-bold text-slate-700 bg-white border border-slate-300 px-1.5 py-0.5 rounded">{p.volume_ml} мл</span>
+                    <span className="text-[10px] font-bold text-slate-700 bg-white border border-slate-300 px-1.5 py-0.5 rounded">{p.volume_ml} {t('unit_ml')}</span>
                   )}
                 </div>
               </div>
@@ -1946,7 +1950,7 @@ function CatalogTab({
                 {p.is_draft && (
                   <button
                     onClick={() => onPublish(p)}
-                    title="Опубликовать"
+                    title={t('publish')}
                     className="p-2.5 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 transition-all shadow-sm"
                   >
                     <CheckCircle2 size={14} />
@@ -1954,21 +1958,21 @@ function CatalogTab({
                 )}
                 <button
                   onClick={() => onEdit(p)}
-                  title="Редактировать"
+                  title={t('edit')}
                   className="p-2.5 bg-white border border-slate-300 text-slate-600 rounded-lg hover:bg-primary hover:border-primary hover:text-white transition-all"
                 >
                   <Pencil size={14} />
                 </button>
                 <button
                   onClick={() => onArchive(p)}
-                  title={p.is_archived ? 'Восстановить' : 'В архив'}
+                  title={p.is_archived ? t('restore') : t('to_archive')}
                   className="p-2.5 bg-white border border-slate-300 text-slate-600 rounded-lg hover:bg-amber-600 hover:border-amber-600 hover:text-white transition-all"
                 >
                   {p.is_archived ? <CheckCircle2 size={14} /> : <XCircle size={14} />}
                 </button>
                 <button
                   onClick={() => onDelete(p)}
-                  title="Удалить навсегда"
+                  title={t('delete_forever')}
                   className="p-2.5 bg-white border border-slate-300 text-slate-600 rounded-lg hover:bg-red-600 hover:border-red-600 hover:text-white transition-all"
                 >
                   <Trash2 size={14} />
@@ -1991,12 +1995,13 @@ function CatalogTab({
 // Flat product list for open-shelf (static) micromarkets — no motors/slots.
 // Add is handled by the header button; rows support edit + delete.
 function StaticInventoryList({ products, categories, priceLabel, onEdit, onDelete }) {
+  const { t } = useTranslation();
   if (!products || products.length === 0) {
     return (
       <div className="text-center py-16 bg-slate-50 rounded-3xl border-2 border-dashed border-slate-200">
         <Package size={36} className="mx-auto mb-3 text-slate-300" />
-        <p className="font-black text-slate-400 text-sm uppercase tracking-widest">Нет товаров</p>
-        <p className="text-xs text-slate-400 mt-1">Нажмите «Добавить», чтобы внести товар</p>
+        <p className="font-black text-slate-400 text-sm uppercase tracking-widest">{t('no_products')}</p>
+        <p className="text-xs text-slate-400 mt-1">{t('no_products_hint')}</p>
       </div>
     );
   }
@@ -2024,7 +2029,7 @@ function StaticInventoryList({ products, categories, priceLabel, onEdit, onDelet
               <h4 className="font-bold text-sm text-slate-900 truncate">{p.name || '—'}</h4>
               <div className="flex items-center gap-1.5 mt-1">
                 <span className={`text-[10px] font-black px-1.5 py-0.5 rounded tabular-nums ${lowStock ? 'bg-red-100 text-red-700' : 'bg-emerald-100 text-emerald-700'}`}>×{p.stock ?? 0}</span>
-                <span className="text-[9px] uppercase font-black text-slate-500 tracking-wider truncate">{cat || 'Без категории'}</span>
+                <span className="text-[9px] uppercase font-black text-slate-500 tracking-wider truncate">{cat || t('no_category')}</span>
               </div>
             </div>
             <div className="text-right px-2 sm:px-4 shrink-0">
@@ -2043,6 +2048,7 @@ function StaticInventoryList({ products, categories, priceLabel, onEdit, onDelet
 }
 
 function InventoryByLayout({ products, layout, categories, stockLabel, priceLabel, onEdit, onDelete }) {
+  const { t } = useTranslation();
   const productByMotor = new Map();
   for (const p of products) {
     if (p.motor_id != null) productByMotor.set(Number(p.motor_id), p);
@@ -2063,11 +2069,11 @@ function InventoryByLayout({ products, layout, categories, stockLabel, priceLabe
         <div key={`${idx}-${shelf.label}`}>
           <div className="flex items-center gap-2 mb-3 px-1">
             <span className="bg-slate-900 text-white text-[10px] font-black px-2 py-0.5 rounded tabular-nums">
-              Полка {idx + 1}
+              {t('shelf')} {idx + 1}
             </span>
             <span className="text-[11px] font-bold text-slate-600">{shelf.label}</span>
             <span className="text-[10px] font-bold text-slate-400 ml-auto">
-              {shelf.slots.length} {shelf.slots.length === 1 ? 'слот' : 'слотов'}
+              {shelf.slots.length} {shelf.slots.length === 1 ? t('slot_one') : t('slot_many')}
             </span>
           </div>
           <div className="space-y-2">
@@ -2096,7 +2102,7 @@ function InventoryByLayout({ products, layout, categories, stockLabel, priceLabe
           <div className="flex items-center gap-2 mb-3">
             <AlertTriangle size={16} className="text-amber-700" />
             <span className="text-xs font-black uppercase tracking-wider text-amber-900">
-              Не привязано к раскладке ({unassigned.length})
+              {t('not_linked_to_layout')} ({unassigned.length})
             </span>
           </div>
           <div className="space-y-2">
@@ -2119,22 +2125,22 @@ function InventoryByLayout({ products, layout, categories, stockLabel, priceLabe
                   <div className="font-bold text-sm truncate text-slate-900">{p.name || '—'}</div>
                   <div className="text-[11px] text-amber-800">
                     {p.motor_id == null
-                      ? 'Без Motor ID — задайте на планшете'
-                      : `M${p.motor_id} не входит в текущую раскладку`}
+                      ? t('no_motor_id')
+                      : `M${p.motor_id} ${t('motor_not_in_layout')}`}
                   </div>
                 </div>
                 <div className="flex items-center gap-1 shrink-0">
                   <button
                     onClick={(e) => { e.stopPropagation(); onEdit(p); }}
                     className="p-2 bg-white border border-amber-300 text-amber-700 rounded-lg hover:bg-amber-600 hover:border-amber-600 hover:text-white transition-all"
-                    title="Редактировать"
+                    title={t('edit')}
                   >
                     <Pencil size={14} />
                   </button>
                   <button
                     onClick={(e) => { e.stopPropagation(); onDelete(p); }}
                     className="p-2 bg-white border border-amber-300 text-amber-700 rounded-lg hover:bg-red-600 hover:border-red-600 hover:text-white transition-all"
-                    title="Удалить"
+                    title={t('delete_short')}
                   >
                     <Trash2 size={14} />
                   </button>
@@ -2149,6 +2155,7 @@ function InventoryByLayout({ products, layout, categories, stockLabel, priceLabe
 }
 
 function InventoryRow({ slot, product, category, stockLabel, priceLabel, onEdit, onDelete }) {
+  const { t } = useTranslation();
   // Slot identification: label ("001") + the linked motor index
   // (e.g. "M99" or "M99+M95" for twin spirals).
   const motorsLabel = (slot.motorIds ?? []).map(m => `M${m}`).join('+');
@@ -2191,7 +2198,7 @@ function InventoryRow({ slot, product, category, stockLabel, priceLabel, onEdit,
         {/* Name + category + (mobile-only) stock × price line */}
         <div className="flex-1 min-w-0">
           {empty ? (
-            <div className="italic text-slate-400 font-bold text-sm">Слот пуст</div>
+            <div className="italic text-slate-400 font-bold text-sm">{t('slot_empty')}</div>
           ) : (
             <>
               <h4 className="font-bold text-sm text-slate-900 truncate">{product.name}</h4>
@@ -2202,12 +2209,12 @@ function InventoryRow({ slot, product, category, stockLabel, priceLabel, onEdit,
                 </span>
                 <span className="text-sm font-black text-primary tabular-nums">{product.price} ₸</span>
                 <span className="text-[9px] uppercase font-black text-slate-500 tracking-wider truncate">
-                  {category || 'Без категории'}
+                  {category || t('no_category')}
                 </span>
               </div>
               <div className="hidden sm:flex items-center gap-2 mt-1">
                 <span className="text-[9px] uppercase font-black text-slate-600 tracking-wider px-1.5 py-0.5 bg-white border border-slate-300 rounded">
-                  {category || 'Без категории'}
+                  {category || t('no_category')}
                 </span>
               </div>
             </>
@@ -2237,7 +2244,7 @@ function InventoryRow({ slot, product, category, stockLabel, priceLabel, onEdit,
             (deleteProduct call on Trash icon there). */}
         <div className="flex items-center gap-1 shrink-0">
           {empty ? (
-            <span className="hidden sm:block text-[10px] font-bold text-slate-400 italic max-w-[80px] text-right leading-tight">только с планшета</span>
+            <span className="hidden sm:block text-[10px] font-bold text-slate-400 italic max-w-[80px] text-right leading-tight">{t('tablet_only')}</span>
           ) : (
             <>
               <button
