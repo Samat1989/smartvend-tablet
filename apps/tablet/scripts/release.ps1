@@ -8,15 +8,9 @@
 #      android/README_RELEASE_SIGNING.md)
 #
 # Usage:
-#   .\scripts\release.ps1 -Version 1.1.6           # build code derived: 1.1.6+10106
-#   .\scripts\release.ps1 -Version 1.1.6+10106     # explicit build code (advanced)
-#   .\scripts\release.ps1 -Version 1.1.6 -Notes "Fixes X, adds Y"
+#   .\scripts\release.ps1 -Version 1.0.6+1006
+#   .\scripts\release.ps1 -Version 1.0.6+1006 -Notes "Fixes X, adds Y"
 #   .\scripts\release.ps1                          # uses pubspec version as-is
-#
-# Pass just the semantic version (1.1.6) and the script derives a monotonic
-# Android versionCode as major*10000 + minor*100 + patch. This keeps the build
-# code in lock-step with the version name — Android blocks installing an APK
-# whose versionCode is <= the one already on the device, so it MUST only grow.
 #
 # The script fails loud — any unexpected state (dirty tree, missing
 # keystore, tag already taken, gh not logged in) stops the run before
@@ -75,15 +69,8 @@ if (-not (Test-Path 'android/key.properties')) {
 $pubspecPath = Join-Path $projectRoot 'pubspec.yaml'
 
 if ($Version) {
-    if ($Version -match '^(\d+)\.(\d+)\.(\d+)$') {
-        # Semver only — derive the versionCode so the build number can never
-        # drift out of sync with the version name. Scheme allows up to .99 per
-        # minor/patch (1.1.99 -> 10199, then 1.2.0 -> 10200).
-        $code = [int]$Matches[1] * 10000 + [int]$Matches[2] * 100 + [int]$Matches[3]
-        $Version = "$Version+$code"
-        Write-Host "Derived versionCode -> $Version"
-    } elseif ($Version -notmatch '^\d+\.\d+\.\d+\+\d+$') {
-        Fail "Version must look like 1.1.6 or 1.1.6+10106 (got '$Version')."
+    if ($Version -notmatch '^\d+\.\d+\.\d+\+\d+$') {
+        Fail "Version must look like 1.0.6+1006 (got '$Version')."
     }
     Section "Bumping pubspec to $Version"
     $content = Get-Content $pubspecPath -Raw
