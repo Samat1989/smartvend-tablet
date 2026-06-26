@@ -160,6 +160,21 @@ class _ParsedVersion {
   final int code;
 }
 
+/// Compare two dotted version names ("1.1.5" vs "1.1.3").
+/// Returns >0 when [a] is newer, <0 when older, 0 when equal. Missing or
+/// non-numeric components count as 0, so "1.1" == "1.1.0".
+int _compareVersionNames(String a, String b) {
+  final pa = a.split('.');
+  final pb = b.split('.');
+  final n = pa.length > pb.length ? pa.length : pb.length;
+  for (var i = 0; i < n; i++) {
+    final na = i < pa.length ? int.tryParse(pa[i].trim()) ?? 0 : 0;
+    final nb = i < pb.length ? int.tryParse(pb[i].trim()) ?? 0 : 0;
+    if (na != nb) return na - nb;
+  }
+  return 0;
+}
+
 /// Available update — what the operator confirms before download.
 class UpdateInfo {
   UpdateInfo({
@@ -184,7 +199,19 @@ class UpdateInfo {
   final String body;
   final String publishedAt;
 
-  bool get isNewer => versionCode > currentVersionCode;
+  /// True when this release is newer than what's installed.
+  ///
+  /// Compares the *semantic version name* (1.1.5 vs 1.1.3) first. The build
+  /// code (`+NNNN`) has historically been assigned inconsistently across
+  /// releases — a higher version name could carry a lower build code (e.g.
+  /// v1.1.5+3015 vs an installed 1.1.3+4013), which a pure code comparison
+  /// would wrongly treat as "no update". The build code is only the
+  /// tie-breaker when the version names are identical.
+  bool get isNewer {
+    final cmp = _compareVersionNames(versionName, currentVersionName);
+    if (cmp != 0) return cmp > 0;
+    return versionCode > currentVersionCode;
+  }
 
   /// Pretty file size for the confirmation dialog.
   String get assetSizeHuman {
