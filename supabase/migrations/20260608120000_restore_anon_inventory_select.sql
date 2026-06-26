@@ -1,0 +1,12 @@
+-- Storefront regression fix (2026-06-08): the vending tablet renders its
+-- product grid via a direct anon SELECT on public.inventory
+-- (apps/tablet/lib/services/supabase_api.dart fetchInventory). A prior
+-- hardening step revoked anon's table-level SELECT on inventory, so the read
+-- returned HTTP 401 / 42501 "permission denied for table inventory" and the
+-- storefront showed nothing. The row policy "Anon read inventory" USING(true)
+-- is still present, so restoring the grant alone is sufficient.
+--
+-- Only SELECT is restored on purpose: anon writes stay closed (tablet writes
+-- go through the secret-scoped SECURITY DEFINER RPCs). micromarkets/products
+-- are intentionally left untouched (micromarkets has a `secret` column).
+GRANT SELECT ON public.inventory TO anon;

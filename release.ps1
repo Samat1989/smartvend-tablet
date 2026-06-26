@@ -244,10 +244,16 @@ try {
         prerelease = [bool]$Prerelease
     } | ConvertTo-Json -Compress
 
+    # PS 5.1's ConvertTo-Json leaves Cyrillic raw (no \u escaping), and
+    # Invoke-RestMethod then encodes a *string* body with a single-byte
+    # codepage — turning every non-ASCII char into "?". Send explicit UTF-8
+    # bytes (with charset on the Content-Type) so release notes survive.
+    $bodyBytes = [System.Text.Encoding]::UTF8.GetBytes($body)
+
     try {
         $release = Invoke-RestMethod -Method POST `
             -Uri "https://api.github.com/repos/$Owner/$Repo/releases" `
-            -Headers $headers -Body $body -ContentType 'application/json'
+            -Headers $headers -Body $bodyBytes -ContentType 'application/json; charset=utf-8'
     } catch {
         throw "Release create failed: $($_.Exception.Message). Tag is pushed; you can create the release manually in the GitHub UI."
     }
