@@ -2,8 +2,11 @@
 #
 # What it does, in order:
 #   1. Reads the GitHub token from .github_token at the repo root.
-#   2. Auto-bumps pubspec.yaml: patch part +1, build number +1
-#      (override with -Version 1.2.0 or -Build 4000).
+#   2. Auto-bumps pubspec.yaml: version patch +1 with rollover at 99
+#      (1.1.99 -> 1.2.0 -> ... -> 1.99.99 -> 2.0.0). The build number is
+#      DERIVED from the version (major*10000 + minor*100 + patch), so it
+#      can never drift out of sync. Override the version with -Version 1.2.0;
+#      the build is computed automatically (or forced with -Build).
 #   3. Runs `flutter analyze`. Aborts release if there are issues.
 #   4. Builds armeabi-v7a release APK (the only ABI we ship to the
 #      Unisoc SC9832E tablets).
@@ -95,9 +98,21 @@ if ($Version) {
     }
     $majNew, $minNew, $patchNew = [int]$Matches[1], [int]$Matches[2], [int]$Matches[3]
 } else {
+    # Auto-increment the version with rollover at 99: patch +1, and when it
+    # would exceed 99 reset it to 0 and carry into minor (then minor into
+    # major the same way). Keeps releases monotonic with zero manual input.
     $majNew, $minNew, $patchNew = $majCur, $minCur, ($patchCur + 1)
+    if ($patchNew -gt 99) { $patchNew = 0; $minNew++ }
+    if ($minNew   -gt 99) { $minNew   = 0; $majNew++ }
 }
-$buildNew = if ($PSBoundParameters.ContainsKey('Build')) { $Build } else { $buildCur + 1 }
+
+# Derive the build number straight from the version so it can never drift out
+# of sync with the version name: major*10000 + minor*100 + patch. With each
+# part capped at 99 this is strictly monotonic as the version grows
+# (1.1.6 -> 10106, 1.1.7 -> 10107, 1.2.0 -> 10200). -Build still forces a
+# value as an escape hatch, but normally you never touch it.
+$derivedBuild = [int]$majNew * 10000 + [int]$minNew * 100 + [int]$patchNew
+$buildNew = if ($PSBoundParameters.ContainsKey('Build')) { $Build } else { $derivedBuild }
 
 # Flutter's --split-per-abi adds an ABI offset to the shipped
 # versionCode (armeabi-v7a = +1000). The installed APK on the tablet
