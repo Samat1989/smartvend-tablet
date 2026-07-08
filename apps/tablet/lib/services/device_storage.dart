@@ -23,6 +23,10 @@ class DeviceStorage extends ChangeNotifier {
   static const _kClimateLight = 'climate_light_always_on';
   static const _kClimateHasGlassHeater = 'climate_has_glass_heater';
   static const _kUseM102Password = 'use_m102_password';
+  // Board serial link: unset/empty = USB adapter (auto-detect CH340);
+  // a "/dev/ttySX" value = native on-SoC UART (industrial tablets whose
+  // serial port is wired straight to the SoC, no USB-serial chip).
+  static const _kSerialPort = 'board_serial_port';
   static const _kMachineLayout = 'machine_layout_v1';
   static const _kPinFailCount = 'pin_fail_count';
   static const _kPinLockedUntil = 'pin_locked_until';
@@ -81,6 +85,23 @@ class DeviceStorage extends ChangeNotifier {
 
   Future<void> setUseM102Password(bool v) async {
     await _prefs.setBool(_kUseM102Password, v);
+    notifyListeners();
+  }
+
+  /// Native UART node the board is wired to (e.g. `/dev/ttyS2`), or null
+  /// to use a USB-serial adapter. Drives which transport [BoardClient]
+  /// opens on boot.
+  String? get serialPortPath {
+    final v = _prefs.getString(_kSerialPort);
+    return (v == null || v.isEmpty) ? null : v;
+  }
+
+  Future<void> setSerialPortPath(String? path) async {
+    if (path == null || path.isEmpty) {
+      await _prefs.remove(_kSerialPort);
+    } else {
+      await _prefs.setString(_kSerialPort, path);
+    }
     notifyListeners();
   }
 

@@ -24,10 +24,18 @@ class _BoardDiagScreenState extends State<BoardDiagScreen> {
   final _logScroll = ScrollController();
   StreamSubscription<LogEntry>? _logSub;
 
+  /// Native UART nodes discovered under /dev on this device (varies by
+  /// SoC), for the port picker.
+  List<String> _nativePorts = [];
+  bool _detecting = false;
+
   @override
   void initState() {
     super.initState();
     final board = context.read<BoardClient>();
+    board.listNativePorts().then((l) {
+      if (mounted) setState(() => _nativePorts = l);
+    });
     _logSub = board.logStream.listen((_) {
       // Re-render is driven by the watch() in build(); we just need
       // to nudge the scroll view down after the new line is laid out.
@@ -52,11 +60,57 @@ class _BoardDiagScreenState extends State<BoardDiagScreen> {
 
   Future<void> _toggleConnection() async {
     final board = context.read<BoardClient>();
+    final storage = context.read<DeviceStorage>();
     if (board.isConnected) {
       await board.disconnect();
     } else {
+      final path = storage.serialPortPath;
+      if (path != null) {
+        await board.connectNative(path);
+      } else {
+        await board.autoConnect();
+      }
+    }
+  }
+
+  /// Switch the board link between a USB adapter (`null`) and a native
+  /// on-SoC UART node. Persists the choice and reconnects immediately.
+  Future<void> _selectPort(String? path) async {
+    final board = context.read<BoardClient>();
+    final storage = context.read<DeviceStorage>();
+    await storage.setSerialPortPath(path);
+    await board.disconnect();
+    if (path != null) {
+      await board.connectNative(path);
+    } else {
       await board.autoConnect();
     }
+  }
+
+  /// Probe every discovered node for a live board and, on a hit, persist +
+  /// connect to it. Handles fleets of mixed tablets where the node number
+  /// (or even name prefix) differs per model.
+  Future<void> _autoDetect() async {
+    final board = context.read<BoardClient>();
+    final storage = context.read<DeviceStorage>();
+    final messenger = ScaffoldMessenger.of(context);
+    setState(() => _detecting = true);
+    final candidates =
+        _nativePorts.isNotEmpty ? _nativePorts : await board.listNativePorts();
+    final found = await board.autoDetectNativePort(candidates);
+    if (!mounted) return;
+    if (found != null) {
+      await storage.setSerialPortPath(found);
+      await board.connectNative(found);
+    }
+    if (!mounted) return;
+    setState(() => _detecting = false);
+    messenger.showSnackBar(SnackBar(
+      content: Text(found != null
+          ? 'Плата найдена: $found'
+          : 'Плата не найдена ни на одной ноде'),
+      backgroundColor: found != null ? Colors.green : Colors.redAccent,
+    ));
   }
 
   Future<void> _togglePassword(BuildContext context) async {
@@ -92,6 +146,13 @@ class _BoardDiagScreenState extends State<BoardDiagScreen> {
               onToggleConnection: _toggleConnection,
               onTogglePassword: () => _togglePassword(context),
             ),
+            _SerialModeCard(
+              selectedPath: context.watch<DeviceStorage>().serialPortPath,
+              nodes: _nativePorts,
+              detecting: _detecting,
+              onSelectPort: _selectPort,
+              onAutoDetect: _autoDetect,
+            ),
             const SizedBox(height: 8),
             Expanded(
               child: _LogPanel(
@@ -102,6 +163,117 @@ class _BoardDiagScreenState extends State<BoardDiagScreen> {
           ],
         ),
       ),
+    );
+  }
+}
+
+/// Board-link selector: USB adapter (auto-detect CH340) vs a native
+/// on-SoC UART node (/dev/ttySX) for industrial tablets. The choice is
+/// persisted so the board auto-connects the right way on boot.
+class _SerialModeCard extends StatelessWidget {
+  const _SerialModeCard({
+    required this.selectedPath,
+    required this.nodes,
+    required this.detecting,
+    required this.onSelectPort,
+    required this.onAutoDetect,
+  });
+
+  /// Null = USB adapter; otherwise the /dev/ttySX node.
+  final String? selectedPath;
+
+  /// Native UART nodes discovered under /dev on this device.
+  final List<String> nodes;
+  final bool detecting;
+  final Future<void> Function(String? path) onSelectPort;
+  final VoidCallback onAutoDetect;
+
+  @override
+  Widget build(BuildContext context) {
+    // Union of discovered nodes + the persisted one, so a node this build
+    // didn't enumerate (e.g. a ttyMT* on another tablet) still shows.
+    final paths = <String>{
+      ...nodes,
+      ?selectedPath,
+    }.toList()
+      ..sort();
+    return Container(
+      margin: const EdgeInsets.fromLTRB(12, 0, 12, 6),
+      padding: const EdgeInsets.all(10),
+      decoration: BoxDecoration(
+        color: Colors.white.withValues(alpha: 0.06),
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              const Text(
+                'ПОРТ ПЛАТЫ',
+                style: TextStyle(
+                  color: Colors.white70,
+                  fontSize: 11,
+                  fontWeight: FontWeight.bold,
+                  letterSpacing: 1.2,
+                ),
+              ),
+              const Spacer(),
+              if (detecting)
+                const SizedBox(
+                  width: 16,
+                  height: 16,
+                  child: CircularProgressIndicator(
+                      strokeWidth: 2, color: Colors.greenAccent),
+                )
+              else
+                TextButton.icon(
+                  icon: const Icon(Icons.search,
+                      size: 16, color: Colors.greenAccent),
+                  label: const Text('Автопоиск',
+                      style:
+                          TextStyle(color: Colors.greenAccent, fontSize: 12)),
+                  onPressed: onAutoDetect,
+                ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          Wrap(
+            spacing: 6,
+            runSpacing: 6,
+            children: [
+              _chip(label: 'USB', path: null),
+              for (final p in paths)
+                _chip(label: p.replaceFirst('/dev/', ''), path: p),
+            ],
+          ),
+          if (paths.isEmpty) ...[
+            const SizedBox(height: 6),
+            const Text(
+              'Нативные порты не найдены — нажмите «Автопоиск».',
+              style: TextStyle(color: Colors.white38, fontSize: 11),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
+  Widget _chip({required String label, required String? path}) {
+    final selected = selectedPath == path;
+    return ChoiceChip(
+      label: Text(label),
+      selected: selected,
+      onSelected: (_) {
+        if (!selected) onSelectPort(path);
+      },
+      labelStyle: const TextStyle(
+        color: Colors.black,
+        fontSize: 12,
+        fontWeight: FontWeight.w600,
+      ),
+      backgroundColor: Colors.grey.shade300,
+      selectedColor: Colors.greenAccent,
     );
   }
 }

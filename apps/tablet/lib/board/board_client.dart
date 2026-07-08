@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:flutter/foundation.dart';
@@ -7,6 +8,7 @@ import 'package:usb_serial/usb_serial.dart';
 
 import '../services/device_storage.dart';
 import '../services/kiosk_bridge.dart';
+import 'transport.dart';
 
 class LogEntry {
   final DateTime time;
@@ -101,7 +103,10 @@ class BoardClient extends ChangeNotifier {
 
   List<UsbDevice> _devices = [];
   UsbDevice? _selected;
-  UsbPort? _port;
+  BoardTransport? _transport;
+  /// Set while connected over a native UART (/dev/ttySX); null in USB mode.
+  /// Lets [forceReconnect] / the health watchdog re-open the right path.
+  String? _nativePath;
   StreamSubscription<Uint8List>? _rxSub;
   StreamSubscription<UsbEvent>? _usbEventSub;
 
@@ -176,7 +181,7 @@ class BoardClient extends ChangeNotifier {
 
   List<UsbDevice> get devices => List.unmodifiable(_devices);
   UsbDevice? get selectedDevice => _selected;
-  bool get isConnected => _port != null;
+  bool get isConnected => _transport != null;
   int get baud => _baud;
   int get slaveAddr => _slaveAddr;
   Stream<LogEntry> get logStream => _logCtrl.stream;
@@ -195,7 +200,9 @@ class BoardClient extends ChangeNotifier {
       _info('USB event: ${event.event} ${event.device?.productName ?? ""}');
       // On any USB attach, refresh and try to auto-connect if we're not already.
       await refreshDevices();
-      if (!isConnected && event.event == UsbEvent.ACTION_USB_ATTACHED) {
+      if (!isConnected &&
+          event.event == UsbEvent.ACTION_USB_ATTACHED &&
+          _storage?.serialPortPath == null) {
         // Ask the OS to grant permission *before* trying to open the
         // port. usb_serial does this implicitly via open(), but in
         // kiosk mode with no recent foreground activity the dialog
@@ -205,8 +212,12 @@ class BoardClient extends ChangeNotifier {
         await Future.delayed(const Duration(milliseconds: 500));
         await autoConnect();
       }
-      // On detach, drop our handle so we can re-attach cleanly later.
-      if (event.event == UsbEvent.ACTION_USB_DETACHED && isConnected) {
+      // On detach, drop our handle so we can re-attach cleanly later —
+      // but only when we're actually on USB; a native-UART session must
+      // survive an unrelated USB unplug event.
+      if (event.event == UsbEvent.ACTION_USB_DETACHED &&
+          isConnected &&
+          _nativePath == null) {
         await disconnect();
       }
     });
@@ -216,7 +227,7 @@ class BoardClient extends ChangeNotifier {
     _usbPermissionSub = KioskBridge.usbPermissionResultStream.listen(
       (granted) async {
         _info('USB permission ${granted ? "granted" : "denied"}');
-        if (granted && !isConnected) {
+        if (granted && !isConnected && _storage?.serialPortPath == null) {
           await refreshDevices();
           await autoConnect();
         }
@@ -230,6 +241,14 @@ class BoardClient extends ChangeNotifier {
     // either. Forcing the request here gets the dialog on first launch
     // and then connects immediately if permission already exists.
     Future.delayed(const Duration(milliseconds: 800), () async {
+      // Native-UART tablets: skip the USB probe entirely and open the
+      // configured /dev/ttySX. The health watchdog keeps it re-opened.
+      final nativePath = _storage?.serialPortPath;
+      if (nativePath != null) {
+        _info('Boot: connecting native UART $nativePath');
+        await connectNative(nativePath);
+        return;
+      }
       await refreshDevices();
       final state = await KioskBridge.requestUsbPermission();
       _info('Initial USB permission probe: $state');
@@ -248,9 +267,14 @@ class BoardClient extends ChangeNotifier {
   /// is stuck rather than the board itself.
   Future<void> forceReconnect() async {
     _info('Forcing reconnect (close + reopen port)');
+    final native = _nativePath;
     await disconnect();
     await Future.delayed(const Duration(milliseconds: 400));
-    await autoConnect();
+    if (native != null) {
+      await connectNative(native);
+    } else {
+      await autoConnect();
+    }
   }
 
   /// Self-heal: USB autosuspend, a stuck CH340/FTDI driver, or a
@@ -284,7 +308,7 @@ class BoardClient extends ChangeNotifier {
     _healthWatchdog = Timer.periodic(
       const Duration(seconds: 10),
       (_) async {
-        if (_port == null || _selfHealing) {
+        if (_transport == null || _selfHealing) {
           _unhealthySince = null;
           return;
         }
@@ -412,48 +436,50 @@ class BoardClient extends ChangeNotifier {
       _err('No device selected');
       return false;
     }
-    await disconnect();
     if (baud != null) _baud = baud;
     if (slaveAddr != null) _slaveAddr = slaveAddr;
+    _selected = dev;
+    return _attach(UsbTransport(dev, baud: _baud), usbDevice: dev);
+  }
 
+  /// Connect over a native on-SoC UART (`/dev/ttySX`) instead of a USB
+  /// adapter — for industrial tablets whose serial port is wired straight
+  /// to the SoC (no USB-serial chip, so `usb_serial` can't see it). See
+  /// [NativeUartTransport]. Verified against an M109E on `/dev/ttyS2`.
+  Future<bool> connectNative(String path, {int? baud, int? slaveAddr}) async {
+    if (baud != null) _baud = baud;
+    if (slaveAddr != null) _slaveAddr = slaveAddr;
+    return _attach(NativeUartTransport(path, baud: _baud), nativePath: path);
+  }
+
+  /// Shared open path for both transports: (re)connect, wire RX to
+  /// [_onRx], start the heartbeat + firmware probe.
+  Future<bool> _attach(
+    BoardTransport transport, {
+    UsbDevice? usbDevice,
+    String? nativePath,
+  }) async {
+    await disconnect();
+    transport.logger = _info;
     try {
-      final port = await dev.create();
-      if (port == null) {
-        _err('create() returned null');
+      if (!await transport.open()) {
+        _err('open() failed for ${transport.description}');
+        await transport.close();
         return false;
       }
-      final opened = await port.open();
-      if (!opened) {
-        _err('port.open() failed (permission denied?)');
-        return false;
-      }
-      // NOTE: We deliberately do NOT call setDTR / setRTS here. The SM
-      // M109E board talks via an RS485 transceiver whose DE/RE direction
-      // pin is wired to one of those control lines. Asserting DTR or RTS
-      // (true) holds the transceiver in TX-only mode — we can send frames
-      // but the board's replies are never received. The factory app
-      // (`UsbUtil.connect`) skips these calls too, relying on hoho's
-      // default after open(): DTR=false, RTS=false (deasserted), which is
-      // what the transceiver needs.
-      await port.setPortParameters(
-        _baud,
-        UsbPort.DATABITS_8,
-        UsbPort.STOPBITS_1,
-        UsbPort.PARITY_NONE,
-      );
-      _port = port;
-      _selected = dev;
+      _transport = transport;
+      _nativePath = nativePath;
+      if (usbDevice != null) _selected = usbDevice;
       _consecutiveFailures = 0;
-      _rxSub = port.inputStream!.listen(_onRx, onError: (e) => _err('rx: $e'));
-      _info('Opened ${dev.productName ?? "device"} @ $_baud 8N1');
+      _rxSub =
+          transport.onData.listen(_onRx, onError: (e) => _err('rx: $e'));
+      _info('Opened ${transport.description} @ $_baud 8N1');
       notifyListeners();
-      // Mirror the factory app's 900 ms 0x03 poll thread — keeps the
-      // CH340 / RS-485 bus warm (out of USB autosuspend), gives the
-      // health watchdog something to measure against, and surfaces a
-      // stuck board quickly. Started here, stopped in [disconnect].
+      // Mirror the factory app's 900 ms 0x03 poll thread — keeps the bus
+      // warm, feeds the health watchdog, and surfaces a stuck board fast.
       _startPollHeartbeat();
-      // Best-effort firmware probe so service mode can show it. Don't await —
-      // a missing reply here shouldn't delay the UI's "connected" state.
+      // Best-effort firmware probe (don't await — a missing reply here
+      // shouldn't delay the UI's "connected" state).
       // ignore: unawaited_futures
       _refreshFirmwareId();
       return true;
@@ -461,6 +487,76 @@ class BoardClient extends ChangeNotifier {
       _err('connect error: $e');
       return false;
     }
+  }
+
+  /// Enumerate plausible native serial nodes under /dev. Which node the
+  /// external port maps to — and even the name prefix — varies by SoC
+  /// (Spreadtrum `ttyS*`, MediaTek `ttyMT*`, Qualcomm `ttyHS*`/`ttyHSL*`),
+  /// so the picker lists whatever the device actually exposes rather than a
+  /// fixed set. `ttyUSB*`/`ttyACM*` are excluded — those belong to the USB
+  /// path handled by [autoConnect].
+  Future<List<String>> listNativePorts() async {
+    final re = RegExp(r'^tty(S|MT|HS|HSL|GS)\d+$');
+    final out = <String>[];
+    try {
+      await for (final e in Directory('/dev').list(followLinks: false)) {
+        final name = e.path.split('/').last;
+        if (re.hasMatch(name)) out.add('/dev/$name');
+      }
+    } catch (e) {
+      _info('listNativePorts: $e');
+    }
+    out.sort();
+    return out;
+  }
+
+  /// Probe each candidate node for a live board: send Get ID and watch for
+  /// a 20-byte reply, trying both CRC-password modes. Returns the first
+  /// responding node (and leaves [useM102Password] on the mode that
+  /// worked), or null. Disconnects any current session first — the caller
+  /// then persists + [connectNative]s the winner.
+  Future<String?> autoDetectNativePort(List<String> candidates) async {
+    await disconnect();
+    for (final path in candidates) {
+      for (final pw in const [false, true]) {
+        if (await _probeNative(path, pw)) {
+          _info('Auto-detect: board on $path '
+              '(M102 password ${pw ? "ON" : "OFF"})');
+          _useM102Password = pw;
+          // ignore: unawaited_futures
+          _storage?.setUseM102Password(pw);
+          notifyListeners();
+          return path;
+        }
+      }
+    }
+    _info('Auto-detect: no board found on ${candidates.length} node(s)');
+    return null;
+  }
+
+  /// Transient open of [path], send Get ID with the given CRC mode, and
+  /// report whether a 20-byte frame came back within a short window.
+  Future<bool> _probeNative(String path, bool password) async {
+    final t = NativeUartTransport(path, baud: _baud);
+    t.logger = _info;
+    if (!await t.open()) {
+      await t.close();
+      return false;
+    }
+    final buf = BytesBuilder();
+    final completer = Completer<bool>();
+    final sub = t.onData.listen((chunk) {
+      buf.add(chunk);
+      if (buf.length >= 20 && !completer.isCompleted) completer.complete(true);
+    });
+    try {
+      await t.write(buildFrame(0x01, List.filled(16, 0), password: password));
+    } catch (_) {}
+    final ok = await completer.future
+        .timeout(const Duration(milliseconds: 700), onTimeout: () => false);
+    await sub.cancel();
+    await t.close();
+    return ok;
   }
 
   // ─── 900 ms Poll (0x03) heartbeat ───────────────────────────────
@@ -485,7 +581,7 @@ class BoardClient extends ChangeNotifier {
   void _startPollHeartbeat() {
     _heartbeatTimer?.cancel();
     _heartbeatTimer = Timer.periodic(_heartbeatInterval, (_) {
-      if (_port == null) return;
+      if (_transport == null) return;
       if (_selfHealing) return;
       if (_pendingResponse != null && !_pendingResponse!.isCompleted) {
         return;
@@ -546,9 +642,9 @@ class BoardClient extends ChangeNotifier {
     _stopPollHeartbeat();
     _failPending('disconnected');
     final oldRx = _rxSub;
-    final oldPort = _port;
+    final oldTransport = _transport;
     _rxSub = null;
-    _port = null;
+    _transport = null;
     _rxBuffer.clear();
     _firmwareId = null;
     _consecutiveFailures = 0;
@@ -559,9 +655,9 @@ class BoardClient extends ChangeNotifier {
       _err('rxSub.cancel during disconnect: $e');
     }
     try {
-      await oldPort?.close().timeout(const Duration(seconds: 2));
+      await oldTransport?.close().timeout(const Duration(seconds: 2));
     } catch (e) {
-      _err('port.close during disconnect: $e (handle abandoned)');
+      _err('transport.close during disconnect: $e (handle abandoned)');
     }
   }
 
@@ -578,7 +674,8 @@ class BoardClient extends ChangeNotifier {
     return Uint8List.fromList([crc & 0xFF, (crc >> 8) & 0xFF]);
   }
 
-  Uint8List buildFrame(int cmd, List<int> data) {
+  Uint8List buildFrame(int cmd, List<int> data, {bool? password}) {
+    final usePassword = password ?? _useM102Password;
     final frame = Uint8List(20);
     frame[0] = _slaveAddr & 0xFF;
     frame[1] = cmd & 0xFF;
@@ -588,7 +685,7 @@ class BoardClient extends ChangeNotifier {
     // CRC over `addr+order+data` (18 bytes), optionally followed by the
     // 11-byte M102 password — the board firmware uses the same recipe and
     // drops frames whose CRC doesn't match.
-    final crcInput = _useM102Password
+    final crcInput = usePassword
         ? Uint8List.fromList([...frame.sublist(0, 18), ...m102Password])
         : frame.sublist(0, 18);
     final crc = _crc16Modbus(crcInput);
@@ -601,7 +698,7 @@ class BoardClient extends ChangeNotifier {
   /// Returns null on timeout or no connection.
   Future<Uint8List?> _sendAndReceive(int opcode, List<int> data,
       {Duration timeout = const Duration(milliseconds: 800)}) async {
-    if (_port == null) {
+    if (_transport == null) {
       _err('not connected');
       return null;
     }
@@ -624,7 +721,7 @@ class BoardClient extends ChangeNotifier {
     });
 
     try {
-      await _port!.write(frame);
+      await _transport!.write(frame);
     } catch (e) {
       _err('write: $e');
       _pendingTimeout?.cancel();
@@ -715,7 +812,7 @@ class BoardClient extends ChangeNotifier {
   /// came back. Used by cart/pay flows so payment can't be initiated
   /// against a dead bus.
   Future<bool> ping({Duration timeout = const Duration(milliseconds: 600)}) async {
-    if (_port == null) return false;
+    if (_transport == null) return false;
     final r = await _sendAndReceive(0x01, List.filled(16, 0), timeout: timeout);
     return r != null && r.isNotEmpty;
   }
@@ -945,7 +1042,7 @@ class BoardClient extends ChangeNotifier {
   void dispose() {
     _failPending('disposed');
     _rxSub?.cancel();
-    _port?.close();
+    _transport?.close();
     _usbEventSub?.cancel();
     _usbPermissionSub?.cancel();
     _healthWatchdog?.cancel();
