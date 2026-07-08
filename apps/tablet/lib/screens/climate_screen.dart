@@ -150,8 +150,8 @@ class ClimateScreen extends StatelessWidget {
               ],
             ),
             Builder(builder: (_) {
-              final double min = isCooling ? -5 : 15;
-              final double max = isCooling ? 18 : 35;
+              final double min = isCooling ? 6 : 15;
+              final double max = isCooling ? 10 : 35;
               // Defensive clamp — ClimateController.updateConfig also
               // clamps when mode changes, but if a stale persisted
               // value lands here before that runs we don't want the
@@ -160,7 +160,7 @@ class ClimateScreen extends StatelessWidget {
               return Slider(
                 min: min,
                 max: max,
-                divisions: isCooling ? 46 : 40,
+                divisions: isCooling ? 8 : 40,
                 value: v,
                 label: '${v.toStringAsFixed(1)} °C',
                 onChanged: (n) => ctrl.updateConfig(cfg.copyWith(setpointC: n)),

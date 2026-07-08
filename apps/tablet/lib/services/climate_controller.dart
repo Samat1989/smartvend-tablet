@@ -170,7 +170,7 @@ class ClimateController extends ChangeNotifier {
   void updateConfig(ClimateConfig next) {
     final modeChanged = _config.mode != next.mode;
     // Clamp setpoint to the active mode's allowed range so a flip
-    // from cooling (-5..18 °C) to heating (15..35 °C), or vice
+    // from cooling (6..10 °C) to heating (15..35 °C), or vice
     // versa, can never leave a value outside the slider's bounds
     // (the UI Slider asserts on out-of-range value and crashes the
     // climate screen). Same ranges as climate_screen.dart's slider.
@@ -199,7 +199,7 @@ class ClimateController extends ChangeNotifier {
   }
 
   /// Per-mode setpoint window (must match the Slider in
-  /// climate_screen.dart). Cooling: -5..18 °C, heating: 15..35 °C,
+  /// climate_screen.dart). Cooling: 6..10 °C, heating: 15..35 °C,
   /// off: any (we still clamp into the cooling window so a later
   /// flip to heating doesn't surprise the UI).
   static double _clampSetpoint(ClimateMode mode, double v) {
@@ -208,7 +208,7 @@ class ClimateController extends ChangeNotifier {
         return v.clamp(15.0, 35.0);
       case ClimateMode.cooling:
       case ClimateMode.off:
-        return v.clamp(-5.0, 18.0);
+        return v.clamp(6.0, 10.0);
     }
   }
 
