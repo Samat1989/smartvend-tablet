@@ -1,5 +1,6 @@
 package kz.smartvend.m102_tester
 
+import android.app.ActivityManager
 import android.app.AlarmManager
 import android.app.PendingIntent
 import android.app.admin.DevicePolicyManager
@@ -267,6 +268,25 @@ class MainActivity : FlutterActivity() {
     private fun installApk(path: String) {
         val file = File(path)
         require(file.exists() && file.canRead()) { "APK not readable: $path" }
+
+        // Non-device-owner installs need the system "Install?" confirm
+        // dialog, which lock-task (kiosk) mode blocks ("Lock Task Mode
+        // violation") — so the update silently never lands. Drop out of lock
+        // task first so the dialog can appear; a successful install replaces
+        // the process and re-enters kiosk on relaunch. Device-owner installs
+        // are silent (no dialog), so we keep kiosk intact for them.
+        val dpm = getSystemService(Context.DEVICE_POLICY_SERVICE) as? DevicePolicyManager
+        if (dpm?.isDeviceOwnerApp(packageName) != true) {
+            try {
+                val am = getSystemService(Context.ACTIVITY_SERVICE) as? ActivityManager
+                if (am?.lockTaskModeState != ActivityManager.LOCK_TASK_MODE_NONE) {
+                    stopLockTask()
+                    Log.i(TAG_KIOSK, "left lock task so the install dialog can show")
+                }
+            } catch (e: Exception) {
+                Log.w(TAG_KIOSK, "stopLockTask before install failed: ${e.message}")
+            }
+        }
 
         val installer = packageManager.packageInstaller
         val params = PackageInstaller.SessionParams(
