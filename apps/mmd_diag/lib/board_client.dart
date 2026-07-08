@@ -3,6 +3,8 @@ import 'dart:async';
 import 'package:flutter/foundation.dart';
 import 'package:usb_serial/usb_serial.dart';
 
+import 'transport.dart';
+
 /// Per-line entry shown in the diagnostic log panel.
 class LogLine {
   LogLine(this.timestamp, this.direction, this.text);
@@ -97,22 +99,27 @@ class BoardClient extends ChangeNotifier {
   ];
 
   // ─── State ─────────────────────────────────────────────────────────
-  UsbPort? _port;
-  UsbDevice? _device;
+  BoardTransport? _transport;
+  UsbDevice? _device; // set only for USB connections (UI compatibility)
   StreamSubscription<Uint8List>? _rxSub;
   final List<int> _rxBuffer = [];
   Completer<Uint8List?>? _pending;
   Timer? _pendingTimeout;
   int _slaveAddr = defaultSlaveAddr;
-  bool _useM102Password = true;
+  // Default OFF: the 2307-series boards in the field ignore the CRC
+  // password. Flip ON from the UI for firmware that enforces it.
+  bool _useM102Password = false;
   String? _firmwareId;
 
   final List<LogLine> _logs = [];
   static const int _logCap = 500;
   List<LogLine> get logs => List.unmodifiable(_logs);
 
-  bool get isConnected => _port != null;
+  bool get isConnected => _transport != null;
   UsbDevice? get device => _device;
+
+  /// Human label for the active transport (USB product name or ttyS path).
+  String get connectionLabel => _transport?.description ?? '—';
   String? get firmwareId => _firmwareId;
   int get slaveAddr => _slaveAddr;
   bool get useM102Password => _useM102Password;
@@ -137,40 +144,41 @@ class BoardClient extends ChangeNotifier {
     return all;
   }
 
-  Future<bool> connect(UsbDevice dev, {int baud = defaultBaud}) async {
+  /// Connect over a USB-serial adapter (CH340/FTDI/…). The transport
+  /// deliberately leaves DTR/RTS alone — the CH340 uses RTS as automatic
+  /// RS-485 direction control; see [UsbTransport].
+  Future<bool> connect(UsbDevice dev, {int baud = defaultBaud}) =>
+      _open(UsbTransport(dev, baud: baud), usbDevice: dev, baud: baud);
+
+  /// Connect over a native on-SoC UART (`/dev/ttySX`) instead of a USB
+  /// adapter — for industrial tablets whose serial port is wired straight
+  /// to the SoC (no USB-serial chip, so `usb_serial` can't see it). See
+  /// [NativeUartTransport]. Verified against an M109E on `/dev/ttyS2`.
+  Future<bool> connectNative(String path, {int baud = defaultBaud}) =>
+      _open(NativeUartTransport(path, baud: baud), baud: baud);
+
+  Future<bool> _open(
+    BoardTransport transport, {
+    UsbDevice? usbDevice,
+    int baud = defaultBaud,
+  }) async {
     await disconnect();
-    final port = await dev.create();
-    if (port == null || !await port.open()) {
-      _log(LogDir.err, 'open() failed for ${dev.productName}');
+    // Surface the transport's own setup diagnostics (stty/cat/dd) in the
+    // BUS LOG so a failed open() says *why*.
+    transport.logger = (m) => _log(LogDir.info, m);
+    if (!await transport.open()) {
+      _log(LogDir.err, 'open() failed for ${transport.description}');
+      await transport.close();
       return false;
     }
-    // Match m102_tester exactly: do NOT touch DTR / RTS. The CH340
-    // chip in the M109E kiosk wiring uses RTS as its **automatic**
-    // DE/RE direction control for the RS-485 transceiver — the chip
-    // raises RTS for the duration of an outgoing UART byte and drops
-    // it afterwards, so the transceiver is in TX exactly when needed
-    // and RX otherwise.
-    //
-    // Explicitly calling setRTS(false) (or setDTR(false)) overrides
-    // that auto-toggle and pins the line LOW — meaning the transceiver
-    // never enters TX, and our frames are accepted by the chip but
-    // never make it to the bus. Symptom: TX appears in our log, board
-    // never sees it, every reply times out. Hence: leave the line
-    // alone after open(), let the driver handle direction.
-    await port.setPortParameters(
-      baud,
-      UsbPort.DATABITS_8,
-      UsbPort.STOPBITS_1,
-      UsbPort.PARITY_NONE,
-    );
-    _port = port;
-    _device = dev;
+    _transport = transport;
+    _device = usbDevice;
     _rxBuffer.clear();
-    _rxSub = port.inputStream!.listen(
+    _rxSub = transport.onData.listen(
       _onRx,
       onError: (e) => _log(LogDir.err, 'rx stream: $e'),
     );
-    _log(LogDir.info, 'Opened ${dev.productName ?? "device"} @ '
+    _log(LogDir.info, 'Opened ${transport.description} @ '
         '${baud}bps 8N1, slave=$_slaveAddr');
     notifyListeners();
     return true;
@@ -182,13 +190,14 @@ class BoardClient extends ChangeNotifier {
     _pendingTimeout?.cancel();
     _pending?.complete(null);
     _pending = null;
-    try {
-      await _port?.close();
-    } catch (_) {}
-    _port = null;
+    final transport = _transport;
+    _transport = null;
     _device = null;
     _firmwareId = null;
     _rxBuffer.clear();
+    try {
+      await transport?.close();
+    } catch (_) {}
     _log(LogDir.info, 'Closed');
     notifyListeners();
   }
@@ -382,8 +391,8 @@ class BoardClient extends ChangeNotifier {
     int? addrOverride,
     Duration timeout = const Duration(seconds: 1),
   }) async {
-    final port = _port;
-    if (port == null) {
+    final transport = _transport;
+    if (transport == null) {
       _log(LogDir.err, 'not connected');
       return null;
     }
@@ -402,7 +411,7 @@ class BoardClient extends ChangeNotifier {
       }
     });
     _log(LogDir.tx, _hex(frame));
-    await port.write(frame);
+    await transport.write(frame);
     final resp = await _pending!.future;
     _pendingTimeout?.cancel();
     _pending = null;

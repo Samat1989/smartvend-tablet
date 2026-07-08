@@ -128,7 +128,7 @@ class _ConnStrip extends StatelessWidget {
           Expanded(
             child: Text(
               board.isConnected
-                  ? '${board.device?.productName ?? "device"} · '
+                  ? '${board.connectionLabel} · '
                       'slave=${board.slaveAddr} · '
                       'fw=${board.firmwareId ?? "?"}'
                   : 'Disconnected',
@@ -159,6 +159,11 @@ class _ConnectTab extends StatelessWidget {
     return ListView(
       padding: const EdgeInsets.all(16),
       children: [
+        Text('Native serial port (/dev/ttySX)',
+            style: Theme.of(context).textTheme.titleMedium),
+        const SizedBox(height: 8),
+        _NativeConnectCard(board: board),
+        const Divider(height: 32),
         Row(
           children: [
             Expanded(
@@ -291,6 +296,76 @@ class _ConnectTab extends StatelessWidget {
     if (picked != null && picked >= 1 && picked <= 8) {
       board.setSlaveAddr(picked);
     }
+  }
+}
+
+// ─── Native serial (/dev/ttySX) connect card ────────────────────────
+
+/// Connect over an on-SoC UART for tablets whose serial port is wired
+/// straight to the SoC (no USB-serial chip). Pick the node — on the
+/// BKP910PRO the external RS-232 port is /dev/ttyS2 — and Open. Baud is
+/// fixed at 9600 8N1 (board spec).
+class _NativeConnectCard extends StatefulWidget {
+  const _NativeConnectCard({required this.board});
+  final BoardClient board;
+
+  @override
+  State<_NativeConnectCard> createState() => _NativeConnectCardState();
+}
+
+class _NativeConnectCardState extends State<_NativeConnectCard> {
+  static const _nodes = [
+    '/dev/ttyS1',
+    '/dev/ttyS2',
+    '/dev/ttyS3',
+    '/dev/ttyS4',
+    '/dev/ttyS5',
+    '/dev/ttyS6',
+  ];
+  String _path = '/dev/ttyS2';
+
+  @override
+  Widget build(BuildContext context) {
+    final b = widget.board;
+    // Connected to *this* native path when connected, no USB device, and
+    // the transport label matches the selected node.
+    final connectedHere =
+        b.isConnected && b.device == null && b.connectionLabel == _path;
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(12),
+        child: Row(
+          children: [
+            const Icon(Icons.settings_input_hdmi),
+            const SizedBox(width: 12),
+            Expanded(
+              child: DropdownButtonFormField<String>(
+                initialValue: _path,
+                decoration: const InputDecoration(
+                  labelText: 'UART node',
+                  border: OutlineInputBorder(),
+                  isDense: true,
+                ),
+                items: [
+                  for (final n in _nodes)
+                    DropdownMenuItem(value: n, child: Text(n)),
+                ],
+                onChanged: b.isConnected
+                    ? null
+                    : (v) => setState(() => _path = v ?? _path),
+              ),
+            ),
+            const SizedBox(width: 12),
+            ElevatedButton(
+              onPressed: connectedHere
+                  ? b.disconnect
+                  : () => b.connectNative(_path),
+              child: Text(connectedHere ? 'Disconnect' : 'Open'),
+            ),
+          ],
+        ),
+      ),
+    );
   }
 }
 
