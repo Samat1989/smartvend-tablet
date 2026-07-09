@@ -83,6 +83,11 @@ class ClimateController extends ChangeNotifier {
   static const int _heatingSpinupTicks = 12;     // 2 min at 10 s tick
   static const int _tempPollSec = 10;
   static const int _humidityPollSec = 30;
+  /// Consecutive failed temperature reads tolerated before we treat the
+  /// probe as gone. Below this we keep the last good reading, so a single
+  /// dropped frame on the shared bus doesn't shut cooling off and
+  /// power-cycle the compressor. 3 × 10 s ≈ 30 s of real silence required.
+  static const int _maxMissedTempReads = 3;
 
   /// True once the compressor has been energised at least once since
   /// app boot. Used to pick the right fan-warmup duration:
@@ -99,6 +104,7 @@ class ClimateController extends ChangeNotifier {
 
   // ---- live readings ----
   double? _temperatureC;
+  int _missedTempReads = 0;
   int? _humidityPercent;
   double? get temperatureC => _temperatureC;
   int? get humidityPercent => _humidityPercent;
@@ -237,7 +243,20 @@ class ClimateController extends ChangeNotifier {
       if (!_started) return;
       if (_pausedForDispense) return;
       if (board.isConnected) {
-        _temperatureC = await board.readTemp();
+        final t = await board.readTemp();
+        if (t != null) {
+          _temperatureC = t;
+          _missedTempReads = 0;
+        } else {
+          // Tolerate a short run of dropped reads: keep the last good value
+          // so cooling holds steady instead of shutting off + restarting the
+          // spin-up on every single missed frame. Only after
+          // [_maxMissedTempReads] in a row do we surface "no probe".
+          _missedTempReads++;
+          if (_missedTempReads >= _maxMissedTempReads) {
+            _temperatureC = null;
+          }
+        }
       }
       await _evaluate();
       notifyListeners();

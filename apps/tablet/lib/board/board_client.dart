@@ -114,6 +114,9 @@ class BoardClient extends ChangeNotifier {
   Completer<Uint8List>? _pendingResponse;
   int? _pendingOpcode;
   Timer? _pendingTimeout;
+  /// Serializes board exchanges so two requests never overlap — see
+  /// [_sendAndReceive]. Each call chains onto the previous one's future.
+  Future<void> _busLock = Future<void>.value();
 
   /// Factory uses `BOTELV_9600 = 9600`, 8N1.
   int _baud = 9600;
@@ -696,16 +699,30 @@ class BoardClient extends ChangeNotifier {
 
   /// Send a raw frame and await the next 20-byte response (within [timeout]).
   /// Returns null on timeout or no connection.
+  ///
+  /// Serialized through [_busLock]: the M102 link is strictly request→reply
+  /// on one wire, and [_onRx] matches a reply by the single pending opcode.
+  /// Overlapping callers (climate temp/humidity polls, the 900 ms heartbeat,
+  /// a dispense) used to overwrite that pending state whenever a reply took
+  /// longer than the old 200 ms overlap window — the reply then matched the
+  /// wrong request and was dropped, surfacing as spurious nulls (climate
+  /// "no temperature probe", needless compressor restarts). The mutex makes
+  /// every exchange run to completion before the next one starts.
   Future<Uint8List?> _sendAndReceive(int opcode, List<int> data,
+      {Duration timeout = const Duration(milliseconds: 800)}) {
+    final prev = _busLock;
+    final done = Completer<void>();
+    _busLock = done.future;
+    return prev
+        .then((_) => _exchange(opcode, data, timeout: timeout))
+        .whenComplete(done.complete);
+  }
+
+  Future<Uint8List?> _exchange(int opcode, List<int> data,
       {Duration timeout = const Duration(milliseconds: 800)}) async {
     if (_transport == null) {
       _err('not connected');
       return null;
-    }
-    // If a previous request is still pending, wait briefly to avoid overlap.
-    if (_pendingResponse != null && !_pendingResponse!.isCompleted) {
-      await _pendingResponse!.future.timeout(const Duration(milliseconds: 200),
-          onTimeout: () => Uint8List(0));
     }
 
     final frame = buildFrame(opcode, data);
