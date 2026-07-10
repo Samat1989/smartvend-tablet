@@ -25,6 +25,10 @@
 #include "esp_crt_bundle.h"
 #include "esp_https_ota.h"
 
+// Optional GSM (LTE) uplink via an A7670E modem over PPP (esp_modem).
+#include "esp_modem_api.h"
+#include "esp_netif_ppp.h"
+
 #include "lwip/sockets.h"
 
 static const char *TAG = "relay_mart";
@@ -81,9 +85,23 @@ static const char *TAG = "relay_mart";
 #define PROVISION_PRESS_COUNT 3     // > this many presses -> provisioning
 
 #define NVS_CFG_NS        "cfg"
+
+// --- GSM modem (A7670E/SIM7600 via esp_modem PPP) — alt uplink to WiFi.
+// Pins/power taken from the relay board's Arduino/TinyGSM firmware (config.h):
+//   ESP TX(GPIO25) -> modem RXD, ESP RX(GPIO26) <- modem TXD, 115200 8N1.
+//   The modem is NOT auto-powered — its VCC/enable is gated by CELLULAR_POWER
+//   (GPIO5): drive it LOW ~1 s, then HIGH and keep HIGH to switch the modem on.
+// The DCE is SIM7600 (drives the A76xx AT command set).
+#define GSM_UART_TX_GPIO   25
+#define GSM_UART_RX_GPIO   26
+#define GSM_UART_BAUD      115200
+#define GSM_POWER_GPIO     5        // CELLULAR_POWER enable line (active HIGH)
+#define GSM_BOOT_DELAY_MS  10000    // modem cold-boot time after power-on
+#define GSM_DEFAULT_APN    "internet"
 // ---------------------
 
 // Provisioned config (loaded from NVS, or filled in by the setup portal).
+static char g_netmode[8]      = "wifi"; // uplink: "wifi" | "gsm"
 static char g_wifi_ssid[64]   = {0};
 static char g_wifi_pass[64]   = {0};
 static char g_machid[16]      = {0};
@@ -106,10 +124,18 @@ static int  g_open_seconds = DEFAULT_OPEN_SECONDS;  // relay hold time (provisio
 
 // WiFi STA connection signalling (used while provisioning to know if the
 // entered credentials actually work before we commit them).
+// s_wifi_eg's CONNECTED bit means "an uplink has an IP" — it is set by BOTH the
+// WiFi got-IP handler and the PPP (GSM) got-IP handler, so the rest of the flow
+// (MQTT start, provisioning validation) is transport-agnostic.
 static EventGroupHandle_t s_wifi_eg;
 #define WIFI_CONNECTED_BIT BIT0
 #define WIFI_FAIL_BIT      BIT1
+#define GSM_LOST_BIT       BIT2   // PPP link dropped — [gsm_link_task] restarts the modem
 static int s_sta_retries = 0;
+
+// GSM modem (esp_modem PPP) handles.
+static esp_modem_dce_t *s_dce = NULL;
+static esp_netif_t     *s_ppp_netif = NULL;
 
 // ============================ NVS config ============================
 static esp_err_t cfg_get(const char *key, char *out, size_t out_sz) {
@@ -147,12 +173,16 @@ static bool cfg_load(void) {
         int v = atoi(osbuf);
         if (v >= 1 && v <= 600) g_open_seconds = v;
     }
-    if (cfg_get("ssid", g_wifi_ssid, sizeof(g_wifi_ssid)) != ESP_OK) return false;
+    cfg_get("netmode", g_netmode, sizeof(g_netmode));
+    if (g_netmode[0] == 0) strcpy(g_netmode, "wifi");
+    bool gsm = (strcmp(g_netmode, "gsm") == 0);
+    cfg_get("ssid", g_wifi_ssid, sizeof(g_wifi_ssid));
     cfg_get("pass", g_wifi_pass, sizeof(g_wifi_pass));   // empty pass allowed
     if (cfg_get("machid", g_machid, sizeof(g_machid)) != ESP_OK) return false;
     if (cfg_get("uuid", g_mqtt_uuid, sizeof(g_mqtt_uuid)) != ESP_OK) return false;
     if (cfg_get("secret", g_mqtt_secret, sizeof(g_mqtt_secret)) != ESP_OK) return false;
-    if (g_wifi_ssid[0] == 0 || g_mqtt_uuid[0] == 0 || g_mqtt_secret[0] == 0) return false;
+    if (g_mqtt_uuid[0] == 0 || g_mqtt_secret[0] == 0) return false;
+    if (!gsm && g_wifi_ssid[0] == 0) return false;   // WiFi mode needs an SSID
     snprintf(g_mqtt_topic, sizeof(g_mqtt_topic), "vending/%s/in", g_mqtt_uuid);
     return true;
 }
@@ -209,20 +239,6 @@ static esp_err_t post_order_once(const char* orderid) {
     return (err == ESP_OK && status >= 200 && status < 300) ? ESP_OK : ESP_FAIL;
 }
 
-// Own task so lock timing stays independent of the network; retries on failure.
-static void notify_task(void *pvParameters) {
-    char* orderid = (char*)pvParameters;
-    if (orderid) {
-        for (int attempt = 1; attempt <= 3; attempt++) {
-            if (post_order_once(orderid) == ESP_OK) break;
-            ESP_LOGW(TAG, "complete-order notify attempt %d failed, retrying...", attempt);
-            vTaskDelay(pdMS_TO_TICKS(3000));
-        }
-        free(orderid);
-    }
-    vTaskDelete(NULL);
-}
-
 // ============================ Relay (latching) ============================
 // Configure both relay pins as outputs, driven low. Safe to call once at boot.
 static void relay_pins_init(void) {
@@ -253,16 +269,37 @@ static void relay_off(void) {
     gpio_set_level(RELAY_PULSE_GPIO, 0);
 }
 
-// Open the relay for the provisioned hold time, then latch it closed.
-static void trigger_lock(void *pvParameters) {
-    is_lock_active = true;
-    ESP_LOGI(TAG, "🔓 RELAY ON (DIR IO%d / PULSE IO%d) for %d s",
-             RELAY_DIR_GPIO, RELAY_PULSE_GPIO, g_open_seconds);
-    relay_on();
-    vTaskDelay(pdMS_TO_TICKS((uint32_t)g_open_seconds * 1000));
-    relay_off();
-    ESP_LOGI(TAG, "🔒 RELAY OFF");
+// Confirm the order with Supabase FIRST, then open the relay ONLY on HTTP 200.
+// [orderid] is a heap copy this task owns and frees. Runs off the MQTT task so
+// the confirm + door timing don't block MQTT. On failure (no 200 after retries)
+// the relay stays closed and the order is NOT recorded, so an MQTT redelivery
+// can retry it. [is_lock_active] is set by the caller and cleared here.
+static void handle_order_task(void *pvParameters) {
+    char* orderid = (char*)pvParameters;
+    bool confirmed = false;
+    for (int attempt = 1; attempt <= 3; attempt++) {
+        if (post_order_once(orderid) == ESP_OK) { confirmed = true; break; }
+        ESP_LOGW(TAG, "complete-order attempt %d failed (no 200), retrying...", attempt);
+        vTaskDelay(pdMS_TO_TICKS(3000));
+    }
+
+    if (confirmed) {
+        // Server confirmed the sale (HTTP 200) — remember the order (idempotency)
+        // and open the door for the provisioned hold time.
+        strncpy(last_order_id, orderid, sizeof(last_order_id) - 1);
+        save_last_order_to_nvs(last_order_id);
+        ESP_LOGI(TAG, "🔓 RELAY ON (order %s confirmed 200, DIR IO%d/PULSE IO%d) for %d s",
+                 orderid, RELAY_DIR_GPIO, RELAY_PULSE_GPIO, g_open_seconds);
+        relay_on();
+        vTaskDelay(pdMS_TO_TICKS((uint32_t)g_open_seconds * 1000));
+        relay_off();
+        ESP_LOGI(TAG, "🔒 RELAY OFF");
+    } else {
+        ESP_LOGE(TAG, "❌ order %s NOT confirmed by server — relay stays CLOSED", orderid);
+    }
+
     is_lock_active = false;
+    free(orderid);
     vTaskDelete(NULL);
 }
 
@@ -397,16 +434,24 @@ static void mqtt_event_handler(void *handler_args, esp_event_base_t base, int32_
                             if (strcmp(last_order_id, orderid->valuestring) == 0) {
                                 ESP_LOGI(TAG, "Duplicate order ID detected (%s). Skipping.", last_order_id);
                             } else {
-                                ESP_LOGI(TAG, "✅ New Payment confirmed! Order: %s", orderid->valuestring);
-                                strncpy(last_order_id, orderid->valuestring, sizeof(last_order_id) - 1);
-                                save_last_order_to_nvs(last_order_id);
-
-                                // Open the lock and notify the server on separate
-                                // tasks: door timing must not wait on the network,
-                                // and the HTTPS/TLS POST needs a larger stack.
-                                xTaskCreate(trigger_lock, "lock_task", 4096, NULL, 5, NULL);
+                                ESP_LOGI(TAG, "✅ New payment MQTT for order %s — confirming with server",
+                                         orderid->valuestring);
+                                // Claim the slot before the task runs (the MQTT task
+                                // is serial, so this is atomic vs the is_lock_active
+                                // check above). The order is confirmed with Supabase
+                                // and the relay opens ONLY on HTTP 200 — see
+                                // handle_order_task; last_order is committed there,
+                                // only after a confirmed open, so an unconfirmed
+                                // order can be retried on MQTT redelivery.
+                                is_lock_active = true;
                                 char* id_copy = strdup(orderid->valuestring);
-                                xTaskCreate(notify_task, "notify_task", 8192, (void*)id_copy, 5, NULL);
+                                if (!id_copy ||
+                                    xTaskCreate(handle_order_task, "order_task", 8192,
+                                                (void*)id_copy, 5, NULL) != pdPASS) {
+                                    ESP_LOGE(TAG, "failed to start order task");
+                                    if (id_copy) free(id_copy);
+                                    is_lock_active = false;
+                                }
                             }
                         }
                     }
@@ -537,6 +582,176 @@ static bool provision_fetch_and_store(const char* machid) {
     }
     esp_http_client_cleanup(client);
     return ok;
+}
+
+// ============================ GSM modem (PPP uplink) ============================
+static void ppp_ip_event_handler(void *arg, esp_event_base_t base, int32_t id, void *data) {
+    if (id == IP_EVENT_PPP_GOT_IP) {
+        ip_event_got_ip_t *e = (ip_event_got_ip_t *) data;
+        ESP_LOGI(TAG, "[GSM] PPP got IP: " IPSTR, IP2STR(&e->ip_info.ip));
+        g_has_ip = true;
+        if (s_wifi_eg) xEventGroupSetBits(s_wifi_eg, WIFI_CONNECTED_BIT);
+    } else if (id == IP_EVENT_PPP_LOST_IP) {
+        ESP_LOGW(TAG, "[GSM] PPP lost IP");
+        g_has_ip = false;
+        g_mqtt_up = false;
+        if (s_wifi_eg) xEventGroupSetBits(s_wifi_eg, GSM_LOST_BIT);
+    }
+}
+
+// Bring up the A7670E over PPP. Blocking through modem sync (~10 s incl. the
+// boot delay); the PPP IP arrives asynchronously and is signalled via the
+// shared [s_wifi_eg] CONNECTED bit. Returns true once the modem is in data mode.
+static bool gsm_start(void) {
+    ESP_LOGI(TAG, "[GSM] start: APN=%s UART tx=%d rx=%d @%d",
+             GSM_DEFAULT_APN, GSM_UART_TX_GPIO, GSM_UART_RX_GPIO, GSM_UART_BAUD);
+
+    // Power the modem on (the relay board gates modem VCC via GPIO5): drive it
+    // LOW, wait, then HIGH and keep it HIGH — matches the Arduino firmware's
+    // CELLULAR_POWER sequence. Without this the modem never boots -> AT timeout.
+    gpio_config_t pw = { .pin_bit_mask = 1ULL << GSM_POWER_GPIO,
+                         .mode = GPIO_MODE_OUTPUT };
+    gpio_config(&pw);
+    gpio_set_level(GSM_POWER_GPIO, 0);
+    vTaskDelay(pdMS_TO_TICKS(1000));
+    gpio_set_level(GSM_POWER_GPIO, 1);
+    ESP_LOGI(TAG, "[GSM] modem power ON (GPIO%d HIGH), booting %d ms",
+             GSM_POWER_GPIO, GSM_BOOT_DELAY_MS);
+    vTaskDelay(pdMS_TO_TICKS(GSM_BOOT_DELAY_MS));
+
+    if (!s_ppp_netif) {
+        esp_netif_config_t ppp_cfg = ESP_NETIF_DEFAULT_PPP();
+        s_ppp_netif = esp_netif_new(&ppp_cfg);
+        if (!s_ppp_netif) { ESP_LOGE(TAG, "[GSM] esp_netif_new failed"); return false; }
+        esp_event_handler_instance_register(IP_EVENT, IP_EVENT_PPP_GOT_IP,
+                                            &ppp_ip_event_handler, NULL, NULL);
+        esp_event_handler_instance_register(IP_EVENT, IP_EVENT_PPP_LOST_IP,
+                                            &ppp_ip_event_handler, NULL, NULL);
+    }
+
+    // The A7670E stays powered across an ESP-only reset (no PWRKEY here), so it
+    // may still be in PPP/DATA mode from a prior session and won't answer "AT".
+    // Recreating the DCE each round (like the cloudcore firmware's retry loop)
+    // resets the DTE state and recovers; the extra tries also cover a slow first
+    // sync right after modem boot.
+    for (int attempt = 1; attempt <= 5; attempt++) {
+        esp_modem_dte_config_t dte = ESP_MODEM_DTE_DEFAULT_CONFIG();
+        dte.uart_config.tx_io_num    = GSM_UART_TX_GPIO;
+        dte.uart_config.rx_io_num    = GSM_UART_RX_GPIO;
+        dte.uart_config.rts_io_num   = -1;
+        dte.uart_config.cts_io_num   = -1;
+        dte.uart_config.flow_control = ESP_MODEM_FLOW_CONTROL_NONE;
+        dte.uart_config.baud_rate    = GSM_UART_BAUD;
+        // A7670E is SIMCom; the generic SIM7600 DCE drives the A76xx AT set.
+        esp_modem_dce_config_t dce = ESP_MODEM_DCE_DEFAULT_CONFIG(GSM_DEFAULT_APN);
+
+        s_dce = esp_modem_new_dev(ESP_MODEM_DCE_SIM7600, &dte, &dce, s_ppp_netif);
+        if (!s_dce) {
+            ESP_LOGE(TAG, "[GSM] esp_modem_new_dev failed (attempt %d)", attempt);
+            vTaskDelay(pdMS_TO_TICKS(2000));
+            continue;
+        }
+
+        esp_err_t err = esp_modem_sync(s_dce);
+        if (err != ESP_OK) {
+            ESP_LOGW(TAG, "[GSM] AT sync #%d failed (%s); +++ escape and retry",
+                     attempt, esp_err_to_name(err));
+            esp_modem_set_mode(s_dce, ESP_MODEM_MODE_COMMAND);
+            vTaskDelay(pdMS_TO_TICKS(2000));
+            err = esp_modem_sync(s_dce);
+        }
+        if (err == ESP_OK) {
+            esp_modem_at(s_dce, "AT+CNMP=2", NULL, 1000);   // network mode: auto
+            err = esp_modem_set_mode(s_dce, ESP_MODEM_MODE_DATA);
+            if (err == ESP_OK) {
+                ESP_LOGI(TAG, "[GSM] PPP data mode; waiting for IP");
+                return true;
+            }
+            ESP_LOGE(TAG, "[GSM] enter DATA mode failed: %s", esp_err_to_name(err));
+        }
+        // Failed this round — tear the DCE down and retry with a fresh one.
+        esp_modem_destroy(s_dce);
+        s_dce = NULL;
+        ESP_LOGW(TAG, "[GSM] attempt %d failed, retrying in 3s", attempt);
+        vTaskDelay(pdMS_TO_TICKS(3000));
+    }
+    ESP_LOGE(TAG, "[GSM] modem not responding — check UART wiring/power/SIM");
+    return false;
+}
+
+// Wait up to [timeout_ms] for any uplink (WiFi or GSM) to acquire an IP.
+static bool net_wait_ip(int timeout_ms) {
+    if (!s_wifi_eg) return false;
+    EventBits_t b = xEventGroupWaitBits(s_wifi_eg, WIFI_CONNECTED_BIT,
+                                        pdFALSE, pdFALSE, pdMS_TO_TICKS(timeout_ms));
+    return (b & WIFI_CONNECTED_BIT) != 0;
+}
+
+// Owns the GSM link in normal operation: brings PPP up and, whenever it drops
+// (SIM pulled, signal lost, network reset), restarts the modem and re-dials.
+// Without this a dropped PPP session never recovers — MQTT just spins forever on
+// getaddrinfo. Re-powering the modem on each cycle also lets a re-inserted SIM
+// be re-read.
+static void gsm_link_task(void *pv) {
+    while (true) {
+        xEventGroupClearBits(s_wifi_eg, WIFI_CONNECTED_BIT | GSM_LOST_BIT);
+        if (!gsm_start()) {
+            ESP_LOGW(TAG, "[GSM] bring-up failed — retry in 10 s");
+            if (s_dce) { esp_modem_destroy(s_dce); s_dce = NULL; }
+            vTaskDelay(pdMS_TO_TICKS(10000));
+            continue;
+        }
+        // Entered data mode; wait (bounded) for the PPP IP. If it never comes
+        // (no SIM / no network), restart the modem rather than sit forever.
+        if (!net_wait_ip(60000)) {
+            ESP_LOGW(TAG, "[GSM] no IP after data mode — restarting modem");
+            if (s_dce) { esp_modem_destroy(s_dce); s_dce = NULL; }
+            vTaskDelay(pdMS_TO_TICKS(3000));
+            continue;
+        }
+        ESP_LOGI(TAG, "[GSM] link up");
+        // Block until PPP reports the link is gone, then cycle the modem.
+        xEventGroupWaitBits(s_wifi_eg, GSM_LOST_BIT, pdTRUE, pdFALSE, portMAX_DELAY);
+        ESP_LOGW(TAG, "[GSM] PPP down — restarting modem");
+        g_has_ip = false;
+        g_mqtt_up = false;
+        if (s_dce) { esp_modem_destroy(s_dce); s_dce = NULL; }
+        vTaskDelay(pdMS_TO_TICKS(2000));
+    }
+}
+
+// Portal GSM path: bring the modem up, fetch the machine identity over PPP, and
+// on success commit the config + reboot. Runs in the background so the HTTP
+// handler returns a "please wait" page instead of blocking for ~30-45 s. Set by
+// [save_post_handler] before the task is spawned.
+static char g_pend_machid[16] = {0};
+static int  g_pend_opensec    = DEFAULT_OPEN_SECONDS;
+
+static void gsm_provision_task(void *pv) {
+    xEventGroupClearBits(s_wifi_eg, WIFI_CONNECTED_BIT);
+    // Bring the modem up with the radio quiet (like the cloudcore firmware): the
+    // wait-page is already delivered, so we can drop the SoftAP now. This also
+    // rules out any Wi-Fi/modem contention during PPP negotiation.
+    esp_wifi_stop();
+    if (!gsm_start() || !net_wait_ip(60000)) {
+        ESP_LOGE(TAG, "[Setup/GSM] modem/IP failed — rebooting to portal");
+        vTaskDelay(pdMS_TO_TICKS(1500));
+        esp_restart();
+    }
+    esp_netif_set_default_netif(s_ppp_netif);
+    if (!provision_fetch_and_store(g_pend_machid)) {
+        ESP_LOGE(TAG, "[Setup/GSM] machid lookup failed — rebooting to portal");
+        vTaskDelay(pdMS_TO_TICKS(1500));
+        esp_restart();
+    }
+    char osstr[8];
+    snprintf(osstr, sizeof(osstr), "%d", g_pend_opensec);
+    cfg_set("netmode", "gsm");
+    cfg_set("machid", g_pend_machid);
+    cfg_set("opensec", osstr);
+    ESP_LOGI(TAG, "[Setup/GSM] provisioned OK, rebooting");
+    vTaskDelay(pdMS_TO_TICKS(800));
+    esp_restart();
 }
 
 // ============================ OTA (GitHub Releases) ============================
@@ -715,15 +930,29 @@ static const char PAGE_HEAD[] =
     "button{width:100%;margin-top:22px;padding:14px;border:none;border-radius:10px;background:#F14635;color:#fff;font-size:16px;font-weight:600}"
     "</style></head><body><h2>SmartVend — настройка</h2>"
     "<form method=POST action=/save>"
+    "<span class=lbl>Способ связи</span><div id=modes>"
+    "<label class=net><input type=radio name=netmode value=wifi checked onclick=selMode()><span class=nm>WiFi</span></label>"
+    "<label class=net><input type=radio name=netmode value=gsm onclick=selMode()><span class=nm>GSM (SIM / LTE)</span></label>"
+    "</div>"
+    "<div id=wifiblk>"
     "<span class=lbl>WiFi сеть</span><div id=nets>";
 static const char PAGE_TAIL_A[] =
     "</div>"
     "<span class=lbl>WiFi пароль</span><input name=pass type=password>"
+    "</div>"  // /wifiblk
+    "<div id=gsmblk style=display:none>"
+    "<span class=lbl>GSM (LTE): вставьте SIM с интернетом — APN определяется автоматически.</span>"
+    "</div>"
     "<span class=lbl>Номер аппарата (Machine ID)</span><input name=machid required inputmode=numeric>"
     "<span class=lbl>Время включения реле, сек</span>"
     "<input name=opensec type=number min=1 max=600 inputmode=numeric value='";
 static const char PAGE_TAIL_B[] =
-    "'><button type=submit>Сохранить и подключить</button></form></body></html>";
+    "'><button type=submit>Сохранить и подключить</button></form>"
+    "<script>function selMode(){var g=document.querySelector('input[name=netmode]:checked').value=='gsm';"
+    "document.getElementById('wifiblk').style.display=g?'none':'';"
+    "document.getElementById('gsmblk').style.display=g?'':'none';"
+    "document.querySelectorAll('#nets input').forEach(function(x){x.required=!g});}</script>"
+    "</body></html>";
 
 static esp_err_t root_get_handler(httpd_req_t *req) {
     httpd_resp_set_type(req, "text/html; charset=utf-8");
@@ -858,32 +1087,50 @@ static esp_err_t save_post_handler(httpd_req_t *req) {
     body[len] = 0;
 
     char ssid[64] = {0}, pass[64] = {0}, machid[16] = {0}, opensec[8] = {0};
+    char netmode[8] = {0};
     form_field(body, "ssid", ssid, sizeof(ssid));
     form_field(body, "pass", pass, sizeof(pass));
     form_field(body, "machid", machid, sizeof(machid));
     form_field(body, "opensec", opensec, sizeof(opensec));
-    if (ssid[0] == 0 || machid[0] == 0) {
-        return send_msg(req, "Ошибка", "Выберите сеть и впишите номер аппарата. <a href=/>Назад</a>");
-    }
-    ESP_LOGI(TAG, "[Setup] ssid=%s machid=%s", ssid, machid);
+    form_field(body, "netmode", netmode, sizeof(netmode));
+    if (netmode[0] == 0) strcpy(netmode, "wifi");
+    bool gsm = (strcmp(netmode, "gsm") == 0);
 
-    // 1) Try the WiFi credentials before committing.
+    if (machid[0] == 0) {
+        return send_msg(req, "Ошибка", "Впишите номер аппарата. <a href=/>Назад</a>");
+    }
+    int osv = atoi(opensec);
+    if (osv < 1 || osv > 600) osv = DEFAULT_OPEN_SECONDS;
+    g_open_seconds = osv;
+
+    // --- GSM: modem bring-up is slow (~30-60 s), so validate + fetch identity in
+    // the background and return a wait page instead of blocking the handler.
+    if (gsm) {
+        strncpy(g_pend_machid, machid, sizeof(g_pend_machid) - 1);
+        g_pend_opensec = osv;
+        ESP_LOGI(TAG, "[Setup] GSM machid=%s", machid);
+        send_msg(req, "Подключение по GSM…",
+                 "Модем поднимается, это ~30-60 секунд, затем аппарат перезагрузится сам. "
+                 "Если через минуту снова откроется эта настройка — проверьте SIM / APN / антенну.");
+        xTaskCreate(gsm_provision_task, "gsmprov", 8192, NULL, 5, NULL);
+        return ESP_OK;
+    }
+
+    // --- WiFi: fast — validate synchronously, then commit + reboot.
+    if (ssid[0] == 0) {
+        return send_msg(req, "Ошибка", "Выберите сеть. <a href=/>Назад</a>");
+    }
+    ESP_LOGI(TAG, "[Setup] WiFi ssid=%s machid=%s", ssid, machid);
     if (!wifi_sta_try(ssid, pass)) {
         return send_msg(req, "WiFi не подключился", "Проверьте сеть и пароль. <a href=/>Назад</a>");
     }
-
-    // 2) Look up this machine's MQTT identity by machid.
     if (!provision_fetch_and_store(machid)) {
         return send_msg(req, "Аппарат не найден",
                         "Номер не найден в системе или нет связи. <a href=/>Назад</a>");
     }
-
-    // 3) Commit WiFi + machid + relay hold time; reboot into normal mode.
-    int osv = atoi(opensec);
-    if (osv < 1 || osv > 600) osv = DEFAULT_OPEN_SECONDS;
-    g_open_seconds = osv;
     char osstr[8];
     snprintf(osstr, sizeof(osstr), "%d", osv);
+    cfg_set("netmode", "wifi");
     cfg_set("ssid", ssid);
     cfg_set("pass", pass);
     cfg_set("machid", machid);
@@ -1038,8 +1285,26 @@ void app_main(void) {
         return;
     }
 
-    // Normal operation.
-    wifi_start_normal();
+    // Normal operation — bring up the configured uplink, then MQTT + OTA.
+    if (strcmp(g_netmode, "gsm") == 0) {
+        ESP_LOGI(TAG, "[Boot] uplink = GSM (APN=%s)", GSM_DEFAULT_APN);
+        // Task owns the modem: initial dial + auto-restart on any PPP drop.
+        xTaskCreate(gsm_link_task, "gsm_link", 6144, NULL, 5, NULL);
+    } else {
+        ESP_LOGI(TAG, "[Boot] uplink = WiFi (ssid=%s)", g_wifi_ssid);
+        wifi_start_normal();
+    }
+
+    // Don't touch the network before we actually have an IP — otherwise MQTT and
+    // the OTA check race the uplink and log getaddrinfo failures. Bounded wait
+    // (GSM registration can take a while); if it's slow we proceed anyway since
+    // MQTT keeps retrying on its own.
+    if (net_wait_ip(90000)) {
+        ESP_LOGI(TAG, "[Boot] uplink has IP — starting MQTT + OTA");
+        vTaskDelay(pdMS_TO_TICKS(1500));   // let DHCP/PPP DNS settle before resolving
+    } else {
+        ESP_LOGW(TAG, "[Boot] no IP after 90 s — starting MQTT anyway (will retry)");
+    }
     mqtt_start();
 
     // Check for a firmware update once at startup (background, non-blocking).
