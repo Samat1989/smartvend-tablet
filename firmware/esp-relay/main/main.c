@@ -156,16 +156,6 @@ static void cfg_set(const char *key, const char *val) {
     }
 }
 
-static void cfg_erase(void) {
-    nvs_handle_t h;
-    if (nvs_open(NVS_CFG_NS, NVS_READWRITE, &h) == ESP_OK) {
-        nvs_erase_all(h);
-        nvs_commit(h);
-        nvs_close(h);
-    }
-    ESP_LOGI(TAG, "[CFG] erased");
-}
-
 // Returns true when a complete config is present (wifi + machine identity).
 static bool cfg_load(void) {
     char osbuf[8];
@@ -781,25 +771,14 @@ static long ota_tag_code(const char *tag) {
     return (long)a * 10000 + b * 100 + c;
 }
 
-// Query GitHub for the newest "relay-v*" release. If its code beats ours, copy
-// the OTA_ASSET_NAME download URL into url_out and return true.
-static bool ota_find_update(char *url_out, size_t url_sz) {
-    char api[160];
-    // Fetch only the newest few releases (newest-first). The latest relay-v
-    // release is normally at/near the top, and fewer releases => no truncation.
-    snprintf(api, sizeof(api),
-             "https://api.github.com/repos/%s/releases?per_page=15", OTA_OWNER_REPO);
-
-    // GitHub's /releases JSON is verbose (author/uploader/body per release), so
-    // a small buffer truncates the array mid-element and cJSON_Parse then fails
-    // on the whole thing -> no update ever found. Give it real room.
-    const int cap = 49152;
+// One-shot GitHub GET into a heap accumulator. Returns the malloc'd, null-
+// terminated body (caller frees) or NULL. *out_status gets the HTTP status.
+static char *ota_http_get(const char *url, int cap, int *out_status) {
     char *body = malloc(cap);
-    if (!body) { ESP_LOGE(TAG, "OTA: no heap for release list"); return false; }
+    if (!body) { ESP_LOGE(TAG, "OTA: no heap (%d B)", cap); return NULL; }
     http_accum_t acc = { .buf = body, .len = 0, .cap = cap };
-
     esp_http_client_config_t cfg = {
-        .url = api,
+        .url = url,
         .crt_bundle_attach = esp_crt_bundle_attach,
         .event_handler = ota_http_accum,
         .user_data = &acc,
@@ -809,54 +788,101 @@ static bool ota_find_update(char *url_out, size_t url_sz) {
     esp_http_client_set_header(cli, "Accept", "application/vnd.github+json");
     esp_http_client_set_header(cli, "User-Agent", "esp-relay-ota");
     esp_err_t err = esp_http_client_perform(cli);
-    int status = esp_http_client_get_status_code(cli);
+    *out_status = esp_http_client_get_status_code(cli);
     esp_http_client_cleanup(cli);
+    if (err != ESP_OK) { ESP_LOGW(TAG, "OTA GET failed: %s", esp_err_to_name(err)); free(body); return NULL; }
+    acc.buf[acc.len < cap ? acc.len : cap - 1] = 0;
+    return body;
+}
 
-    bool found = false;
-    if (err == ESP_OK && status == 200) {
-        if (acc.len >= cap - 1)
-            ESP_LOGW(TAG, "OTA: release list hit %d-byte cap, may be truncated", cap);
-        acc.buf[acc.len < cap ? acc.len : cap - 1] = 0;
-        cJSON *root = cJSON_Parse(acc.buf);
+// Find the newest "relay-v*" release whose code beats ours and return its
+// OTA_ASSET_NAME download URL. Two steps because the releases repo is SHARED
+// with the tablet app: the full /releases JSON (many verbose v1.1.x entries)
+// overflowed our buffer, so the relay-v* entries never parsed. Instead we pull
+// the name-only /tags list (tiny) to pick the winning tag, then fetch just that
+// one release for the asset URL — both fit in small buffers regardless of how
+// many tablet releases exist.
+static bool ota_find_update(char *url_out, size_t url_sz) {
+    // --- 1) newest relay-v* tag from the lightweight /tags list ---
+    char api[160];
+    snprintf(api, sizeof(api),
+             "https://api.github.com/repos/%s/tags?per_page=100", OTA_OWNER_REPO);
+    int status = 0;
+    char *body = ota_http_get(api, 32768, &status);
+    if (!body) return false;
+
+    char best_tag[48] = {0};
+    long best = FW_VERSION_CODE;
+    if (status == 200) {
+        cJSON *root = cJSON_Parse(body);
         if (root && cJSON_IsArray(root)) {
-            long best = FW_VERSION_CODE;
-            int scanned = 0, relay_seen = 0;
-            cJSON *rel;
-            cJSON_ArrayForEach(rel, root) {
-                scanned++;
-                cJSON *tag = cJSON_GetObjectItem(rel, "tag_name");
-                cJSON *pre = cJSON_GetObjectItem(rel, "prerelease");
-                if (!cJSON_IsString(tag) || cJSON_IsTrue(pre)) continue;
-                long code = ota_tag_code(tag->valuestring);
-                if (code < 0) continue;            // not a relay-v* tag
-                relay_seen++;
-                if (code <= best) continue;
-                cJSON *assets = cJSON_GetObjectItem(rel, "assets");
-                cJSON *as;
-                cJSON_ArrayForEach(as, assets) {
-                    cJSON *nm = cJSON_GetObjectItem(as, "name");
-                    cJSON *u  = cJSON_GetObjectItem(as, "browser_download_url");
-                    if (cJSON_IsString(nm) && cJSON_IsString(u) &&
-                        strcmp(nm->valuestring, OTA_ASSET_NAME) == 0) {
-                        strncpy(url_out, u->valuestring, url_sz - 1);
-                        url_out[url_sz - 1] = 0;
-                        best = code;
-                        found = true;
-                        ESP_LOGI(TAG, "OTA: found %s (code %ld)", tag->valuestring, code);
-                        break;
-                    }
+            cJSON *t;
+            cJSON_ArrayForEach(t, root) {
+                cJSON *nm = cJSON_GetObjectItem(t, "name");
+                if (!cJSON_IsString(nm)) continue;
+                long code = ota_tag_code(nm->valuestring);   // -1 if not relay-v*
+                if (code > best) {
+                    best = code;
+                    strncpy(best_tag, nm->valuestring, sizeof(best_tag) - 1);
+                    best_tag[sizeof(best_tag) - 1] = 0;
                 }
             }
-            ESP_LOGI(TAG, "OTA: scanned %d releases (%d relay-v, %d bytes), best code %ld",
-                     scanned, relay_seen, acc.len, best);
         } else {
-            ESP_LOGW(TAG, "OTA: failed to parse release list (%d bytes) - buffer too small?", acc.len);
+            ESP_LOGW(TAG, "OTA: failed to parse tag list");
         }
         if (root) cJSON_Delete(root);
     } else {
-        ESP_LOGW(TAG, "OTA check failed: err=%s status=%d", esp_err_to_name(err), status);
+        ESP_LOGW(TAG, "OTA tags fetch status=%d", status);
     }
     free(body);
+
+    if (best_tag[0] == 0) return false;   // nothing newer than us
+    ESP_LOGI(TAG, "OTA: newest relay tag %s (code %ld) > current %d",
+             best_tag, best, FW_VERSION_CODE);
+
+    // --- 2) fetch that release by tag for the .bin asset URL ---
+    // URL-encode '+' in the tag (relay-vX.Y.Z+CODE) as %2B for the path.
+    char enc[72];
+    int ei = 0;
+    for (int i = 0; best_tag[i] && ei < (int)sizeof(enc) - 4; i++) {
+        if (best_tag[i] == '+') { enc[ei++] = '%'; enc[ei++] = '2'; enc[ei++] = 'B'; }
+        else enc[ei++] = best_tag[i];
+    }
+    enc[ei] = 0;
+
+    char rapi[220];
+    snprintf(rapi, sizeof(rapi),
+             "https://api.github.com/repos/%s/releases/tags/%s", OTA_OWNER_REPO, enc);
+    int rstatus = 0;
+    char *rbody = ota_http_get(rapi, 12288, &rstatus);
+    if (!rbody) return false;
+
+    bool found = false;
+    if (rstatus == 200) {
+        cJSON *rel = cJSON_Parse(rbody);
+        if (rel) {
+            cJSON *assets = cJSON_GetObjectItem(rel, "assets");
+            cJSON *as;
+            cJSON_ArrayForEach(as, assets) {
+                cJSON *nm = cJSON_GetObjectItem(as, "name");
+                cJSON *u  = cJSON_GetObjectItem(as, "browser_download_url");
+                if (cJSON_IsString(nm) && cJSON_IsString(u) &&
+                    strcmp(nm->valuestring, OTA_ASSET_NAME) == 0) {
+                    strncpy(url_out, u->valuestring, url_sz - 1);
+                    url_out[url_sz - 1] = 0;
+                    found = true;
+                    ESP_LOGI(TAG, "OTA: asset %s -> %s", OTA_ASSET_NAME, url_out);
+                    break;
+                }
+            }
+            cJSON_Delete(rel);
+        } else {
+            ESP_LOGW(TAG, "OTA: failed to parse release for %s", best_tag);
+        }
+    } else {
+        ESP_LOGW(TAG, "OTA release-by-tag status=%d", rstatus);
+    }
+    free(rbody);
     return found;
 }
 
@@ -943,7 +969,11 @@ static const char PAGE_TAIL_A[] =
     "<div id=gsmblk style=display:none>"
     "<span class=lbl>GSM (LTE): вставьте SIM с интернетом — APN определяется автоматически.</span>"
     "</div>"
-    "<span class=lbl>Номер аппарата (Machine ID)</span><input name=machid required inputmode=numeric>"
+    "<span class=lbl>Номер аппарата (Machine ID)</span>"
+    "<input name=machid required inputmode=numeric value=\"";
+// machine id (prefilled from the saved config) goes here, then:
+static const char PAGE_TAIL_MID[] =
+    "\">"
     "<span class=lbl>Время включения реле, сек</span>"
     "<input name=opensec type=number min=1 max=600 inputmode=numeric value='";
 static const char PAGE_TAIL_B[] =
@@ -987,6 +1017,8 @@ static esp_err_t root_get_handler(httpd_req_t *req) {
     }
 
     httpd_resp_sendstr_chunk(req, PAGE_TAIL_A);
+    httpd_resp_sendstr_chunk(req, g_machid);   // prefill the saved machine id
+    httpd_resp_sendstr_chunk(req, PAGE_TAIL_MID);
     char osval[8];
     snprintf(osval, sizeof(osval), "%d", g_open_seconds);
     httpd_resp_sendstr_chunk(req, osval);
@@ -1270,16 +1302,18 @@ void app_main(void) {
     bool have_cfg = cfg_load();
 
     // 4 s window after power-on: more than PROVISION_PRESS_COUNT BOOT(GPIO0)
-    // taps forces (re)provisioning, even on an already-configured device. The
-    // portal then writes a fresh config (overwriting any existing one).
+    // taps forces (re)provisioning even on a configured device. We DON'T erase
+    // the stored config — the globals (machid, opensec, netmode) stay loaded so
+    // the portal can prefill them; the operator just re-submits, overwriting
+    // only what they change.
     int presses = button_press_count(PROVISION_WINDOW_MS);
-    if (presses > PROVISION_PRESS_COUNT) {
-        ESP_LOGW(TAG, "[Setup] %d BOOT presses — clearing config, entering provisioning", presses);
-        cfg_erase();
-        have_cfg = false;
+    bool force_portal = presses > PROVISION_PRESS_COUNT;
+    if (force_portal) {
+        ESP_LOGW(TAG, "[Setup] %d BOOT presses — entering provisioning (machid=%s prefilled)",
+                 presses, g_machid);
     }
 
-    if (!have_cfg) {
+    if (!have_cfg || force_portal) {
         start_setup_portal();          // stays here serving the portal
         ESP_LOGI(TAG, "Provisioning mode — waiting for setup");
         return;
