@@ -47,8 +47,8 @@ static const char *TAG = "relay_mart";
 // Bump both on every release (release-relay.ps1 does this automatically).
 // OTA shares the tablet's repo; firmware releases are tagged "relay-vX.Y.Z" and
 // carry an asset named OTA_ASSET_NAME, so they never collide with the APK.
-#define FW_VERSION_NAME    "1.0.4"
-#define FW_VERSION_CODE    10004
+#define FW_VERSION_NAME    "1.0.5"
+#define FW_VERSION_CODE    10005
 #define OTA_OWNER_REPO     "Samat1989/smartvend-tablet"
 #define OTA_TAG_PREFIX     "relay-v"
 #define OTA_ASSET_NAME     "relay-mart.bin"
