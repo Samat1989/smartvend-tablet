@@ -47,8 +47,8 @@ static const char *TAG = "relay_mart";
 // Bump both on every release (release-relay.ps1 does this automatically).
 // OTA shares the tablet's repo; firmware releases are tagged "relay-vX.Y.Z" and
 // carry an asset named OTA_ASSET_NAME, so they never collide with the APK.
-#define FW_VERSION_NAME    "1.0.5"
-#define FW_VERSION_CODE    10005
+#define FW_VERSION_NAME    "1.0.6"
+#define FW_VERSION_CODE    10006
 #define OTA_OWNER_REPO     "Samat1989/smartvend-tablet"
 #define OTA_TAG_PREFIX     "relay-v"
 #define OTA_ASSET_NAME     "relay-mart.bin"
@@ -101,7 +101,7 @@ static const char *TAG = "relay_mart";
 // ---------------------
 
 // Provisioned config (loaded from NVS, or filled in by the setup portal).
-static char g_netmode[8]      = "wifi"; // uplink: "wifi" | "gsm"
+static char g_netmode[8]      = "gsm";  // uplink: "wifi" | "gsm" (default GSM)
 static char g_wifi_ssid[64]   = {0};
 static char g_wifi_pass[64]   = {0};
 static char g_machid[16]      = {0};
@@ -164,7 +164,7 @@ static bool cfg_load(void) {
         if (v >= 1 && v <= 600) g_open_seconds = v;
     }
     cfg_get("netmode", g_netmode, sizeof(g_netmode));
-    if (g_netmode[0] == 0) strcpy(g_netmode, "wifi");
+    if (g_netmode[0] == 0) strcpy(g_netmode, "gsm");
     bool gsm = (strcmp(g_netmode, "gsm") == 0);
     cfg_get("ssid", g_wifi_ssid, sizeof(g_wifi_ssid));
     cfg_get("pass", g_wifi_pass, sizeof(g_wifi_pass));   // empty pass allowed
@@ -957,16 +957,16 @@ static const char PAGE_HEAD[] =
     "</style></head><body><h2>SmartVend — настройка</h2>"
     "<form method=POST action=/save>"
     "<span class=lbl>Способ связи</span><div id=modes>"
-    "<label class=net><input type=radio name=netmode value=wifi checked onclick=selMode()><span class=nm>WiFi</span></label>"
-    "<label class=net><input type=radio name=netmode value=gsm onclick=selMode()><span class=nm>GSM (SIM / LTE)</span></label>"
+    "<label class=net><input type=radio name=netmode value=wifi onclick=selMode()><span class=nm>WiFi</span></label>"
+    "<label class=net><input type=radio name=netmode value=gsm checked onclick=selMode()><span class=nm>GSM (SIM / LTE)</span></label>"
     "</div>"
-    "<div id=wifiblk>"
+    "<div id=wifiblk style=display:none>"
     "<span class=lbl>WiFi сеть</span><div id=nets>";
 static const char PAGE_TAIL_A[] =
     "</div>"
     "<span class=lbl>WiFi пароль</span><input name=pass type=password>"
     "</div>"  // /wifiblk
-    "<div id=gsmblk style=display:none>"
+    "<div id=gsmblk>"
     "<span class=lbl>GSM (LTE): вставьте SIM с интернетом — APN определяется автоматически.</span>"
     "</div>"
     "<span class=lbl>Номер аппарата (Machine ID)</span>"
@@ -981,7 +981,8 @@ static const char PAGE_TAIL_B[] =
     "<script>function selMode(){var g=document.querySelector('input[name=netmode]:checked').value=='gsm';"
     "document.getElementById('wifiblk').style.display=g?'none':'';"
     "document.getElementById('gsmblk').style.display=g?'':'none';"
-    "document.querySelectorAll('#nets input').forEach(function(x){x.required=!g});}</script>"
+    "document.querySelectorAll('#nets input').forEach(function(x){x.required=!g});}"
+    "selMode();</script>"
     "</body></html>";
 
 static esp_err_t root_get_handler(httpd_req_t *req) {
@@ -1125,7 +1126,7 @@ static esp_err_t save_post_handler(httpd_req_t *req) {
     form_field(body, "machid", machid, sizeof(machid));
     form_field(body, "opensec", opensec, sizeof(opensec));
     form_field(body, "netmode", netmode, sizeof(netmode));
-    if (netmode[0] == 0) strcpy(netmode, "wifi");
+    if (netmode[0] == 0) strcpy(netmode, "gsm");
     bool gsm = (strcmp(netmode, "gsm") == 0);
 
     if (machid[0] == 0) {
