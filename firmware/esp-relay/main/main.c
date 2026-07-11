@@ -1018,7 +1018,10 @@ static esp_err_t root_get_handler(httpd_req_t *req) {
     }
 
     httpd_resp_sendstr_chunk(req, PAGE_TAIL_A);
-    httpd_resp_sendstr_chunk(req, g_machid);   // prefill the saved machine id
+    // Prefill the saved machine id. Skip when empty (fresh flash): a zero-length
+    // chunk is the HTTP chunked-encoding terminator and would truncate the page
+    // right after the <input ... value=" — dropping opensec + the submit button.
+    if (g_machid[0]) httpd_resp_sendstr_chunk(req, g_machid);
     httpd_resp_sendstr_chunk(req, PAGE_TAIL_MID);
     char osval[8];
     snprintf(osval, sizeof(osval), "%d", g_open_seconds);
