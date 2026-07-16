@@ -165,6 +165,18 @@ class BoardClient extends ChangeNotifier {
   final _logCtrl = StreamController<LogEntry>.broadcast();
   final _logHistory = <LogEntry>[];
 
+  /// Bus logging is OFF by default so it doesn't accumulate in the background
+  /// during normal operation. The service-mode "Board" screen turns it on in
+  /// initState and off in dispose (see [logEnabled]), so logs are captured
+  /// only while that tab is actually open.
+  bool _logEnabled = false;
+  bool get logEnabled => _logEnabled;
+  set logEnabled(bool v) {
+    if (_logEnabled == v) return;
+    _logEnabled = v;
+    notifyListeners();
+  }
+
   /// Number of consecutive request failures (timeouts or transport errors).
   /// Resets to 0 on any successful response. Factory app flags a cabinet
   /// "communication broken" after **4 missed POLLs** (`docs/01_PROTOCOL.md`),
@@ -1035,6 +1047,7 @@ class BoardClient extends ChangeNotifier {
       data.map((b) => b.toRadixString(16).padLeft(2, '0').toUpperCase()).join(' ');
 
   void _addLog(LogEntry e) {
+    if (!_logEnabled) return;   // no background logging — only while Board tab open
     _logHistory.add(e);
     if (_logHistory.length > 1000) {
       _logHistory.removeRange(0, _logHistory.length - 1000);

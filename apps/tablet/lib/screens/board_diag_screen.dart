@@ -23,6 +23,7 @@ class BoardDiagScreen extends StatefulWidget {
 class _BoardDiagScreenState extends State<BoardDiagScreen> {
   final _logScroll = ScrollController();
   StreamSubscription<LogEntry>? _logSub;
+  BoardClient? _board;   // cached in initState for safe use in dispose
 
   /// Native UART nodes discovered under /dev on this device (varies by
   /// SoC), for the port picker.
@@ -33,6 +34,10 @@ class _BoardDiagScreenState extends State<BoardDiagScreen> {
   void initState() {
     super.initState();
     final board = context.read<BoardClient>();
+    _board = board;
+    // Start capturing bus logs only now that the Board tab is open. They're
+    // off in the background so the history doesn't grow during normal use.
+    board.logEnabled = true;
     board.listNativePorts().then((l) {
       if (mounted) setState(() => _nativePorts = l);
     });
@@ -53,6 +58,8 @@ class _BoardDiagScreenState extends State<BoardDiagScreen> {
 
   @override
   void dispose() {
+    // Stop background logging when leaving the tab.
+    _board?.logEnabled = false;
     _logSub?.cancel();
     _logScroll.dispose();
     super.dispose();
