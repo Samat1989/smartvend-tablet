@@ -1125,6 +1125,16 @@ class _ErrorView extends StatelessWidget {
                 textAlign: TextAlign.center,
                 style: const TextStyle(
                     fontSize: 12, color: AppColors.iosGray)),
+            const SizedBox(height: 8),
+            // VendingService retries on a 5→30 s backoff while this
+            // screen is up (boot races the tablet's network coming up) —
+            // tell the customer/operator nothing needs to be pressed.
+            Text(s.t('fetch_retrying'),
+                textAlign: TextAlign.center,
+                style: const TextStyle(
+                    fontSize: 12,
+                    color: AppColors.iosGray,
+                    fontStyle: FontStyle.italic)),
             const SizedBox(height: 20),
             FilledButton.icon(
               icon: const Icon(Icons.refresh),

@@ -26,6 +26,31 @@ class VendingService extends ChangeNotifier {
 
   Timer? _autoRefreshTimer;
 
+  /// Fast-retry timer for the error state. After a reboot the app comes
+  /// up before the tablet's Wi-Fi/GSM does, so the very first load
+  /// times out and the customer-facing error screen used to sit there
+  /// for up to a full 60 s auto-refresh tick even after the network
+  /// returned. While the error screen is showing we retry on a short
+  /// backoff instead; the 60 s timer stays as the steady-state backstop.
+  Timer? _retryTimer;
+  int _retryAttempt = 0;
+
+  int get _retrySecs => switch (_retryAttempt) {
+        1 => 5,
+        2 => 10,
+        3 => 20,
+        _ => 30,
+      };
+
+  void _scheduleRetry() {
+    _retryTimer?.cancel();
+    _retryTimer = Timer(Duration(seconds: _retrySecs), () {
+      if (!_storage.isPaired) return;
+      if (_state != CatalogState.error) return;
+      reload(silent: true);
+    });
+  }
+
   VendingService({
     required this.board,
     required DeviceStorage storage,
@@ -138,6 +163,8 @@ class VendingService extends ChangeNotifier {
       _cart.clear();
       _state = CatalogState.unpaired;
       _stopAutoRefresh();
+      _retryTimer?.cancel();
+      _retryAttempt = 0;
       notifyListeners();
     }
   }
@@ -179,8 +206,17 @@ class VendingService extends ChangeNotifier {
       }
       // Silent path: keep showing the stale catalog. Better than blanking
       // it on a transient Wi-Fi blip.
+      //
+      // While the error screen is up (boot before network, outage),
+      // keep retrying on the fast backoff until the catalog appears.
+      if (_state == CatalogState.error) {
+        _retryAttempt++;
+        _scheduleRetry();
+      }
       return;
     }
+    _retryAttempt = 0;
+    _retryTimer?.cancel();
     // Hide sold-out items from the customer catalog — they still exist
     // in inventory (owner can refill from the dashboard) but shouldn't
     // appear in the shelf grid where they look tappable.
@@ -288,6 +324,7 @@ class VendingService extends ChangeNotifier {
   @override
   void dispose() {
     _stopAutoRefresh();
+    _retryTimer?.cancel();
     _storage.removeListener(_onStorageChanged);
     super.dispose();
   }

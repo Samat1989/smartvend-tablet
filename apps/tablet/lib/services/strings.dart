@@ -434,5 +434,10 @@ class Strings extends ChangeNotifier {
     'loading': {'ru': 'Загрузка…', 'kk': 'Жүктелуде…', 'en': 'Loading…'},
     'reload': {'ru': 'Обновить', 'kk': 'Жаңарту', 'en': 'Reload'},
     'fetch_error': {'ru': 'Не удалось загрузить товары', 'kk': 'Тауарларды жүктеу сәтсіз', 'en': 'Failed to load products'},
+    'fetch_retrying': {
+      'ru': 'Повторная попытка выполняется автоматически…',
+      'kk': 'Қайта әрекет автоматты түрде жасалады…',
+      'en': 'Retrying automatically…',
+    },
   };
 }
