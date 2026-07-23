@@ -35,6 +35,9 @@ class DeviceStorage extends ChangeNotifier {
   // cross-wired cabinets (see BoardClient.lytSwapRowCol).
   static const _kLytSwapRowCol = 'lyt_swap_row_col';
   static const _kMachineLayout = 'machine_layout_v1';
+  // Operator-saved layout templates (JSON list of {name, layout}) —
+  // see CustomLayoutTemplate in models/machine_layout.dart.
+  static const _kCustomLayoutTemplates = 'custom_layout_templates_v1';
   static const _kPinFailCount = 'pin_fail_count';
   static const _kPinLockedUntil = 'pin_locked_until';
   static const _defaultGridColumns = 3;
@@ -134,6 +137,18 @@ class DeviceStorage extends ChangeNotifier {
   }
 
   String? get machineLayoutJson => _prefs.getString(_kMachineLayout);
+
+  String? get customLayoutTemplatesJson =>
+      _prefs.getString(_kCustomLayoutTemplates);
+
+  Future<void> setCustomLayoutTemplatesJson(String? json) async {
+    if (json == null || json.isEmpty) {
+      await _prefs.remove(_kCustomLayoutTemplates);
+    } else {
+      await _prefs.setString(_kCustomLayoutTemplates, json);
+    }
+    notifyListeners();
+  }
 
   Future<void> setMachineLayoutJson(String? json) async {
     if (json == null || json.isEmpty) {

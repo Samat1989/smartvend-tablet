@@ -3,6 +3,7 @@ import 'package:provider/provider.dart';
 
 import '../board/board_client.dart';
 import '../models/machine_layout.dart';
+import '../services/device_storage.dart';
 import '../services/strings.dart';
 import '../services/vending_service.dart';
 import '../theme.dart';
@@ -45,11 +46,112 @@ class _LayoutEditorScreenState extends State<LayoutEditorScreen> {
   bool _scanning = false;
   int _scanProgress = 0;
 
+  /// Operator-saved templates, hydrated from [DeviceStorage] and kept
+  /// in sync with it on every save/delete.
+  List<CustomLayoutTemplate> _customTemplates = [];
+
   @override
   void initState() {
     super.initState();
     _draft = context.read<VendingService>().layout;
     if (_draft.shelves.isEmpty) _selectedShelf = -1;
+    _customTemplates = CustomLayoutTemplate.decodeList(
+        context.read<DeviceStorage>().customLayoutTemplatesJson);
+  }
+
+  Future<void> _persistCustomTemplates() =>
+      context.read<DeviceStorage>().setCustomLayoutTemplatesJson(
+          _customTemplates.isEmpty
+              ? null
+              : CustomLayoutTemplate.encodeList(_customTemplates));
+
+  /// Snapshot the current draft under an operator-chosen name. A deep
+  /// copy (JSON round-trip) is stored so further editing of the draft
+  /// can't mutate the saved template.
+  Future<void> _saveAsTemplate() async {
+    final messenger = ScaffoldMessenger.of(context);
+    if (_draft.isEmpty) {
+      messenger.showSnackBar(const SnackBar(
+        content: Text('Раскладка пуста — нечего сохранять'),
+        backgroundColor: Colors.redAccent,
+      ));
+      return;
+    }
+    final ctrl = TextEditingController(
+        text: 'Шаблон ${_customTemplates.length + 1}');
+    final name = await showDialog<String>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Сохранить как шаблон'),
+        content: TextField(
+          controller: ctrl,
+          autofocus: true,
+          decoration: const InputDecoration(
+            labelText: 'Название шаблона',
+            hintText: 'например BarysVend кофейня',
+            border: OutlineInputBorder(),
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(),
+            child: const Text('Отмена'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(ctx).pop(ctrl.text.trim()),
+            child: const Text('Сохранить'),
+          ),
+        ],
+      ),
+    );
+    if (name == null || name.isEmpty || !mounted) return;
+
+    final existingIdx = _customTemplates.indexWhere((t) => t.name == name);
+    if (existingIdx >= 0) {
+      final ok = await showDialog<bool>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: const Text('Перезаписать шаблон?'),
+          content: Text('Шаблон «$name» уже существует.'),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(ctx).pop(false),
+              child: const Text('Отмена'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.of(ctx).pop(true),
+              child: const Text('Перезаписать'),
+            ),
+          ],
+        ),
+      );
+      if (ok != true || !mounted) return;
+    }
+
+    final snapshot = CustomLayoutTemplate(
+      name: name,
+      layout: MachineLayout.fromJson(_draft.toJson()),
+    );
+    setState(() {
+      if (existingIdx >= 0) {
+        _customTemplates[existingIdx] = snapshot;
+      } else {
+        _customTemplates.add(snapshot);
+      }
+    });
+    await _persistCustomTemplates();
+    messenger.showSnackBar(SnackBar(
+      content: Text('Шаблон «$name» сохранён'),
+      backgroundColor: Colors.green,
+    ));
+  }
+
+  static String _describeLayout(MachineLayout l) {
+    var slots = 0;
+    for (final sh in l.shelves) {
+      slots += sh.slots.length;
+    }
+    return 'Полок: ${l.shelves.length} · слотов: $slots';
   }
 
   Future<void> _save() async {
@@ -57,49 +159,133 @@ class _LayoutEditorScreenState extends State<LayoutEditorScreen> {
     if (mounted) Navigator.of(context).pop();
   }
 
-  /// Opens a sheet listing [LayoutTemplate.all]. Tapping a template
-  /// confirms (current draft will be overwritten) and replaces `_draft`
-  /// with a freshly-built copy. Labels and motor ids stay editable
-  /// afterwards via the normal slot picker.
+  /// Opens a sheet listing the built-in [LayoutTemplate]s plus the
+  /// operator's own saved ones («Мои шаблоны», deletable in place).
+  /// Tapping a template confirms (current draft will be overwritten)
+  /// and replaces `_draft` with a fresh copy. Labels and motor ids stay
+  /// editable afterwards via the normal slot picker.
   Future<void> _pickTemplate() async {
-    final chosen = await showModalBottomSheet<LayoutTemplate>(
+    // LayoutTemplate | CustomLayoutTemplate — the sheet returns either.
+    final chosen = await showModalBottomSheet<Object>(
       context: context,
       backgroundColor: Colors.grey.shade900,
       isScrollControlled: true,
       builder: (ctx) => SafeArea(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            const Padding(
-              padding: EdgeInsets.fromLTRB(20, 16, 20, 8),
-              child: Align(
-                alignment: Alignment.centerLeft,
-                child: Text(
-                  'Выберите шаблон',
-                  style: TextStyle(
-                    color: Colors.white,
-                    fontSize: 18,
-                    fontWeight: FontWeight.w800,
+        child: StatefulBuilder(builder: (ctx, setSheet) {
+          return SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const Padding(
+                  padding: EdgeInsets.fromLTRB(20, 16, 20, 8),
+                  child: Align(
+                    alignment: Alignment.centerLeft,
+                    child: Text(
+                      'Выберите шаблон',
+                      style: TextStyle(
+                        color: Colors.white,
+                        fontSize: 18,
+                        fontWeight: FontWeight.w800,
+                      ),
+                    ),
                   ),
                 ),
-              ),
+                for (final tpl in LayoutTemplate.all)
+                  ListTile(
+                    leading:
+                        const Icon(Icons.grid_view, color: Colors.white70),
+                    title: Text(tpl.name,
+                        style: const TextStyle(
+                            color: Colors.white,
+                            fontWeight: FontWeight.w700)),
+                    subtitle: Text(tpl.description,
+                        style: const TextStyle(color: Colors.white60)),
+                    onTap: () => Navigator.of(ctx).pop(tpl),
+                  ),
+                if (_customTemplates.isNotEmpty) ...[
+                  const Divider(color: Colors.white24, height: 16),
+                  const Padding(
+                    padding: EdgeInsets.fromLTRB(20, 0, 20, 4),
+                    child: Align(
+                      alignment: Alignment.centerLeft,
+                      child: Text(
+                        'МОИ ШАБЛОНЫ',
+                        style: TextStyle(
+                          color: Colors.white54,
+                          fontSize: 11,
+                          fontWeight: FontWeight.bold,
+                          letterSpacing: 1.2,
+                        ),
+                      ),
+                    ),
+                  ),
+                  for (final t in List.of(_customTemplates))
+                    ListTile(
+                      leading: const Icon(Icons.bookmark,
+                          color: Colors.amberAccent),
+                      title: Text(t.name,
+                          style: const TextStyle(
+                              color: Colors.white,
+                              fontWeight: FontWeight.w700)),
+                      subtitle: Text(_describeLayout(t.layout),
+                          style: const TextStyle(color: Colors.white60)),
+                      trailing: IconButton(
+                        icon: const Icon(Icons.delete_outline,
+                            color: Colors.white54),
+                        tooltip: 'Удалить шаблон',
+                        onPressed: () async {
+                          final ok = await showDialog<bool>(
+                            context: ctx,
+                            builder: (dctx) => AlertDialog(
+                              title: const Text('Удалить шаблон?'),
+                              content: Text('«${t.name}» будет удалён. '
+                                  'Текущая раскладка не изменится.'),
+                              actions: [
+                                TextButton(
+                                  onPressed: () =>
+                                      Navigator.of(dctx).pop(false),
+                                  child: const Text('Отмена'),
+                                ),
+                                FilledButton(
+                                  onPressed: () =>
+                                      Navigator.of(dctx).pop(true),
+                                  child: const Text('Удалить'),
+                                ),
+                              ],
+                            ),
+                          );
+                          if (ok != true) return;
+                          setState(() => _customTemplates
+                              .removeWhere((x) => x.name == t.name));
+                          setSheet(() {});
+                          await _persistCustomTemplates();
+                        },
+                      ),
+                      onTap: () => Navigator.of(ctx).pop(t),
+                    ),
+                ],
+                const SizedBox(height: 8),
+              ],
             ),
-            for (final tpl in LayoutTemplate.all)
-              ListTile(
-                leading: const Icon(Icons.grid_view, color: Colors.white70),
-                title: Text(tpl.name,
-                    style: const TextStyle(
-                        color: Colors.white, fontWeight: FontWeight.w700)),
-                subtitle: Text(tpl.description,
-                    style: const TextStyle(color: Colors.white60)),
-                onTap: () => Navigator.of(ctx).pop(tpl),
-              ),
-            const SizedBox(height: 8),
-          ],
-        ),
+          );
+        }),
       ),
     );
     if (chosen == null || !mounted) return;
+
+    final String name;
+    final MachineLayout layout;
+    if (chosen is LayoutTemplate) {
+      name = chosen.name;
+      layout = chosen.build();
+    } else if (chosen is CustomLayoutTemplate) {
+      name = chosen.name;
+      // Deep copy: the draft must never share objects with the stored
+      // template, or editing one would silently edit the other.
+      layout = MachineLayout.fromJson(chosen.layout.toJson());
+    } else {
+      return;
+    }
 
     if (_draft.shelves.isNotEmpty) {
       final ok = await showDialog<bool>(
@@ -107,7 +293,7 @@ class _LayoutEditorScreenState extends State<LayoutEditorScreen> {
         builder: (ctx) => AlertDialog(
           title: const Text('Перезаписать раскладку?'),
           content: Text(
-              'Текущая раскладка будет заменена на «${chosen.name}». '
+              'Текущая раскладка будет заменена на «$name». '
               'Подписи и моторы можно будет править после применения.'),
           actions: [
             TextButton(
@@ -125,7 +311,7 @@ class _LayoutEditorScreenState extends State<LayoutEditorScreen> {
     }
 
     setState(() {
-      _draft = chosen.build();
+      _draft = layout;
       _selectedShelf = _draft.shelves.isEmpty ? -1 : 0;
     });
   }
@@ -499,6 +685,11 @@ class _LayoutEditorScreenState extends State<LayoutEditorScreen> {
         title: Text(s.t('service_layout_editor'),
             style: const TextStyle(fontWeight: FontWeight.bold)),
         actions: [
+          IconButton(
+            tooltip: 'Сохранить как шаблон',
+            icon: const Icon(Icons.bookmark_add_outlined),
+            onPressed: _saveAsTemplate,
+          ),
           IconButton(
             tooltip: 'Шаблоны раскладки',
             icon: const Icon(Icons.dashboard_customize),

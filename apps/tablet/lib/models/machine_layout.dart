@@ -238,6 +238,42 @@ MachineLayout _buildBarysvend6x10() {
   return MachineLayout(shelves: shelves);
 }
 
+/// Operator-saved layout template: a named snapshot of a [MachineLayout],
+/// persisted as JSON via `DeviceStorage.customLayoutTemplatesJson`.
+/// Unlike the code-defined [LayoutTemplate] starters, these are created
+/// from the editor's «Сохранить как шаблон» action — e.g. one per
+/// cabinet model the operator services.
+class CustomLayoutTemplate {
+  CustomLayoutTemplate({required this.name, required this.layout});
+
+  final String name;
+  final MachineLayout layout;
+
+  Map<String, dynamic> toJson() => {'name': name, 'layout': layout.toJson()};
+
+  static CustomLayoutTemplate fromJson(Map<String, dynamic> j) =>
+      CustomLayoutTemplate(
+        name: j['name'] as String,
+        layout: MachineLayout.fromJson(j['layout'] as Map<String, dynamic>),
+      );
+
+  /// Tolerant list decode — a corrupt prefs value yields an empty list
+  /// rather than wedging the editor.
+  static List<CustomLayoutTemplate> decodeList(String? s) {
+    if (s == null || s.isEmpty) return [];
+    try {
+      return (jsonDecode(s) as List)
+          .map((e) => fromJson(e as Map<String, dynamic>))
+          .toList();
+    } catch (_) {
+      return [];
+    }
+  }
+
+  static String encodeList(List<CustomLayoutTemplate> list) =>
+      jsonEncode([for (final t in list) t.toJson()]);
+}
+
 class Slot {
   Slot({required this.label, required this.motorIds});
 
