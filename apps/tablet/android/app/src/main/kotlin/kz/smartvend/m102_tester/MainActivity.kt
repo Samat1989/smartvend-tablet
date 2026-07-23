@@ -13,6 +13,7 @@ import android.content.IntentSender
 import android.content.pm.PackageInstaller
 import android.hardware.usb.UsbDevice
 import android.hardware.usb.UsbManager
+import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.os.Handler
@@ -261,6 +262,7 @@ class MainActivity : FlutterActivity() {
     }
 
     override fun onDestroy() {
+        if (instance === this) instance = null
         try {
             unregisterReceiver(usbPermissionReceiver)
         } catch (_: Throwable) {
@@ -306,6 +308,27 @@ class MainActivity : FlutterActivity() {
             } catch (e: Exception) {
                 Log.w(TAG_KIOSK, "stopLockTask before install failed: ${e.message}")
             }
+            // Non-owner installs are gated on the per-app "Install unknown
+            // apps" grant (API 26+). Without it the session's confirm
+            // dialog never surfaces on these ROMs — the update downloads
+            // and then nothing visibly happens. Fail loud AND open the
+            // exact settings toggle so the operator can flip it and retry.
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O &&
+                !packageManager.canRequestPackageInstalls()
+            ) {
+                Log.w(TAG_KIOSK, "canRequestPackageInstalls=false — opening settings")
+                try {
+                    startActivity(
+                        Intent(
+                            Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
+                            Uri.parse("package:$packageName"),
+                        ).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+                    )
+                } catch (t: Throwable) {
+                    Log.w(TAG_KIOSK, "open unknown-sources settings failed: ${t.message}")
+                }
+                throw IllegalStateException("no_install_permission")
+            }
         }
 
         val installer = packageManager.packageInstaller
@@ -341,6 +364,7 @@ class MainActivity : FlutterActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        instance = this
         // Keep the display on while the activity is in the foreground.
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
 
@@ -594,7 +618,38 @@ class MainActivity : FlutterActivity() {
         }, 80)
     }
 
+    /**
+     * Push a PackageInstaller session status into Flutter so the update
+     * screen can show WHY an install stalled instead of sitting on
+     * "Загрузка…" forever. Called by [InstallReceiver]; safe from any
+     * thread. Status values are [PackageInstaller.EXTRA_STATUS]
+     * constants (-1 pending-user-action, 0 success, 1..7 failures).
+     */
+    fun notifyInstallStatus(status: Int, message: String?) {
+        runOnUiThread {
+            try {
+                kioskChannel?.invokeMethod(
+                    "installStatus",
+                    mapOf("status" to status, "message" to (message ?: "")),
+                )
+            } catch (t: Throwable) {
+                Log.w(TAG_KIOSK, "notifyInstallStatus failed: ${t.message}")
+            }
+        }
+    }
+
     companion object {
         private const val KIOSK_CHANNEL = "kz.smartvend/kiosk"
+
+        /**
+         * Live activity, for [InstallReceiver] — an activity context is
+         * the reliable way to launch the install-confirm dialog (a
+         * receiver-context startActivity is treated as a background
+         * start on some ROMs and silently dropped), and the bridge for
+         * [notifyInstallStatus].
+         */
+        @Volatile
+        @JvmStatic
+        var instance: MainActivity? = null
     }
 }

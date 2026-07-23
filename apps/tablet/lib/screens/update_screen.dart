@@ -1,6 +1,10 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 
+import '../services/kiosk_bridge.dart';
 import '../services/update_service.dart';
 
 /// Service-mode update tile destination.
@@ -25,9 +29,20 @@ class _UpdateScreenState extends State<UpdateScreen> {
   bool _checking = false;
   bool _downloading = false;
   String? _error;
+
+  /// Info-level banner ("подтвердите установку…") driven by the native
+  /// PackageInstaller statuses — see [KioskBridge.installStatusStream].
+  String? _installHint;
   UpdateInfo? _update;
   int _received = 0;
   int _total = 0;
+  StreamSubscription<InstallStatus>? _installSub;
+
+  /// Armed after the APK is handed to PackageInstaller: if neither a
+  /// success (process replaced) nor a failure status lands within the
+  /// window, stop the spinner and tell the operator what to check —
+  /// а stalled silent install used to look like a hung "Загрузка…".
+  Timer? _stallTimer;
 
   @override
   void initState() {
@@ -35,6 +50,48 @@ class _UpdateScreenState extends State<UpdateScreen> {
     PackageInfo.fromPlatform().then((i) {
       if (mounted) setState(() => _info = i);
     });
+    _installSub = KioskBridge.installStatusStream.listen(_onInstallStatus);
+  }
+
+  @override
+  void dispose() {
+    _installSub?.cancel();
+    _stallTimer?.cancel();
+    super.dispose();
+  }
+
+  void _onInstallStatus(InstallStatus s) {
+    if (!mounted) return;
+    if (s.isPendingUserAction) {
+      setState(() =>
+          _installHint = 'Подтвердите установку в системном диалоге');
+      return;
+    }
+    if (s.isFailure) {
+      _stallTimer?.cancel();
+      setState(() {
+        _downloading = false;
+        _installHint = null;
+        _error = _installFailureText(s);
+      });
+    }
+  }
+
+  static String _installFailureText(InstallStatus s) {
+    final base = switch (s.status) {
+      2 => 'Установка заблокирована системой',
+      3 => 'Установка отменена',
+      4 => 'Система отклонила APK',
+      5 => 'Конфликт с установленной версией (другая подпись?) — '
+          'переустановите приложение вручную',
+      6 => 'Недостаточно места на планшете',
+      7 => 'APK несовместим с этим устройством',
+      100 => 'Не удалось показать системный диалог установки',
+      _ => 'Установка не удалась',
+    };
+    return s.message.isEmpty
+        ? '$base (код ${s.status})'
+        : '$base (код ${s.status}): ${s.message}';
   }
 
   Future<void> _check() async {
@@ -74,6 +131,7 @@ class _UpdateScreenState extends State<UpdateScreen> {
       _received = 0;
       _total = info.assetSize;
       _error = null;
+      _installHint = null;
     });
     try {
       await _service.downloadAndInstall(
@@ -86,13 +144,33 @@ class _UpdateScreenState extends State<UpdateScreen> {
           });
         },
       );
-      // PackageInstaller will kill + relaunch us on success. If we're
-      // still here a few seconds later something failed.
+      // PackageInstaller will kill + relaunch us on success; failures
+      // arrive via [_onInstallStatus]. The stall timer catches the
+      // remaining "nothing ever happened" case.
+      _stallTimer?.cancel();
+      _stallTimer = Timer(const Duration(seconds: 45), () {
+        if (!mounted || !_downloading) return;
+        setState(() {
+          _downloading = false;
+          _installHint = null;
+          _error = 'Установка не началась. Проверьте: Настройки → '
+              'Приложения → Micromart → «Установка неизвестных '
+              'приложений» (разрешить), затем повторите.';
+        });
+      });
     } catch (e) {
       if (!mounted) return;
+      final noPermission = e is PlatformException &&
+          (e.message?.contains('no_install_permission') ?? false);
       setState(() {
         _downloading = false;
-        _error = e.toString();
+        _installHint = null;
+        _error = noPermission
+            ? 'Нет разрешения «Установка неизвестных приложений». '
+                'Система открыла нужную настройку — включите '
+                'переключатель для Micromart, вернитесь и нажмите '
+                '«Скачать и установить» ещё раз.'
+            : e.toString();
       });
     }
   }
@@ -107,6 +185,7 @@ class _UpdateScreenState extends State<UpdateScreen> {
           _versionCard(),
           const SizedBox(height: 16),
           if (_error != null) _errorCard(),
+          if (_installHint != null) _installHintCard(),
           if (_update != null) _updateCard(),
           if (_downloading) _progressCard(),
           if (_update == null && !_checking) _checkButton(),
@@ -296,6 +375,27 @@ class _UpdateScreenState extends State<UpdateScreen> {
             const Text(
               'Не выключайте планшет — приложение перезапустится автоматически.',
               style: TextStyle(fontSize: 11, color: Colors.black54),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _installHintCard() {
+    return Card(
+      color: Colors.blue.shade50,
+      child: Padding(
+        padding: const EdgeInsets.all(14),
+        child: Row(
+          children: [
+            Icon(Icons.touch_app, color: Colors.blue.shade700),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Text(
+                _installHint!,
+                style: TextStyle(color: Colors.blue.shade900, fontSize: 13),
+              ),
             ),
           ],
         ),

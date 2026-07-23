@@ -3,6 +3,21 @@ import 'dart:async';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 
+/// One PackageInstaller session status, mirrored from the native side
+/// (`InstallReceiver`). Status values are Android's
+/// `PackageInstaller.EXTRA_STATUS` constants: -1 = pending user action
+/// (confirm dialog shown), 0 = success, 1..7 = failure codes, 100 =
+/// our synthetic "confirm dialog failed to launch".
+class InstallStatus {
+  const InstallStatus(this.status, this.message);
+
+  final int status;
+  final String message;
+
+  bool get isPendingUserAction => status == -1;
+  bool get isFailure => status > 0;
+}
+
 /// Thin wrapper over the native kiosk MethodChannel exposed by
 /// `MainActivity`. The Android side handles lock-task / immersive
 /// mode automatically — the only thing the Flutter side needs to
@@ -16,6 +31,8 @@ class KioskBridge {
   /// times is safe — only one handler is registered.
   static bool _handlersInstalled = false;
   static final _usbPermissionCtrl = StreamController<bool>.broadcast();
+  static final _installStatusCtrl =
+      StreamController<InstallStatus>.broadcast();
 
   /// Fires `true` when the user accepted the system "Allow USB access?"
   /// dialog and `false` when they cancelled. [BoardClient] listens here
@@ -24,6 +41,14 @@ class KioskBridge {
   static Stream<bool> get usbPermissionResultStream {
     _installHandlersIfNeeded();
     return _usbPermissionCtrl.stream;
+  }
+
+  /// PackageInstaller session statuses pushed by the native side
+  /// during a self-update. The update screen listens so a stalled or
+  /// failed install is explained on screen instead of hanging.
+  static Stream<InstallStatus> get installStatusStream {
+    _installHandlersIfNeeded();
+    return _installStatusCtrl.stream;
   }
 
   static void _installHandlersIfNeeded() {
@@ -35,6 +60,15 @@ class KioskBridge {
         final granted = args is Map ? args['granted'] == true : false;
         debugPrint('[KioskBridge] usbPermissionResult granted=$granted');
         _usbPermissionCtrl.add(granted);
+      }
+      if (call.method == 'installStatus') {
+        final args = call.arguments;
+        final status =
+            args is Map ? (args['status'] as num?)?.toInt() ?? 1 : 1;
+        final message =
+            args is Map ? (args['message'] as String? ?? '') : '';
+        debugPrint('[KioskBridge] installStatus $status "$message"');
+        _installStatusCtrl.add(InstallStatus(status, message));
       }
       return null;
     });
