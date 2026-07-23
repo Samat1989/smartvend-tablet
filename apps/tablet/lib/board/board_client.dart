@@ -1117,6 +1117,43 @@ class BoardClient extends ChangeNotifier {
     2: 'Ошибка: товар не зафиксирован (микрик не сработал / таймаут)',
   };
 
+  /// Link check for BarysVend over whatever transport is open (USB
+  /// adapter or native UART): a real dispense ряд 1 кол 1 with a
+  /// ~10-tick watchdog so the motor barely twitches — the only command
+  /// the board answers (doc §7 / §9.2). Any status back (0/1/2) means
+  /// the line is alive in BOTH directions. No reply usually means a
+  /// wrong line/speed — or TX works but RX doesn't (3.3 В FTDI не
+  /// дочитывает ~1.8 В уровень платы, §2).
+  Future<bool> lytPing() async {
+    if (!isLyt || _transport == null) return false;
+    final prev = _busLock;
+    final done = Completer<void>();
+    _busLock = done.future;
+    await prev;
+    try {
+      if (_transport == null) return false;
+      _info('--- LYT PING (выдача 1-1, таймаут 10) ---');
+      final frame = buildLytDispenseFrame(1, 1, 10);
+      final completer = Completer<int>();
+      _lytPendingDispense = completer;
+      _lytPendingRow = 1;
+      _lytPendingCol = 1;
+      _tx(frame);
+      try {
+        await _transport!.write(frame);
+      } catch (e) {
+        _err('write: $e');
+        return false;
+      }
+      final status = await completer.future
+          .timeout(const Duration(seconds: 3), onTimeout: () => -1);
+      return status >= 0;
+    } finally {
+      _lytPendingDispense = null;
+      done.complete();
+    }
+  }
+
   /// LiYuTai dispense: send the (ряд, кол) frame and wait for the echoed
   /// result. Serialized through [_busLock] like every M102 exchange —
   /// one command in flight at a time.

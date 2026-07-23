@@ -128,6 +128,26 @@ class _BoardDiagScreenState extends State<BoardDiagScreen> {
     await storage.setUseM102Password(next);
   }
 
+  /// BarysVend link test: a real dispense ряд 1 кол 1 with a tiny
+  /// watchdog, so the motor only twitches — the single command this
+  /// board answers, hence the only reliable "are we alive" check over
+  /// USB adapters and native UARTs alike.
+  Future<void> _lytTest() async {
+    final board = context.read<BoardClient>();
+    final messenger = ScaffoldMessenger.of(context);
+    final ok = await board.lytPing();
+    if (!mounted) return;
+    messenger.showSnackBar(SnackBar(
+      duration: const Duration(seconds: 6),
+      content: Text(ok
+          ? 'Плата ответила — связь в обе стороны работает'
+          : 'Нет ответа. Проверьте линию и скорость; внешний FTDI 3.3 В '
+              'может не дочитывать уровень платы (~1.8 В) — надёжнее '
+              'родной UART планшета'),
+      backgroundColor: ok ? Colors.green : Colors.redAccent,
+    ));
+  }
+
   /// Switch the wire protocol (M102/M109 ↔ BarysVend V27.2) and
   /// reconnect over the currently selected link so the new framing and
   /// baud take effect immediately.
@@ -173,6 +193,7 @@ class _BoardDiagScreenState extends State<BoardDiagScreen> {
               s: s,
               onToggleConnection: _toggleConnection,
               onTogglePassword: () => _togglePassword(context),
+              onLytTest: _lytTest,
             ),
             _SerialModeCard(
               selectedPath: context.watch<DeviceStorage>().serialPortPath,
@@ -211,7 +232,10 @@ class _ProtocolCard extends StatelessWidget {
         'M102 / M109E — кадры 20 байт CRC-16, 9600 8N1, моторы 0..99',
     BoardProtocol.lyt:
         'BarysVend V27.2 (LiYuTai) — кадры AA..DD XOR, 115200 8N1, '
-            'адресация ряд/колонка: id мотора = ряд×10 + колонка',
+            'адресация ряд/колонка: id мотора = ряд×10 + колонка. '
+            'Плата отвечает только на выдачу — проверка через «Тест связи». '
+            '⚠ USB-FTDI 3.3 В может не читать ответы платы (~1.8 В) — '
+            'надёжнее родной UART планшета',
   };
 
   @override
@@ -466,12 +490,14 @@ class _ControlsCard extends StatelessWidget {
     required this.s,
     required this.onToggleConnection,
     required this.onTogglePassword,
+    required this.onLytTest,
   });
 
   final BoardClient board;
   final Strings s;
   final VoidCallback onToggleConnection;
   final VoidCallback onTogglePassword;
+  final VoidCallback onLytTest;
 
   @override
   Widget build(BuildContext context) {
@@ -499,8 +525,22 @@ class _ControlsCard extends StatelessWidget {
             ),
           ),
           // The CRC password is an M102-family concept; BarysVend V27.2
-          // frames carry a plain XOR — nothing to toggle there.
-          if (!board.isLyt) ...[
+          // frames carry a plain XOR — its slot hosts the link test
+          // instead (the board answers nothing but a dispense, so a
+          // tiny row-1/col-1 twitch is the only health check there is).
+          if (board.isLyt) ...[
+            const SizedBox(width: 8),
+            Expanded(
+              child: FilledButton.icon(
+                icon: const Icon(Icons.network_check),
+                label: const Text('Тест связи (1·1)'),
+                style: FilledButton.styleFrom(
+                  backgroundColor: Colors.teal,
+                ),
+                onPressed: onLytTest,
+              ),
+            ),
+          ] else ...[
             const SizedBox(width: 8),
             Expanded(
               child: FilledButton.icon(

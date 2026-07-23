@@ -141,7 +141,20 @@ class LayoutTemplate {
     builder: _buildMp2404,
   );
 
-  static const List<LayoutTemplate> all = [factory6x6, mp2404_5_50];
+  /// BarysVend V27.2 (LiYuTai): dispense is addressed by (ряд, колонка),
+  /// and the app encodes that pair as motor id = ряд×10 + колонка
+  /// (см. BoardClient.lytRowColFromMotorId). 6 rows × 10 columns —
+  /// ids 11..20 / 21..30 / … / 61..70; slot label = id, matching how
+  /// these cabinets number the doors. Trim extra slots/shelves after
+  /// applying if the machine is narrower.
+  static const LayoutTemplate barysvend6x10 = LayoutTemplate(
+    id: 'barysvend_6x10',
+    name: 'BarysVend V27.2 (6×10)',
+    description: '6 рядов × 10 колонок, номер = ряд×10+колонка (11..70)',
+    builder: _buildBarysvend6x10,
+  );
+
+  static const List<LayoutTemplate> all = [factory6x6, mp2404_5_50, barysvend6x10];
 }
 
 MachineLayout _buildFactory6x6() {
@@ -202,6 +215,26 @@ MachineLayout _buildMp2404() {
     shelves.add(Shelf(label: '$first — $last', slots: slots));
   }
 
+  return MachineLayout(shelves: shelves);
+}
+
+MachineLayout _buildBarysvend6x10() {
+  // Row r (1..6) × column c (1..10) → motor id = r*10 + c, so row 1 is
+  // 11..20, row 2 is 21..30, … row 6 is 61..70. The dispense path
+  // decodes the id back to (ряд, кол) for the board.
+  final shelves = <Shelf>[
+    for (var r = 1; r <= 6; r++)
+      Shelf(
+        label: '${r * 10 + 1} — ${r * 10 + 10}',
+        slots: [
+          for (var c = 1; c <= 10; c++)
+            Slot(
+              label: '${r * 10 + c}',
+              motorIds: [r * 10 + c],
+            ),
+        ],
+      ),
+  ];
   return MachineLayout(shelves: shelves);
 }
 

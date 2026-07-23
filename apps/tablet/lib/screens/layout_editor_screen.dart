@@ -233,7 +233,14 @@ class _LayoutEditorScreenState extends State<LayoutEditorScreen> {
 
   /// Modal that lets the operator pick a label + multiple motor ids
   /// for one slot. Returns the new/edited [Slot] or null if cancelled.
+  ///
+  /// The grid depends on the board protocol: M102 exposes flat channels
+  /// 0..99 (with the 0x04 wiring scan), while BarysVend V27.2 addresses
+  /// (ряд, колонка) — the grid is laid out as 9 rows × 10 columns and
+  /// each cell carries the encoded id = ряд×10+колонка (11..100), so
+  /// the operator picks a physical position, not an abstract channel.
   Future<Slot?> _openSlotPicker({Slot? initial}) async {
+    final isLyt = context.read<BoardClient>().isLyt;
     final labelCtrl =
         TextEditingController(text: initial?.label ?? _suggestSlotLabel());
     final selected = <int>{...(initial?.motorIds ?? const [])};
@@ -264,13 +271,16 @@ class _LayoutEditorScreenState extends State<LayoutEditorScreen> {
                             ),
                           ),
                         ),
-                        TextButton.icon(
-                          icon: const Icon(Icons.search),
-                          label: Text(_scanning
-                              ? 'Сканирование $_scanProgress / 100…'
-                              : 'Сканировать моторы'),
-                          onPressed: _scanning ? null : _scanAll,
-                        ),
+                        // LiYuTai has no non-destructive motor scan —
+                        // the board only ever answers a real dispense.
+                        if (!isLyt)
+                          TextButton.icon(
+                            icon: const Icon(Icons.search),
+                            label: Text(_scanning
+                                ? 'Сканирование $_scanProgress / 100…'
+                                : 'Сканировать моторы'),
+                            onPressed: _scanning ? null : _scanAll,
+                          ),
                       ],
                     ),
                     const SizedBox(height: 8),
@@ -284,8 +294,12 @@ class _LayoutEditorScreenState extends State<LayoutEditorScreen> {
                     ),
                     const SizedBox(height: 8),
                     Text(
-                      'Выберите motor id (1+ для сдвоенного слота).  '
-                      '${selected.length} выбрано.',
+                      isLyt
+                          ? 'Выберите позицию: ряды сверху вниз, колонки '
+                              'слева направо. Номер = ряд×10+колонка.  '
+                              '${selected.length} выбрано.'
+                          : 'Выберите motor id (1+ для сдвоенного слота).  '
+                              '${selected.length} выбрано.',
                       style: const TextStyle(
                           fontSize: 12, color: Colors.black54),
                     ),
@@ -299,13 +313,20 @@ class _LayoutEditorScreenState extends State<LayoutEditorScreen> {
                           crossAxisSpacing: 4,
                           childAspectRatio: 1,
                         ),
-                        itemCount: 100,
+                        // BarysVend: 9 board rows × 10 columns, the cell
+                        // at grid (r, c) is id (r+1)*10 + (c+1) — 11..100,
+                        // column 10 landing on the decade boundary (20,
+                        // 30, … 100). M102: flat channels 0..99.
+                        itemCount: isLyt ? 90 : 100,
                         itemBuilder: (ctx, i) {
-                          final code = _scanResults[i];
-                          final isSelected = selected.contains(i);
-                          final isTaken = usedElsewhere.contains(i);
+                          final id = isLyt
+                              ? (i ~/ 10 + 1) * 10 + (i % 10 + 1)
+                              : i;
+                          final code = _scanResults[id];
+                          final isSelected = selected.contains(id);
+                          final isTaken = usedElsewhere.contains(id);
                           return _MotorCell(
-                            motorId: i,
+                            motorId: id,
                             scanResult: code,
                             selected: isSelected,
                             takenByOther: isTaken,
@@ -314,9 +335,9 @@ class _LayoutEditorScreenState extends State<LayoutEditorScreen> {
                                 : () {
                                     setLocal(() {
                                       if (isSelected) {
-                                        selected.remove(i);
+                                        selected.remove(id);
                                       } else {
-                                        selected.add(i);
+                                        selected.add(id);
                                       }
                                     });
                                   },
@@ -325,7 +346,7 @@ class _LayoutEditorScreenState extends State<LayoutEditorScreen> {
                       ),
                     ),
                     const SizedBox(height: 8),
-                    const _ScanLegend(),
+                    _ScanLegend(isLyt: isLyt),
                     const SizedBox(height: 8),
                     Row(
                       mainAxisAlignment: MainAxisAlignment.end,
@@ -755,10 +776,22 @@ class _MotorCell extends StatelessWidget {
 }
 
 class _ScanLegend extends StatelessWidget {
-  const _ScanLegend();
+  const _ScanLegend({required this.isLyt});
+
+  /// BarysVend mode has no wiring scan, so the AA/BB/CC legend would
+  /// only mislead — explain the row×column numbering instead.
+  final bool isLyt;
 
   @override
   Widget build(BuildContext context) {
+    if (isLyt) {
+      return const Text(
+        'Строка сетки = ряд платы (L), ячейка = колонка (C). '
+        'Колонка 10 получает номер следующего десятка: ряд 1 → 11..20, '
+        'ряд 2 → 21..30, …',
+        style: TextStyle(fontSize: 11, color: Colors.black54),
+      );
+    }
     return Wrap(
       spacing: 12,
       runSpacing: 4,
