@@ -24,6 +24,7 @@ import android.provider.Settings
 import android.util.Log
 import android.view.View
 import android.view.WindowManager
+import androidx.core.content.FileProvider
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
@@ -215,6 +216,21 @@ class MainActivity : FlutterActivity() {
                             result.error("install_failed", t.message, null)
                         }
                     }
+                    "openApk" -> {
+                        // Manual-install path: same system UI as opening
+                        // the APK from a file manager.
+                        val path = call.argument<String>("path")
+                        if (path.isNullOrBlank()) {
+                            result.error("bad_args", "path is required", null)
+                            return@setMethodCallHandler
+                        }
+                        try {
+                            openApkViaSystemInstaller(path)
+                            result.success(null)
+                        } catch (t: Throwable) {
+                            result.error("open_failed", t.message, null)
+                        }
+                    }
                     else -> result.notImplemented()
                 }
             }
@@ -360,6 +376,45 @@ class MainActivity : FlutterActivity() {
             val pi = PendingIntent.getBroadcast(this, sessionId, intent, flags)
             session.commit(pi.intentSender)
         }
+    }
+
+    /**
+     * Manual-install fallback: hand the APK to the system
+     * package-installer activity via ACTION_VIEW — byte-for-byte the
+     * flow of tapping the file in a file manager, which is proven to
+     * work on the ROMs where a PackageInstaller-session confirm dialog
+     * never surfaces. The installer activity itself walks the operator
+     * through the "unknown sources" grant if it's missing.
+     */
+    private fun openApkViaSystemInstaller(path: String) {
+        val file = File(path)
+        require(file.exists() && file.canRead()) { "APK not readable: $path" }
+        // Same kiosk handling as the session flow — the installer UI
+        // can't show while we're pinned.
+        suppressLockUntilMs = SystemClock.elapsedRealtime() + 120_000L
+        try {
+            val am = getSystemService(Context.ACTIVITY_SERVICE) as? ActivityManager
+            if (am?.lockTaskModeState != ActivityManager.LOCK_TASK_MODE_NONE) {
+                stopLockTask()
+            }
+        } catch (t: Throwable) {
+            Log.w(TAG_KIOSK, "stopLockTask before openApk failed: ${t.message}")
+        }
+        val uri = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+            FileProvider.getUriForFile(this, "$packageName.fileprovider", file)
+        } else {
+            @Suppress("DEPRECATION")
+            Uri.fromFile(file)
+        }
+        startActivity(
+            Intent(Intent.ACTION_VIEW)
+                .setDataAndType(uri, "application/vnd.android.package-archive")
+                .addFlags(
+                    Intent.FLAG_GRANT_READ_URI_PERMISSION or
+                        Intent.FLAG_ACTIVITY_NEW_TASK,
+                ),
+        )
+        Log.i(TAG_KIOSK, "opened system installer for $path")
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {

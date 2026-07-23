@@ -95,15 +95,26 @@ class UpdateService {
     );
   }
 
-  /// Download the release asset to the app's cache dir and hand it to
-  /// the native installer. [onProgress] fires per chunk with bytes
-  /// received vs total — drive a progress bar with it.
-  Future<void> downloadAndInstall(
+  /// Download the release APK and return the saved path.
+  ///
+  /// [manual] picks the destination: `false` → private cache (feeds the
+  /// automatic PackageInstaller session), `true` → the app's EXTERNAL
+  /// files dir (`Android/data/<pkg>/files`) — visible to file managers,
+  /// so the operator can install the file by hand if the automatic
+  /// flow is blocked on their ROM.
+  Future<String> downloadApk(
     UpdateInfo info, {
     void Function(int received, int total)? onProgress,
+    bool manual = false,
   }) async {
-    final cache = await getTemporaryDirectory();
-    final dest = File('${cache.path}/update-${info.versionCode}.apk');
+    final dir = manual
+        ? (await getExternalStorageDirectory() ??
+            await getTemporaryDirectory())
+        : await getTemporaryDirectory();
+    final name = manual
+        ? 'micromart-${info.versionName}.apk'
+        : 'update-${info.versionCode}.apk';
+    final dest = File('${dir.path}/$name');
     if (await dest.exists()) await dest.delete();
 
     final req = http.Request('GET', Uri.parse(info.assetUrl))
@@ -125,8 +136,19 @@ class UpdateService {
     await sink.flush();
     await sink.close();
 
-    debugPrint('[UpdateService] downloaded ${dest.lengthSync()} bytes to ${dest.path}');
-    await KioskBridge.installApk(dest.path);
+    debugPrint(
+        '[UpdateService] downloaded ${dest.lengthSync()} bytes to ${dest.path}');
+    return dest.path;
+  }
+
+  /// Download to cache and hand the file to the automatic native
+  /// installer (PackageInstaller session).
+  Future<void> downloadAndInstall(
+    UpdateInfo info, {
+    void Function(int received, int total)? onProgress,
+  }) async {
+    final path = await downloadApk(info, onProgress: onProgress);
+    await KioskBridge.installApk(path);
   }
 
   _ParsedVersion? _parseVersion(String tag) {

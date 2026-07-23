@@ -110,6 +110,15 @@ class KioskBridge {
     await _channel.invokeMethod<void>('installApk', {'path': path});
   }
 
+  /// Hand a downloaded APK to the SYSTEM package-installer UI — the
+  /// same flow as tapping the file in a file manager, which works even
+  /// on ROMs where the PackageInstaller-session confirm dialog never
+  /// surfaces. Kiosk pinning is dropped first on the native side; the
+  /// operator then taps «Установить» in the familiar system dialog.
+  static Future<void> openApk(String path) async {
+    await _channel.invokeMethod<void>('openApk', {'path': path});
+  }
+
   /// Force the Android "Allow this app to access USB device?" dialog
   /// to appear for the CH340 — even when the cable was plugged in
   /// before the app started (no [USB_DEVICE_ATTACHED] intent fired,

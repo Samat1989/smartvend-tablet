@@ -33,6 +33,11 @@ class _UpdateScreenState extends State<UpdateScreen> {
   /// Info-level banner ("подтвердите установку…") driven by the native
   /// PackageInstaller statuses — see [KioskBridge.installStatusStream].
   String? _installHint;
+
+  /// Path of the APK saved by the manual-install flow, or null. When
+  /// set, the UI shows the file location and an «Установить» button
+  /// that opens the system installer (same as a file manager would).
+  String? _manualApkPath;
   UpdateInfo? _update;
   int _received = 0;
   int _total = 0;
@@ -175,6 +180,60 @@ class _UpdateScreenState extends State<UpdateScreen> {
     }
   }
 
+  /// Manual flow: download the APK to a file-manager-visible folder,
+  /// then hand it to the system installer — the operator confirms in
+  /// the standard dialog. The path stays on screen so the file can
+  /// also be opened by hand if needed.
+  Future<void> _downloadForManualInstall() async {
+    final info = _update;
+    if (info == null) return;
+    setState(() {
+      _downloading = true;
+      _received = 0;
+      _total = info.assetSize;
+      _error = null;
+      _installHint = null;
+      _manualApkPath = null;
+    });
+    try {
+      final path = await _service.downloadApk(
+        info,
+        manual: true,
+        onProgress: (rec, tot) {
+          if (!mounted) return;
+          setState(() {
+            _received = rec;
+            _total = tot;
+          });
+        },
+      );
+      if (!mounted) return;
+      setState(() {
+        _downloading = false;
+        _manualApkPath = path;
+      });
+      await _openManualApk();
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _downloading = false;
+        _error = e.toString();
+      });
+    }
+  }
+
+  Future<void> _openManualApk() async {
+    final path = _manualApkPath;
+    if (path == null) return;
+    try {
+      await KioskBridge.openApk(path);
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _error = 'Не удалось открыть установщик: $e\n'
+          'Откройте файл вручную через файловый менеджер:\n$path');
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -186,6 +245,7 @@ class _UpdateScreenState extends State<UpdateScreen> {
           const SizedBox(height: 16),
           if (_error != null) _errorCard(),
           if (_installHint != null) _installHintCard(),
+          if (_manualApkPath != null) _manualApkCard(),
           if (_update != null) _updateCard(),
           if (_downloading) _progressCard(),
           if (_update == null && !_checking) _checkButton(),
@@ -327,7 +387,7 @@ class _UpdateScreenState extends State<UpdateScreen> {
               ),
             ],
             const SizedBox(height: 16),
-            if (isNewer)
+            if (isNewer) ...[
               FilledButton.icon(
                 icon: const Icon(Icons.download),
                 label: const Text('Скачать и установить'),
@@ -335,8 +395,20 @@ class _UpdateScreenState extends State<UpdateScreen> {
                   padding: const EdgeInsets.symmetric(vertical: 16),
                 ),
                 onPressed: _downloading ? null : _downloadAndInstall,
-              )
-            else
+              ),
+              const SizedBox(height: 8),
+              // Fallback for ROMs where the automatic session install
+              // stalls: save the file where a file manager can see it
+              // and go through the standard system installer instead.
+              OutlinedButton.icon(
+                icon: const Icon(Icons.save_alt),
+                label: const Text('Скачать для ручной установки'),
+                style: OutlinedButton.styleFrom(
+                  padding: const EdgeInsets.symmetric(vertical: 14),
+                ),
+                onPressed: _downloading ? null : _downloadForManualInstall,
+              ),
+            ] else
               OutlinedButton.icon(
                 icon: const Icon(Icons.refresh),
                 label: const Text('Проверить ещё раз'),
@@ -375,6 +447,52 @@ class _UpdateScreenState extends State<UpdateScreen> {
             const Text(
               'Не выключайте планшет — приложение перезапустится автоматически.',
               style: TextStyle(fontSize: 11, color: Colors.black54),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _manualApkCard() {
+    return Card(
+      color: Colors.green.shade50,
+      child: Padding(
+        padding: const EdgeInsets.all(14),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Icon(Icons.file_present, color: Colors.green.shade700),
+                const SizedBox(width: 8),
+                const Text(
+                  'APK скачан',
+                  style: TextStyle(fontWeight: FontWeight.w800),
+                ),
+              ],
+            ),
+            const SizedBox(height: 8),
+            SelectableText(
+              _manualApkPath!,
+              style: const TextStyle(fontSize: 11, fontFamily: 'monospace'),
+            ),
+            const SizedBox(height: 4),
+            const Text(
+              'Нажмите «Установить» — откроется системный установщик '
+              '(как при открытии файла из файлового менеджера). '
+              'Если не открылся — найдите файл по пути выше.',
+              style: TextStyle(fontSize: 11, color: Colors.black54),
+            ),
+            const SizedBox(height: 10),
+            FilledButton.icon(
+              icon: const Icon(Icons.install_mobile),
+              label: const Text('Установить'),
+              style: FilledButton.styleFrom(
+                backgroundColor: Colors.green.shade700,
+                padding: const EdgeInsets.symmetric(vertical: 14),
+              ),
+              onPressed: _openManualApk,
             ),
           ],
         ),

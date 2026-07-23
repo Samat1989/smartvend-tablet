@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Paths the update FileProvider may serve: the app's external files
+     dir (manual-install APK, visible to file managers) and the private
+     cache (automatic-flow APK). -->
+<paths>
+    <external-files-path
+        name="files"
+        path="."/>
+    <cache-path
+        name="cache"
+        path="."/>
+</paths>
