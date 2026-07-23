@@ -143,18 +143,20 @@ class LayoutTemplate {
 
   /// BarysVend V27.2 (LiYuTai): dispense is addressed by (ряд, колонка),
   /// stored as motor id = ряд×100 + колонка (canonical encoding, см.
-  /// BoardClient.lytRowColFromMotorId). 6 rows × 10 columns; the door
-  /// label keeps the usual ряд×10+колонка numbering (11..70) the
-  /// cabinets are stickered with. Trim extra slots/shelves after
-  /// applying if the machine is narrower.
-  static const LayoutTemplate barysvend6x10 = LayoutTemplate(
-    id: 'barysvend_6x10',
-    name: 'BarysVend V27.2 (6×10)',
-    description: '6 рядов × 10 колонок, позиции ряд·колонка, двери 11..70',
-    builder: _buildBarysvend6x10,
+  /// BoardClient.lytRowColFromMotorId). Mirrors the real cabinet:
+  /// rows 1–2 carry 5 columns (wide spirals), rows 3–6 carry 10.
+  /// Addressing starts at ряд 1 колонка 1; if the wrong motor spins,
+  /// flip «Ряд ↔ колонка местами» in the «Плата» tab — that setting
+  /// lives outside the template.
+  static const LayoutTemplate barysvendV272 = LayoutTemplate(
+    id: 'barysvend_v27_2',
+    name: 'BarysVend V27.2',
+    description:
+        'Ряды 1–2 по 5 колонок, ряды 3–6 по 10; позиции с 1 ряда 1 колонки',
+    builder: _buildBarysvendV272,
   );
 
-  static const List<LayoutTemplate> all = [factory6x6, mp2404_5_50, barysvend6x10];
+  static const List<LayoutTemplate> all = [factory6x6, mp2404_5_50, barysvendV272];
 }
 
 MachineLayout _buildFactory6x6() {
@@ -218,16 +220,18 @@ MachineLayout _buildMp2404() {
   return MachineLayout(shelves: shelves);
 }
 
-MachineLayout _buildBarysvend6x10() {
-  // Row r (1..6) × column c (1..10); the position is stored as
-  // id = r*100 + c and decoded back by BoardClient.lytRowColFromMotorId.
-  // Door labels keep the familiar r*10+c numbering (11..70).
+MachineLayout _buildBarysvendV272() {
+  // Real BarysVend V27.2 cabinet: rows 1–2 have 5 columns, rows 3–6
+  // have 10. Position stored as id = r*100 + c (decoded back by
+  // BoardClient.lytRowColFromMotorId); door labels keep the familiar
+  // r*10+c numbering (11..15, 21..25, 31..40, … 61..70).
+  const columnsPerRow = [5, 5, 10, 10, 10, 10];
   final shelves = <Shelf>[
-    for (var r = 1; r <= 6; r++)
+    for (var r = 1; r <= columnsPerRow.length; r++)
       Shelf(
-        label: '${r * 10 + 1} — ${r * 10 + 10}',
+        label: '${r * 10 + 1} — ${r * 10 + columnsPerRow[r - 1]}',
         slots: [
-          for (var c = 1; c <= 10; c++)
+          for (var c = 1; c <= columnsPerRow[r - 1]; c++)
             Slot(
               label: '${r * 10 + c}',
               motorIds: [r * 100 + c],
