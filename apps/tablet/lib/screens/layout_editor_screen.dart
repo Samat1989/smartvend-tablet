@@ -7,6 +7,15 @@ import '../services/strings.dart';
 import '../services/vending_service.dart';
 import '../theme.dart';
 
+/// Human label for a motor id. BarysVend positions decode to "Р2·К3"
+/// (both the canonical ряд×100+колонка ids and the legacy 11..100
+/// encoding); M102 channel numbers stay as-is.
+String _motorLabel(int id, {required bool isLyt}) {
+  if (!isLyt && id < 101) return '$id';
+  final (r, c) = BoardClient.lytRowColFromMotorId(id);
+  return 'Р$r·К$c';
+}
+
 /// Service-mode editor for the per-machine layout: shelves + slots +
 /// twin-spiral groupings. Persists locally via
 /// [VendingService.setLayout] → [DeviceStorage.setMachineLayoutJson],
@@ -247,6 +256,9 @@ class _LayoutEditorScreenState extends State<LayoutEditorScreen> {
     final usedElsewhere = _draft.allUsedMotorIds.difference(
       (initial?.motorIds ?? const <int>[]).toSet(),
     );
+    // BarysVend position being composed in the dropdowns.
+    var pickRow = 1;
+    var pickCol = 1;
     return showDialog<Slot>(
       context: context,
       builder: (ctx) {
@@ -295,8 +307,8 @@ class _LayoutEditorScreenState extends State<LayoutEditorScreen> {
                     const SizedBox(height: 8),
                     Text(
                       isLyt
-                          ? 'Выберите позицию: ряды сверху вниз, колонки '
-                              'слева направо. Номер = ряд×10+колонка.  '
+                          ? 'Задайте позицию мотора рядом и колонкой '
+                              '(2+ позиции для сдвоенного слота).  '
                               '${selected.length} выбрано.'
                           : 'Выберите motor id (1+ для сдвоенного слота).  '
                               '${selected.length} выбрано.',
@@ -304,47 +316,130 @@ class _LayoutEditorScreenState extends State<LayoutEditorScreen> {
                           fontSize: 12, color: Colors.black54),
                     ),
                     const SizedBox(height: 8),
-                    Expanded(
-                      child: GridView.builder(
-                        gridDelegate:
-                            const SliverGridDelegateWithFixedCrossAxisCount(
-                          crossAxisCount: 10,
-                          mainAxisSpacing: 4,
-                          crossAxisSpacing: 4,
-                          childAspectRatio: 1,
+                    if (isLyt)
+                      // BarysVend: the operator thinks in physical
+                      // (ряд, колонка) — compose the position from two
+                      // dropdowns; the id stores ряд×100+колонка.
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.stretch,
+                          children: [
+                            Row(
+                              children: [
+                                Expanded(
+                                  child: DropdownButtonFormField<int>(
+                                    initialValue: pickRow,
+                                    decoration: const InputDecoration(
+                                      labelText: 'Ряд (L)',
+                                      border: OutlineInputBorder(),
+                                    ),
+                                    items: [
+                                      for (var r = 1; r <= 10; r++)
+                                        DropdownMenuItem(
+                                            value: r, child: Text('$r')),
+                                    ],
+                                    onChanged: (v) => setLocal(
+                                        () => pickRow = v ?? pickRow),
+                                  ),
+                                ),
+                                const SizedBox(width: 8),
+                                Expanded(
+                                  child: DropdownButtonFormField<int>(
+                                    initialValue: pickCol,
+                                    decoration: const InputDecoration(
+                                      labelText: 'Колонка (C)',
+                                      border: OutlineInputBorder(),
+                                    ),
+                                    items: [
+                                      for (var c = 1; c <= 14; c++)
+                                        DropdownMenuItem(
+                                            value: c, child: Text('$c')),
+                                    ],
+                                    onChanged: (v) => setLocal(
+                                        () => pickCol = v ?? pickCol),
+                                  ),
+                                ),
+                                const SizedBox(width: 8),
+                                FilledButton.icon(
+                                  icon: const Icon(Icons.add),
+                                  label: const Text('Добавить'),
+                                  onPressed: usedElsewhere.contains(
+                                          BoardClient.lytMotorIdFor(
+                                              pickRow, pickCol))
+                                      ? null
+                                      : () => setLocal(() => selected.add(
+                                          BoardClient.lytMotorIdFor(
+                                              pickRow, pickCol))),
+                                ),
+                              ],
+                            ),
+                            if (usedElsewhere.contains(
+                                BoardClient.lytMotorIdFor(pickRow, pickCol)))
+                              const Padding(
+                                padding: EdgeInsets.only(top: 6),
+                                child: Text(
+                                  'Эта позиция уже занята другим слотом',
+                                  style: TextStyle(
+                                      fontSize: 11, color: Colors.redAccent),
+                                ),
+                              ),
+                            const SizedBox(height: 12),
+                            Expanded(
+                              child: SingleChildScrollView(
+                                child: Wrap(
+                                  spacing: 6,
+                                  runSpacing: 6,
+                                  children: [
+                                    for (final id in selected.toList()
+                                      ..sort())
+                                      InputChip(
+                                        label: Text(
+                                            _motorLabel(id, isLyt: true)),
+                                        onDeleted: () => setLocal(
+                                            () => selected.remove(id)),
+                                      ),
+                                  ],
+                                ),
+                              ),
+                            ),
+                          ],
                         ),
-                        // BarysVend: 9 board rows × 10 columns, the cell
-                        // at grid (r, c) is id (r+1)*10 + (c+1) — 11..100,
-                        // column 10 landing on the decade boundary (20,
-                        // 30, … 100). M102: flat channels 0..99.
-                        itemCount: isLyt ? 90 : 100,
-                        itemBuilder: (ctx, i) {
-                          final id = isLyt
-                              ? (i ~/ 10 + 1) * 10 + (i % 10 + 1)
-                              : i;
-                          final code = _scanResults[id];
-                          final isSelected = selected.contains(id);
-                          final isTaken = usedElsewhere.contains(id);
-                          return _MotorCell(
-                            motorId: id,
-                            scanResult: code,
-                            selected: isSelected,
-                            takenByOther: isTaken,
-                            onTap: isTaken && !isSelected
-                                ? null
-                                : () {
-                                    setLocal(() {
-                                      if (isSelected) {
-                                        selected.remove(id);
-                                      } else {
-                                        selected.add(id);
-                                      }
-                                    });
-                                  },
-                          );
-                        },
+                      )
+                    else
+                      Expanded(
+                        child: GridView.builder(
+                          gridDelegate:
+                              const SliverGridDelegateWithFixedCrossAxisCount(
+                            crossAxisCount: 10,
+                            mainAxisSpacing: 4,
+                            crossAxisSpacing: 4,
+                            childAspectRatio: 1,
+                          ),
+                          itemCount: 100,
+                          itemBuilder: (ctx, i) {
+                            final code = _scanResults[i];
+                            final isSelected = selected.contains(i);
+                            final isTaken = usedElsewhere.contains(i);
+                            return _MotorCell(
+                              motorId: i,
+                              scanResult: code,
+                              selected: isSelected,
+                              takenByOther: isTaken,
+                              onTap: isTaken && !isSelected
+                                  ? null
+                                  : () {
+                                      setLocal(() {
+                                        if (isSelected) {
+                                          selected.remove(i);
+                                        } else {
+                                          selected.add(i);
+                                        }
+                                      });
+                                    },
+                            );
+                          },
+                        ),
                       ),
-                    ),
                     const SizedBox(height: 8),
                     _ScanLegend(isLyt: isLyt),
                     const SizedBox(height: 8),
@@ -435,6 +530,7 @@ class _LayoutEditorScreenState extends State<LayoutEditorScreen> {
                         _selectedShelf < _draft.shelves.length
                     ? _draft.shelves[_selectedShelf]
                     : null,
+                isLyt: context.watch<BoardClient>().isLyt,
                 onAddSlot: _addSlot,
                 onEditSlot: _editSlot,
                 onDeleteSlot: _deleteSlot,
@@ -572,12 +668,14 @@ class _ShelfRail extends StatelessWidget {
 class _SlotsPanel extends StatelessWidget {
   const _SlotsPanel({
     required this.shelf,
+    required this.isLyt,
     required this.onAddSlot,
     required this.onEditSlot,
     required this.onDeleteSlot,
   });
 
   final Shelf? shelf;
+  final bool isLyt;
   final VoidCallback onAddSlot;
   final void Function(int) onEditSlot;
   final void Function(int) onDeleteSlot;
@@ -682,7 +780,13 @@ class _SlotsPanel extends StatelessWidget {
                                       ),
                                     Expanded(
                                       child: Text(
-                                        'motors: ${sl.motorIds.join(", ")}',
+                                        isLyt
+                                            ? sl.motorIds
+                                                .map((m) => _motorLabel(m,
+                                                    isLyt: true))
+                                                .join(', ')
+                                            : 'motors: '
+                                                '${sl.motorIds.join(", ")}',
                                         style: const TextStyle(
                                           color: Colors.white70,
                                           fontSize: 11,
@@ -786,9 +890,9 @@ class _ScanLegend extends StatelessWidget {
   Widget build(BuildContext context) {
     if (isLyt) {
       return const Text(
-        'Строка сетки = ряд платы (L), ячейка = колонка (C). '
-        'Колонка 10 получает номер следующего десятка: ряд 1 → 11..20, '
-        'ряд 2 → 21..30, …',
+        'Ряд (L) — полка сверху вниз, колонка (C) — мотор слева направо. '
+        'Если крутится не тот мотор — включите «Ряд↔колонка» во вкладке '
+        '«Плата».',
         style: TextStyle(fontSize: 11, color: Colors.black54),
       );
     }

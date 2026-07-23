@@ -31,6 +31,9 @@ class DeviceStorage extends ChangeNotifier {
   // 9600). 'lyt_v27' = BarysVend/LiYuTai V27.2 (AA..DD XOR frames, 115200) —
   // see docs/ИНТЕГРАЦИЯ_платы_LiYuTai_FINAL.md.
   static const _kBoardProtocol = 'board_protocol';
+  // BarysVend only: swap ряд/колонка in outgoing dispense frames for
+  // cross-wired cabinets (see BoardClient.lytSwapRowCol).
+  static const _kLytSwapRowCol = 'lyt_swap_row_col';
   static const _kMachineLayout = 'machine_layout_v1';
   static const _kPinFailCount = 'pin_fail_count';
   static const _kPinLockedUntil = 'pin_locked_until';
@@ -103,6 +106,13 @@ class DeviceStorage extends ChangeNotifier {
     } else {
       await _prefs.setString(_kBoardProtocol, name);
     }
+    notifyListeners();
+  }
+
+  bool get lytSwapRowCol => _prefs.getBool(_kLytSwapRowCol) ?? false;
+
+  Future<void> setLytSwapRowCol(bool v) async {
+    await _prefs.setBool(_kLytSwapRowCol, v);
     notifyListeners();
   }
 

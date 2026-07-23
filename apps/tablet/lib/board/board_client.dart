@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:flutter/foundation.dart';
@@ -263,6 +262,7 @@ class BoardClient extends ChangeNotifier {
     if (pref != null) _useM102Password = pref;
     _protocol = BoardProtocol.fromStorageName(storage?.boardProtocolName);
     _baud = _protocol.defaultBaud;
+    _lytSwapRowCol = storage?.lytSwapRowCol ?? false;
     _usbEventSub = UsbSerial.usbEventStream?.listen((event) async {
       _info('USB event: ${event.event} ${event.device?.productName ?? ""}');
       // On any USB attach, refresh and try to auto-connect if we're not already.
@@ -568,23 +568,14 @@ class BoardClient extends ChangeNotifier {
   /// Enumerate plausible native serial nodes under /dev. Which node the
   /// external port maps to — and even the name prefix — varies by SoC
   /// (Spreadtrum `ttyS*`, MediaTek `ttyMT*`, Qualcomm `ttyHS*`/`ttyHSL*`),
-  /// so the picker lists whatever the device actually exposes rather than a
-  /// fixed set. `ttyUSB*`/`ttyACM*` are excluded — those belong to the USB
-  /// path handled by [autoConnect].
-  Future<List<String>> listNativePorts() async {
-    final re = RegExp(r'^tty(S|MT|HS|HSL|GS)\d+$');
-    final out = <String>[];
-    try {
-      await for (final e in Directory('/dev').list(followLinks: false)) {
-        final name = e.path.split('/').last;
-        if (re.hasMatch(name)) out.add('/dev/$name');
-      }
-    } catch (e) {
-      _info('listNativePorts: $e');
-    }
-    out.sort();
-    return out;
-  }
+  /// so the picker lists whatever the device actually exposes rather than
+  /// a fixed set. Delegates to [NativeUartTransport.listPorts], which
+  /// combines a direct /dev listing with per-candidate probes through the
+  /// resolved busybox/toybox runner — a plain Dart directory listing came
+  /// back empty on SELinux-restricted tablets, leaving the operator with
+  /// no chip to tap even though `/dev/ttyS1` worked fine when opened.
+  Future<List<String>> listNativePorts() =>
+      NativeUartTransport.listPorts(log: _info);
 
   /// Probe each candidate node for a live board: send Get ID and watch for
   /// a 20-byte reply, trying both CRC-password modes. Returns the first
@@ -1008,11 +999,16 @@ class BoardClient extends ChangeNotifier {
   }
 
   /// LiYuTai addresses a spiral by (ряд, колонка) while the rest of the
-  /// app carries a single motor id. Convention: `id = ряд*10 + колонка`,
-  /// a full decade rolling into column 10 — 11→(1,1), 19→(1,9),
-  /// 20→(1,10), 21→(2,1). Operator sets the slot's motor id accordingly
-  /// in the layout editor. Columns 11..14 aren't reachable this way.
+  /// app carries a single motor id, so the id *encodes* the pair.
+  ///
+  /// Canonical encoding (what the layout editor writes): `id = ряд*100 +
+  /// колонка` — 101→(1,1), 203→(2,3), 614→(6,14). Covers the full
+  /// L1..L10 × C1..C14 matrix and can't collide with M102 channels
+  /// (0..99). Ids 11..100 are the legacy first-release encoding
+  /// (ряд*10+колонка with column 10 on the decade boundary) and still
+  /// decode so existing layouts keep dispensing.
   static (int, int) lytRowColFromMotorId(int id) {
+    if (id >= 101) return (id ~/ 100, id % 100);
     var col = id % 10;
     var row = id ~/ 10;
     if (col == 0) {
@@ -1020,6 +1016,26 @@ class BoardClient extends ChangeNotifier {
       row -= 1;
     }
     return (row, col);
+  }
+
+  /// Inverse of [lytRowColFromMotorId] for the canonical encoding.
+  static int lytMotorIdFor(int row, int col) => row * 100 + col;
+
+  /// Swap ряд/колонка in outgoing dispense frames. On at least one
+  /// BarysVend cabinet the wrong motor spins with the documented byte
+  /// order — the bench that produced the doc verified on ряд 6 кол 6,
+  /// which is symmetric and can't tell [4]=ряд from [4]=колонка apart.
+  /// Flipped by the operator in the "Плата" tab when the machine turns
+  /// out to be cross-wired; persisted via [DeviceStorage].
+  bool _lytSwapRowCol = false;
+  bool get lytSwapRowCol => _lytSwapRowCol;
+
+  void setLytSwapRowCol(bool v) {
+    _lytSwapRowCol = v;
+    // ignore: unawaited_futures — fire-and-forget prefs write
+    _storage?.setLytSwapRowCol(v);
+    _info('LYT ряд/колонка ${v ? "ПОМЕНЯНЫ местами" : "как в протоколе"}');
+    notifyListeners();
   }
 
   /// Extract complete `AA … XOR DD` frames from [_lytRx]. Known frames
@@ -1121,9 +1137,8 @@ class BoardClient extends ChangeNotifier {
   /// adapter or native UART): a real dispense ряд 1 кол 1 with a
   /// ~10-tick watchdog so the motor barely twitches — the only command
   /// the board answers (doc §7 / §9.2). Any status back (0/1/2) means
-  /// the line is alive in BOTH directions. No reply usually means a
-  /// wrong line/speed — or TX works but RX doesn't (3.3 В FTDI не
-  /// дочитывает ~1.8 В уровень платы, §2).
+  /// the line is alive in both directions; no reply usually means the
+  /// wrong line, speed, or a port held by other software.
   Future<bool> lytPing() async {
     if (!isLyt || _transport == null) return false;
     final prev = _busLock;
@@ -1158,13 +1173,18 @@ class BoardClient extends ChangeNotifier {
   /// result. Serialized through [_busLock] like every M102 exchange —
   /// one command in flight at a time.
   Future<DispenseResult> _dispenseLyt(int motorIdx) async {
-    final (row, col) = lytRowColFromMotorId(motorIdx);
-    if (row < 1 || row > 10 || col < 1) {
+    var (row, col) = lytRowColFromMotorId(motorIdx);
+    if (row < 1 || row > 10 || col < 1 || col > 14) {
       return DispenseResult(
         success: false,
         message: 'Мотор $motorIdx не кодирует (ряд, колонку): '
-            'для BarysVend id = ряд*10 + колонка (11, 25, 30, …)',
+            'задайте позицию слота в редакторе раскладки заново',
       );
+    }
+    if (_lytSwapRowCol) {
+      final t = row;
+      row = col;
+      col = t;
     }
     final prev = _busLock;
     final done = Completer<void>();
@@ -1174,7 +1194,8 @@ class BoardClient extends ChangeNotifier {
       if (_transport == null) {
         return DispenseResult(success: false, message: 'Нет связи с платой');
       }
-      _info('--- LYT DISPENSE ряд=$row кол=$col (мотор $motorIdx) ---');
+      _info('--- LYT DISPENSE ряд=$row кол=$col (мотор $motorIdx'
+          '${_lytSwapRowCol ? ", swap" : ""}) ---');
       final frame = buildLytDispenseFrame(row, col, _lytDispenseTimeout);
       final completer = Completer<int>();
       _lytPendingDispense = completer;

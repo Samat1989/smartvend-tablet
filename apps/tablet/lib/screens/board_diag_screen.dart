@@ -186,7 +186,10 @@ class _BoardDiagScreenState extends State<BoardDiagScreen> {
             _StatusCard(board: board, s: s),
             _ProtocolCard(
               selected: board.protocol,
+              swapRowCol: board.lytSwapRowCol,
               onSelect: _selectProtocol,
+              onSwapChanged: (v) =>
+                  context.read<BoardClient>().setLytSwapRowCol(v),
             ),
             _ControlsCard(
               board: board,
@@ -220,10 +223,20 @@ class _BoardDiagScreenState extends State<BoardDiagScreen> {
 /// vs BarysVend V27.2 / LiYuTai (AA..DD XOR frames, 115200). Persisted;
 /// switching reconnects on the spot with the right framing and baud.
 class _ProtocolCard extends StatelessWidget {
-  const _ProtocolCard({required this.selected, required this.onSelect});
+  const _ProtocolCard({
+    required this.selected,
+    required this.swapRowCol,
+    required this.onSelect,
+    required this.onSwapChanged,
+  });
 
   final BoardProtocol selected;
+
+  /// BarysVend: swap ряд/колонка in outgoing frames — for cabinets
+  /// wired the other way around (the wrong motor spins otherwise).
+  final bool swapRowCol;
   final Future<void> Function(BoardProtocol p) onSelect;
+  final ValueChanged<bool> onSwapChanged;
 
   /// One-line reminder of what each protocol implies, shown under the
   /// chips so the operator on-site doesn't need the doc open.
@@ -232,10 +245,8 @@ class _ProtocolCard extends StatelessWidget {
         'M102 / M109E — кадры 20 байт CRC-16, 9600 8N1, моторы 0..99',
     BoardProtocol.lyt:
         'BarysVend V27.2 (LiYuTai) — кадры AA..DD XOR, 115200 8N1, '
-            'адресация ряд/колонка: id мотора = ряд×10 + колонка. '
-            'Плата отвечает только на выдачу — проверка через «Тест связи». '
-            '⚠ USB-FTDI 3.3 В может не читать ответы платы (~1.8 В) — '
-            'надёжнее родной UART планшета',
+            'адресация ряд/колонка, обычно порт ttyS1. Плата отвечает '
+            'только на выдачу — проверка связи кнопкой «Тест связи»',
   };
 
   @override
@@ -286,6 +297,23 @@ class _ProtocolCard extends StatelessWidget {
             _hints[selected] ?? '',
             style: const TextStyle(color: Colors.white38, fontSize: 11),
           ),
+          if (selected == BoardProtocol.lyt)
+            SwitchListTile(
+              dense: true,
+              contentPadding: EdgeInsets.zero,
+              value: swapRowCol,
+              onChanged: onSwapChanged,
+              activeThumbColor: Colors.amberAccent,
+              title: const Text(
+                'Ряд ↔ колонка местами',
+                style: TextStyle(color: Colors.white, fontSize: 13),
+              ),
+              subtitle: const Text(
+                'Включите, если крутится не тот мотор (перепутана '
+                'распиновка ряд/колонка)',
+                style: TextStyle(color: Colors.white38, fontSize: 11),
+              ),
+            ),
         ],
       ),
     );
