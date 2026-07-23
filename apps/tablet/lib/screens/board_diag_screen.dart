@@ -128,6 +128,23 @@ class _BoardDiagScreenState extends State<BoardDiagScreen> {
     await storage.setUseM102Password(next);
   }
 
+  /// Switch the wire protocol (M102/M109 ↔ BarysVend V27.2) and
+  /// reconnect over the currently selected link so the new framing and
+  /// baud take effect immediately.
+  Future<void> _selectProtocol(BoardProtocol p) async {
+    final board = context.read<BoardClient>();
+    final storage = context.read<DeviceStorage>();
+    if (board.protocol == p) return;
+    await board.disconnect();
+    board.setProtocol(p);
+    final path = storage.serialPortPath;
+    if (path != null) {
+      await board.connectNative(path);
+    } else {
+      await board.autoConnect();
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final s = context.watch<Strings>();
@@ -147,6 +164,10 @@ class _BoardDiagScreenState extends State<BoardDiagScreen> {
         child: Column(
           children: [
             _StatusCard(board: board, s: s),
+            _ProtocolCard(
+              selected: board.protocol,
+              onSelect: _selectProtocol,
+            ),
             _ControlsCard(
               board: board,
               s: s,
@@ -169,6 +190,79 @@ class _BoardDiagScreenState extends State<BoardDiagScreen> {
             ),
           ],
         ),
+      ),
+    );
+  }
+}
+
+/// Board-type / protocol selector: M102-M109 (20-byte CRC frames, 9600)
+/// vs BarysVend V27.2 / LiYuTai (AA..DD XOR frames, 115200). Persisted;
+/// switching reconnects on the spot with the right framing and baud.
+class _ProtocolCard extends StatelessWidget {
+  const _ProtocolCard({required this.selected, required this.onSelect});
+
+  final BoardProtocol selected;
+  final Future<void> Function(BoardProtocol p) onSelect;
+
+  /// One-line reminder of what each protocol implies, shown under the
+  /// chips so the operator on-site doesn't need the doc open.
+  static const Map<BoardProtocol, String> _hints = {
+    BoardProtocol.m102:
+        'M102 / M109E — кадры 20 байт CRC-16, 9600 8N1, моторы 0..99',
+    BoardProtocol.lyt:
+        'BarysVend V27.2 (LiYuTai) — кадры AA..DD XOR, 115200 8N1, '
+            'адресация ряд/колонка: id мотора = ряд×10 + колонка',
+  };
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      margin: const EdgeInsets.fromLTRB(12, 0, 12, 6),
+      padding: const EdgeInsets.all(10),
+      decoration: BoxDecoration(
+        color: Colors.white.withValues(alpha: 0.06),
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text(
+            'ТИП ПЛАТЫ / ПРОТОКОЛ',
+            style: TextStyle(
+              color: Colors.white70,
+              fontSize: 11,
+              fontWeight: FontWeight.bold,
+              letterSpacing: 1.2,
+            ),
+          ),
+          const SizedBox(height: 8),
+          Wrap(
+            spacing: 6,
+            runSpacing: 6,
+            children: [
+              for (final p in BoardProtocol.values)
+                ChoiceChip(
+                  label: Text(p.label),
+                  selected: selected == p,
+                  onSelected: (_) {
+                    if (selected != p) onSelect(p);
+                  },
+                  labelStyle: const TextStyle(
+                    color: Colors.black,
+                    fontSize: 12,
+                    fontWeight: FontWeight.w600,
+                  ),
+                  backgroundColor: Colors.grey.shade300,
+                  selectedColor: Colors.amberAccent,
+                ),
+            ],
+          ),
+          const SizedBox(height: 6),
+          Text(
+            _hints[selected] ?? '',
+            style: const TextStyle(color: Colors.white38, fontSize: 11),
+          ),
+        ],
       ),
     );
   }
@@ -336,6 +430,7 @@ class _StatusCard extends StatelessWidget {
           ),
           const SizedBox(height: 6),
           Text(
+            '${board.protocol.label}    '
             '${s.t('board_firmware')}: '
             '${board.firmwareId ?? "—"}    '
             '${s.t('board_slave_addr')}: ${board.slaveAddr}    '
@@ -403,21 +498,25 @@ class _ControlsCard extends StatelessWidget {
               onPressed: onToggleConnection,
             ),
           ),
-          const SizedBox(width: 8),
-          Expanded(
-            child: FilledButton.icon(
-              icon: Icon(board.useM102Password
-                  ? Icons.lock
-                  : Icons.lock_open),
-              label: Text(
-                  '${s.t('service_m102_password')}: '
-                  '${board.useM102Password ? "ON" : "OFF"}'),
-              style: FilledButton.styleFrom(
-                backgroundColor: Colors.purple,
+          // The CRC password is an M102-family concept; BarysVend V27.2
+          // frames carry a plain XOR — nothing to toggle there.
+          if (!board.isLyt) ...[
+            const SizedBox(width: 8),
+            Expanded(
+              child: FilledButton.icon(
+                icon: Icon(board.useM102Password
+                    ? Icons.lock
+                    : Icons.lock_open),
+                label: Text(
+                    '${s.t('service_m102_password')}: '
+                    '${board.useM102Password ? "ON" : "OFF"}'),
+                style: FilledButton.styleFrom(
+                  backgroundColor: Colors.purple,
+                ),
+                onPressed: onTogglePassword,
               ),
-              onPressed: onTogglePassword,
             ),
-          ),
+          ],
         ],
       ),
     );

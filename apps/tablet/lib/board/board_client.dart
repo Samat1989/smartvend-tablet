@@ -76,6 +76,32 @@ class DispenseResult {
   String toString() => '${success ? "OK" : "FAIL"}: $message';
 }
 
+/// Which control-board protocol the tablet speaks on the serial link.
+/// Chosen by the operator in the service-mode "Плата" tab and persisted
+/// via [DeviceStorage.boardProtocolName].
+enum BoardProtocol {
+  /// M102 / M109E: 20-byte fixed frames, Modbus CRC-16 (optionally mixed
+  /// with the 11-byte M102 password), 9600 8N1.
+  m102('m102', 'M102 / M109E', 9600),
+
+  /// BarysVend V27.2 (LiYuTai / STC8): `AA [len] … [XOR] DD` frames,
+  /// 115200 8N1, dispense addressed by (ряд, колонка), status echoed in
+  /// the result frame. Reverse-engineered from the factory `com.li.fut`
+  /// APK — full contract in `docs/ИНТЕГРАЦИЯ_платы_LiYuTai_FINAL.md`.
+  lyt('lyt_v27', 'BarysVend V27.2', 115200);
+
+  const BoardProtocol(this.storageName, this.label, this.defaultBaud);
+
+  /// Stable key stored in [DeviceStorage]; never rename.
+  final String storageName;
+  final String label;
+  final int defaultBaud;
+
+  static BoardProtocol fromStorageName(String? name) =>
+      values.firstWhere((p) => p.storageName == name,
+          orElse: () => BoardProtocol.m102);
+}
+
 /// Driver for M102 / M109E vending control board over USB-Serial.
 ///
 /// Matches the factory app exactly (`UsbUtil.findUSB` in the decompiled
@@ -121,6 +147,26 @@ class BoardClient extends ChangeNotifier {
   /// Factory uses `BOTELV_9600 = 9600`, 8N1.
   int _baud = 9600;
   int _slaveAddr = 1;
+
+  /// Wire protocol in use — M102/M109E by default, or BarysVend V27.2
+  /// (LiYuTai). Loaded from [DeviceStorage.boardProtocolName] in the
+  /// constructor; flipped by the operator in the "Плата" tab.
+  BoardProtocol _protocol = BoardProtocol.m102;
+  BoardProtocol get protocol => _protocol;
+  bool get isLyt => _protocol == BoardProtocol.lyt;
+
+  /// Switch the wire protocol. Persists the choice and resets the baud
+  /// to the protocol's default. The caller reconnects afterwards so the
+  /// new framing/baud actually take effect on the open port.
+  void setProtocol(BoardProtocol p) {
+    if (_protocol == p) return;
+    _protocol = p;
+    _baud = p.defaultBaud;
+    // ignore: unawaited_futures — fire-and-forget prefs write
+    _storage?.setBoardProtocolName(p.storageName);
+    _info('Протокол → ${p.label} ($_baud 8N1)');
+    notifyListeners();
+  }
 
   /// "Password" appended to the frame body before CRC-16 is computed.
   /// The factory app calls this "M102 encryption mode" (`m964getM102()`)
@@ -192,7 +238,11 @@ class BoardClient extends ChangeNotifier {
   /// True while we have at least one fresh exchange under the comm-loss
   /// threshold. False means the board is unresponsive even though USB is
   /// physically attached — UI should show a "maintenance" overlay.
-  bool get isHealthy => isConnected && _consecutiveFailures < 4;
+  ///
+  /// The LiYuTai board answers nothing except a real dispense (doc §7),
+  /// so there is no passive health signal — an open port is the best we
+  /// can report in that mode.
+  bool get isHealthy => isConnected && (isLyt || _consecutiveFailures < 4);
 
   List<UsbDevice> get devices => List.unmodifiable(_devices);
   UsbDevice? get selectedDevice => _selected;
@@ -211,6 +261,8 @@ class BoardClient extends ChangeNotifier {
   BoardClient({DeviceStorage? storage}) : _storage = storage {
     final pref = storage?.useM102Password;
     if (pref != null) _useM102Password = pref;
+    _protocol = BoardProtocol.fromStorageName(storage?.boardProtocolName);
+    _baud = _protocol.defaultBaud;
     _usbEventSub = UsbSerial.usbEventStream?.listen((event) async {
       _info('USB event: ${event.event} ${event.device?.productName ?? ""}');
       // On any USB attach, refresh and try to auto-connect if we're not already.
@@ -488,8 +540,17 @@ class BoardClient extends ChangeNotifier {
       _consecutiveFailures = 0;
       _rxSub =
           transport.onData.listen(_onRx, onError: (e) => _err('rx: $e'));
-      _info('Opened ${transport.description} @ $_baud 8N1');
+      _info('Opened ${transport.description} @ $_baud 8N1 '
+          '(${_protocol.label})');
       notifyListeners();
+      if (isLyt) {
+        // LiYuTai ignores both the version query (0x80) and any poll —
+        // it only ever answers a dispense (doc §7). No heartbeat, no
+        // firmware probe: each would be a guaranteed miss and the
+        // watchdog would loop close/open on a perfectly good link.
+        _lytRx.clear();
+        return true;
+      }
       // Mirror the factory app's 900 ms 0x03 poll thread — keeps the bus
       // warm, feeds the health watchdog, and surfaces a stuck board fast.
       _startPollHeartbeat();
@@ -533,6 +594,13 @@ class BoardClient extends ChangeNotifier {
   Future<String?> autoDetectNativePort(List<String> candidates) async {
     await disconnect();
     for (final path in candidates) {
+      if (isLyt) {
+        if (await _probeNativeLyt(path)) {
+          _info('Auto-detect: плата BarysVend V27.2 на $path');
+          return path;
+        }
+        continue;
+      }
       for (final pw in const [false, true]) {
         if (await _probeNative(path, pw)) {
           _info('Auto-detect: board on $path '
@@ -547,6 +615,41 @@ class BoardClient extends ChangeNotifier {
     }
     _info('Auto-detect: no board found on ${candidates.length} node(s)');
     return null;
+  }
+
+  /// LiYuTai probe: the board ignores version (0x80) and any heartbeat
+  /// (doc §7), so the only reliable probe is a real dispense — ряд 1
+  /// кол 1 with a ~10-tick watchdog so the motor barely twitches
+  /// (§9.2). Any valid `AA..DD` frame back within ~1.5 s = board found.
+  Future<bool> _probeNativeLyt(String path) async {
+    final t = NativeUartTransport(path, baud: _baud);
+    t.logger = _info;
+    if (!await t.open()) {
+      await t.close();
+      return false;
+    }
+    final buf = <int>[];
+    final sub = t.onData.listen(buf.addAll);
+    try {
+      await t.write(buildLytDispenseFrame(1, 1, 10));
+    } catch (_) {}
+    await Future<void>.delayed(const Duration(milliseconds: 1500));
+    await sub.cancel();
+    await t.close();
+    return _containsLytFrame(buf);
+  }
+
+  /// Any valid `AA … XOR DD` frame anywhere in [b]?
+  static bool _containsLytFrame(List<int> b) {
+    for (var i = 0; i < b.length; i++) {
+      if (b[i] != _lytStart) continue;
+      final maxE = (i + _lytMaxFrame < b.length) ? i + _lytMaxFrame : b.length;
+      for (var e = i + 3; e < maxE; e++) {
+        if (b[e] != _lytEnd) continue;
+        if (_xorSum(b, i + 1, e - 2) == b[e - 1]) return true;
+      }
+    }
+    return false;
   }
 
   /// Transient open of [path], send Get ID with the given CRC mode, and
@@ -661,6 +764,7 @@ class BoardClient extends ChangeNotifier {
     _rxSub = null;
     _transport = null;
     _rxBuffer.clear();
+    _lytRx.clear();
     _firmwareId = null;
     _consecutiveFailures = 0;
     notifyListeners();
@@ -803,6 +907,11 @@ class BoardClient extends ChangeNotifier {
     // up a complete 20-byte frame. Helps diagnose RS485 direction issues,
     // wrong baud (frame misalignment), or noise on the line.
     if (data.isNotEmpty) _addLog(LogEntry('RAW', _hex(data)));
+    if (isLyt) {
+      _lytRx.addAll(data);
+      _drainLyt();
+      return;
+    }
     _rxBuffer.add(data);
     // Try to extract 20-byte frames.
     while (_rxBuffer.length >= 20) {
@@ -832,6 +941,232 @@ class BoardClient extends ChangeNotifier {
       _err('pending request failed: $reason');
       p.complete(Uint8List(0));
     }
+    final lp = _lytPendingDispense;
+    _lytPendingDispense = null;
+    if (lp != null && !lp.isCompleted) {
+      _err('pending LYT dispense failed: $reason');
+      lp.complete(-1);
+    }
+  }
+
+  // ---------- BarysVend V27.2 (LiYuTai) protocol ----------
+  //
+  // Frame: `AA [len] … [XOR] DD` — start 0xAA, stop 0xDD, checksum =
+  // XOR of every byte from index 1 up to (and excluding) the checksum
+  // itself. The board speaks only two spontaneous frames — a 17-byte
+  // dispense result and a 7-byte coin-counter report — and answers no
+  // query except a real dispense. Contract reverse-engineered from the
+  // factory `com.li.fut` APK (`ThreadManager`), verified on live
+  // hardware; see docs/ИНТЕГРАЦИЯ_платы_LiYuTai_FINAL.md and the
+  // reference client `mmd_diag/lib/lyt_client.dart`.
+
+  static const int _lytStart = 0xAA;
+  static const int _lytEnd = 0xDD;
+  static const int _lytMaxFrame = 64;
+
+  /// Board-side motor watchdog for a real dispense. The motor stops on
+  /// the home micro-switch; this only caps the wait, so keep the doc's
+  /// recommended 600–800 margin (§4). If the switch never trips within
+  /// it the board reports status 2.
+  static const int _lytDispenseTimeout = 700;
+
+  final List<int> _lytRx = [];
+  Completer<int>? _lytPendingDispense; // completes with the status byte
+  int _lytPendingRow = 0;
+  int _lytPendingCol = 0;
+
+  /// Cumulative coin-acceptor counter as last reported by the board
+  /// (`AA 03 30 cnt_hi cnt_lo XOR DD`). -1 = never seen. The app has no
+  /// cash flow yet — surfaced for service-mode diagnostics only.
+  int _lytCoinTotal = -1;
+  int get lytCoinTotal => _lytCoinTotal;
+
+  static int _xorSum(List<int> f, int fromIncl, int toIncl) {
+    var x = 0;
+    for (var i = fromIncl; i <= toIncl; i++) {
+      x ^= f[i] & 0xFF;
+    }
+    return x & 0xFF;
+  }
+
+  /// 17-byte dispense request (doc §4):
+  /// `AA 0E 01 30 [ряд] [кол] [t_hi] [t_lo] 00×4 01 00 00 [XOR] DD`.
+  Uint8List buildLytDispenseFrame(int row, int col, int timeout) {
+    final f = Uint8List(17);
+    f[0] = _lytStart;
+    f[1] = 0x0E;
+    f[2] = 0x01; // dispense request
+    f[3] = 0x30; // marker
+    f[4] = row & 0xFF;
+    f[5] = col & 0xFF;
+    f[6] = (timeout >> 8) & 0xFF; // big-endian
+    f[7] = timeout & 0xFF;
+    f[12] = 0x01; // qty / "perfume_time" constant in the factory app
+    f[15] = _xorSum(f, 1, 14);
+    f[16] = _lytEnd;
+    return f;
+  }
+
+  /// LiYuTai addresses a spiral by (ряд, колонка) while the rest of the
+  /// app carries a single motor id. Convention: `id = ряд*10 + колонка`,
+  /// a full decade rolling into column 10 — 11→(1,1), 19→(1,9),
+  /// 20→(1,10), 21→(2,1). Operator sets the slot's motor id accordingly
+  /// in the layout editor. Columns 11..14 aren't reachable this way.
+  static (int, int) lytRowColFromMotorId(int id) {
+    var col = id % 10;
+    var row = id ~/ 10;
+    if (col == 0) {
+      col = 10;
+      row -= 1;
+    }
+    return (row, col);
+  }
+
+  /// Extract complete `AA … XOR DD` frames from [_lytRx]. Known frames
+  /// (dispense result / coins) are matched first so a stray 0xDD inside
+  /// them can't split one; anything else falls back to the shortest
+  /// valid frame, and an over-long junk run shifts one byte to re-sync.
+  void _drainLyt() {
+    while (true) {
+      while (_lytRx.isNotEmpty && _lytRx[0] != _lytStart) {
+        _lytRx.removeAt(0);
+      }
+      if (_lytRx.length < 5) return;
+
+      // Dispense result — 17 bytes, [2]=0x02.
+      if (_lytRx.length >= 17 &&
+          _lytRx[1] == 0x0E &&
+          _lytRx[2] == 0x02 &&
+          _lytRx[3] == 0x30 &&
+          _lytRx[16] == _lytEnd &&
+          _xorSum(_lytRx, 1, 14) == _lytRx[15]) {
+        _handleLytFrame(_takeLyt(17));
+        continue;
+      }
+
+      // Coin counter — 7 bytes, [1]=0x03.
+      if (_lytRx.length >= 7 &&
+          _lytRx[1] == 0x03 &&
+          _lytRx[2] == 0x30 &&
+          _lytRx[6] == _lytEnd &&
+          _xorSum(_lytRx, 1, 4) == _lytRx[5]) {
+        _handleLytFrame(_takeLyt(7));
+        continue;
+      }
+
+      // Generic: shortest valid AA … XOR DD.
+      var end = -1;
+      final maxE =
+          _lytRx.length < _lytMaxFrame ? _lytRx.length : _lytMaxFrame;
+      for (var e = 3; e < maxE; e++) {
+        if (_lytRx[e] != _lytEnd) continue;
+        if (_xorSum(_lytRx, 1, e - 2) == _lytRx[e - 1]) {
+          end = e;
+          break;
+        }
+      }
+      if (end < 0) {
+        if (_lytRx.length >= _lytMaxFrame) {
+          _lytRx.removeAt(0); // junk run — shift to re-sync
+          continue;
+        }
+        return; // incomplete — wait for more bytes
+      }
+      _handleLytFrame(_takeLyt(end + 1));
+    }
+  }
+
+  Uint8List _takeLyt(int len) {
+    final f = Uint8List.fromList(_lytRx.sublist(0, len));
+    _lytRx.removeRange(0, len);
+    return f;
+  }
+
+  void _handleLytFrame(Uint8List f) {
+    _logRx(f);
+    // Dispense result: status in [12], (ряд, кол) echoed in [4][5] —
+    // the echo tells us which dispense finished.
+    if (f.length == 17 && f[2] == 0x02 && f[3] == 0x30) {
+      final row = f[4], col = f[5], status = f[12];
+      final p = _lytPendingDispense;
+      if (p != null &&
+          !p.isCompleted &&
+          row == _lytPendingRow &&
+          col == _lytPendingCol) {
+        p.complete(status);
+      } else {
+        _info('LYT: результат без запроса — ряд=$row кол=$col статус=$status');
+      }
+      return;
+    }
+    // Coin counter is cumulative — track it, report the delta.
+    if (f.length == 7 && f[1] == 0x03 && f[2] == 0x30) {
+      final total = (f[3] << 8) | f[4];
+      final delta = _lytCoinTotal >= 0 ? total - _lytCoinTotal : 0;
+      _lytCoinTotal = total;
+      _info('LYT монеты: всего=$total (дельта=$delta)');
+      notifyListeners();
+      return;
+    }
+    _info('LYT кадр (${f.length} б) — формат неизвестен, см. HEX выше');
+  }
+
+  static const Map<int, String> _lytStatusText = {
+    0: 'OK — товар выдан',
+    1: 'Ошибка: мотор не сработал',
+    2: 'Ошибка: товар не зафиксирован (микрик не сработал / таймаут)',
+  };
+
+  /// LiYuTai dispense: send the (ряд, кол) frame and wait for the echoed
+  /// result. Serialized through [_busLock] like every M102 exchange —
+  /// one command in flight at a time.
+  Future<DispenseResult> _dispenseLyt(int motorIdx) async {
+    final (row, col) = lytRowColFromMotorId(motorIdx);
+    if (row < 1 || row > 10 || col < 1) {
+      return DispenseResult(
+        success: false,
+        message: 'Мотор $motorIdx не кодирует (ряд, колонку): '
+            'для BarysVend id = ряд*10 + колонка (11, 25, 30, …)',
+      );
+    }
+    final prev = _busLock;
+    final done = Completer<void>();
+    _busLock = done.future;
+    await prev;
+    try {
+      if (_transport == null) {
+        return DispenseResult(success: false, message: 'Нет связи с платой');
+      }
+      _info('--- LYT DISPENSE ряд=$row кол=$col (мотор $motorIdx) ---');
+      final frame = buildLytDispenseFrame(row, col, _lytDispenseTimeout);
+      final completer = Completer<int>();
+      _lytPendingDispense = completer;
+      _lytPendingRow = row;
+      _lytPendingCol = col;
+      _tx(frame);
+      try {
+        await _transport!.write(frame);
+      } catch (e) {
+        _err('write: $e');
+        return DispenseResult(
+            success: false, message: 'Ошибка записи в порт: $e');
+      }
+      // The board replies only once the motor is done (home switch) or
+      // its own watchdog trips — wait the watchdog out plus a margin.
+      final status = await completer.future
+          .timeout(const Duration(seconds: 20), onTimeout: () => -1);
+      if (status < 0) {
+        return DispenseResult(
+            success: false, message: 'Нет ответа от платы (таймаут выдачи)');
+      }
+      return DispenseResult(
+        success: status == 0,
+        message: _lytStatusText[status] ?? 'Код статуса $status',
+      );
+    } finally {
+      _lytPendingDispense = null;
+      done.complete();
+    }
   }
 
   // ---------- high-level commands ----------
@@ -842,11 +1177,16 @@ class BoardClient extends ChangeNotifier {
   /// against a dead bus.
   Future<bool> ping({Duration timeout = const Duration(milliseconds: 600)}) async {
     if (_transport == null) return false;
+    // LiYuTai answers nothing but a real dispense (doc §7) — a
+    // non-actuating probe doesn't exist, so an open port is the best
+    // pre-payment check available in that mode.
+    if (isLyt) return true;
     final r = await _sendAndReceive(0x01, List.filled(16, 0), timeout: timeout);
     return r != null && r.isNotEmpty;
   }
 
   Future<String?> getId() async {
+    if (isLyt) return null; // no version/ID command answered (doc §7)
     final r = await _sendAndReceive(0x01, List.filled(16, 0));
     if (r == null || r.length < 14) return null;
     final sn = String.fromCharCodes(r.sublist(2, 14).where((b) => b >= 0x20 && b <= 0x7E)).trim();
@@ -863,6 +1203,7 @@ class BoardClient extends ChangeNotifier {
   /// Safe to call across all 0..99 channels — the motor doesn't actually
   /// turn the spiral, so the cabinet stays loaded.
   Future<int?> scanMotor(int motorId) async {
+    if (isLyt) return null; // LiYuTai has no non-destructive motor scan
     final data = <int>[motorId & 0xFF, ...List.filled(15, 0)];
     final r = await _sendAndReceive(0x04, data,
         timeout: const Duration(milliseconds: 400));
@@ -871,6 +1212,7 @@ class BoardClient extends ChangeNotifier {
   }
 
   Future<PollStatus?> poll() async {
+    if (isLyt) return null; // LiYuTai ignores the 0x03 poll
     final r = await _sendAndReceive(0x03, List.filled(16, 0));
     if (r == null || r.length < 13) return null;
     return PollStatus(
@@ -901,6 +1243,9 @@ class BoardClient extends ChangeNotifier {
   }
 
   Future<double?> readTemp() async {
+    // LiYuTai carries no climate sensors — return "no probe" without
+    // touching the bus so the climate controller stays quiet.
+    if (isLyt) return null;
     final r = await _sendAndReceive(0x07, List.filled(16, 0));
     if (r == null || r.length < 4) return null;
     // Factory formula (ParseM102.m175jx): °C = (signed_int16(bytes 2..3) - 20) / 10
@@ -914,6 +1259,7 @@ class BoardClient extends ChangeNotifier {
 
   /// Returns humidity percent (0-100) or null if no sensor / no reply.
   Future<int?> readHumidity() async {
+    if (isLyt) return null; // no humidity sensor on LiYuTai
     final r = await _sendAndReceive(0x10, List.filled(16, 0));
     if (r == null || r.length < 5) return null;
     // Factory layout (ParseM102.m176jx):
@@ -926,6 +1272,7 @@ class BoardClient extends ChangeNotifier {
   }
 
   Future<bool> writeDo(int idx, bool state) async {
+    if (isLyt) return false; // no DO channels on LiYuTai
     final r = await _sendAndReceive(0x08, [idx, state ? 1 : 0, ...List.filled(14, 0)]);
     if (r == null || r.length < 4) return false;
     final code = r[3];
@@ -951,6 +1298,11 @@ class BoardClient extends ChangeNotifier {
     if (!isConnected) {
       return DispenseResult(success: false, message: 'Нет связи с платой');
     }
+
+    // BarysVend V27.2: single request→result exchange addressed by
+    // (ряд, кол); [type] and [curtain] don't exist in that protocol —
+    // the board itself stops on the home micro-switch.
+    if (isLyt) return _dispenseLyt(motorIdx);
 
     _info('--- DISPENSE motor=$motorIdx type=$type curtain=$curtain ---');
     final ack = await motorRun(motorIdx, type: type, curtain: curtain);

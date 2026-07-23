@@ -27,6 +27,10 @@ class DeviceStorage extends ChangeNotifier {
   // a "/dev/ttySX" value = native on-SoC UART (industrial tablets whose
   // serial port is wired straight to the SoC, no USB-serial chip).
   static const _kSerialPort = 'board_serial_port';
+  // Control-board protocol: unset = M102/M109E (20-byte Modbus-CRC frames,
+  // 9600). 'lyt_v27' = BarysVend/LiYuTai V27.2 (AA..DD XOR frames, 115200) —
+  // see docs/ИНТЕГРАЦИЯ_платы_LiYuTai_FINAL.md.
+  static const _kBoardProtocol = 'board_protocol';
   static const _kMachineLayout = 'machine_layout_v1';
   static const _kPinFailCount = 'pin_fail_count';
   static const _kPinLockedUntil = 'pin_locked_until';
@@ -85,6 +89,20 @@ class DeviceStorage extends ChangeNotifier {
 
   Future<void> setUseM102Password(bool v) async {
     await _prefs.setBool(_kUseM102Password, v);
+    notifyListeners();
+  }
+
+  /// Persisted control-board protocol name, or null when never set
+  /// (= M102/M109E default). [BoardClient] resolves it to its
+  /// `BoardProtocol` enum on construction.
+  String? get boardProtocolName => _prefs.getString(_kBoardProtocol);
+
+  Future<void> setBoardProtocolName(String? name) async {
+    if (name == null || name.isEmpty) {
+      await _prefs.remove(_kBoardProtocol);
+    } else {
+      await _prefs.setString(_kBoardProtocol, name);
+    }
     notifyListeners();
   }
 
