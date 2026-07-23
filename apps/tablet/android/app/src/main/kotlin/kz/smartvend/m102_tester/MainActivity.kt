@@ -18,6 +18,7 @@ import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.os.Process
+import android.os.SystemClock
 import android.provider.Settings
 import android.util.Log
 import android.view.View
@@ -68,6 +69,22 @@ class MainActivity : FlutterActivity() {
      * usual.
      */
     private var suppressLockOnce = false
+
+    /**
+     * Monotonic deadline before which [onResume] must NOT re-enter lock
+     * task. Set by [installApk] on non-owner devices: the
+     * PackageInstaller confirm dialog arrives asynchronously (via
+     * [InstallReceiver]) after we stopLockTask(), and an onResume firing
+     * in that gap used to re-pin the screen — the operator saw the
+     * system "navigation buttons are blocked" pinning notice and the
+     * install dialog was killed by lock task, so the update silently
+     * never started. A one-shot flag isn't enough here because resume /
+     * focus can cycle more than once before the dialog lands. If the
+     * install fails or is cancelled, kiosk re-pins on the first resume
+     * after the window lapses (successful installs replace the process,
+     * so the relaunch pins immediately as usual).
+     */
+    private var suppressLockUntilMs = 0L
 
     /** Reference to the kiosk MethodChannel kept on the activity so the
      *  USB permission BroadcastReceiver can call back into Flutter when
@@ -277,6 +294,9 @@ class MainActivity : FlutterActivity() {
         // are silent (no dialog), so we keep kiosk intact for them.
         val dpm = getSystemService(Context.DEVICE_POLICY_SERVICE) as? DevicePolicyManager
         if (dpm?.isDeviceOwnerApp(packageName) != true) {
+            // Keep onResume from re-pinning while the confirm dialog is
+            // still in flight — see [suppressLockUntilMs].
+            suppressLockUntilMs = SystemClock.elapsedRealtime() + 120_000L
             try {
                 val am = getSystemService(Context.ACTIVITY_SERVICE) as? ActivityManager
                 if (am?.lockTaskModeState != ActivityManager.LOCK_TASK_MODE_NONE) {
@@ -407,6 +427,12 @@ class MainActivity : FlutterActivity() {
         if (suppressLockOnce) {
             // Operator just chose "Exit to Android" — don't fight them.
             suppressLockOnce = false
+            return
+        }
+        if (SystemClock.elapsedRealtime() < suppressLockUntilMs) {
+            // An APK install is mid-flight — pinning now would block the
+            // system confirm dialog (Lock Task Mode violation).
+            Log.i(TAG_KIOSK, "lock task suppressed: install in progress")
             return
         }
         try {
