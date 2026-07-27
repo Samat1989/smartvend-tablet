@@ -30,7 +30,7 @@ docs/             Документация и планы разработки
   refs/           Вендорские справочники (протоколы, API PDF)
 
 tools/            Вспомогательные python-скрипты
-release.ps1       Сборка/публикация APK планшета в GitHub Releases
+release-relay.ps1 Сборка/публикация прошивки ESP-реле в GitHub Releases
 ```
 
 Два типа продающих машин (vending со спиралями и static-QR с замком) и
@@ -55,4 +55,5 @@ release.ps1       Сборка/публикация APK планшета в GitH
 
 - `apps/web_app` (Vercel): в настройках проекта Vercel выставить
   **Root Directory = `apps/web_app`**.
-- `apps/tablet`: релиз через `release.ps1` (нужен `.github_token`, см. `.gitignore`).
+- `apps/tablet`: релиз через `apps/tablet/scripts/release.ps1` (нужен `gh` CLI,
+  см. `apps/tablet/android/README_RELEASE_SIGNING.md`).

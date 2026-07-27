@@ -54,7 +54,7 @@ supabase/      ЕДИНЫЙ бэкенд проекта `micromart`
 docs/          Документация и планы
   refs/        Вендорские справочники (протоколы M109E, API PDF)
 tools/         Вспомогательные python-скрипты
-release.ps1    Сборка/публикация APK планшета в GitHub Releases
+release-relay.ps1  Сборка/публикация прошивки ESP-реле в GitHub Releases
 ```
 
 > БД и данные живут **в облаке** Supabase, не в репозитории. В git — только

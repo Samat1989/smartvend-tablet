@@ -1,6 +1,7 @@
 # Release pipeline for the esp-relay firmware (ESP32 OTA).
 #
-# Mirrors release.ps1 (the tablet APK pipeline) but for the ESP-IDF firmware.
+# Same idea as apps/tablet/scripts/release.ps1 (the tablet APK pipeline),
+# but for the ESP-IDF firmware.
 # Firmware releases share the tablet's repo and are namespaced by a "relay-v"
 # tag prefix + a "relay-mart.bin" asset, so the two release streams never
 # collide. The device's OTA checker (ota_find_update in main.c) only looks at
