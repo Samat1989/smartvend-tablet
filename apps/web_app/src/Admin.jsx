@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { supabase } from './supabaseClient';
-import { Image, Upload, Download, Plus, Minus, Save, Trash2, X, Loader2, Pencil, Receipt, Calendar, ShoppingBag, History, Languages, CheckCircle2, XCircle, AlertTriangle, ChevronRight, ChevronLeft, ChevronDown, Package, QrCode } from 'lucide-react';
+import { Image, Upload, Download, Plus, Minus, Save, Trash2, X, Loader2, Pencil, Receipt, Calendar, ShoppingBag, History, Languages, CheckCircle2, XCircle, AlertTriangle, ChevronRight, ChevronLeft, ChevronDown, Package, QrCode, KeyRound } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import './i18n';
 import Cropper from 'react-easy-crop';
@@ -281,6 +281,33 @@ function motorToSlotLabel(motorId, layout) {
   return n.toString().padStart(3, '0');
 }
 
+// Single notification surface for the whole admin — green when something
+// succeeded, red for a rejection or an error, and nothing else. It sits above
+// every overlay on purpose: most warnings are raised while a modal is open
+// (a rejected device, a failed save), and underneath the dialogs the operator
+// would see nothing happen at all. Layer map in this file: 50 edit modal,
+// 60 QR / catalog picker, 100 cropper, 110 dialogs, 120 transfer confirm,
+// 300 toast — keep the toast highest.
+//
+// Rendered on the login screen too, which returns before the main tree, so
+// sign-in failures get the same treatment instead of a system alert().
+function Toast({ toast, onClose }) {
+  if (!toast) return null;
+  const isError = toast.type === 'error';
+  return (
+    <div
+      onClick={onClose}
+      role="alert"
+      className={`fixed bottom-6 left-1/2 -translate-x-1/2 px-5 py-3 rounded-2xl font-bold text-white shadow-2xl z-[300] max-w-[92vw] sm:max-w-md flex items-start gap-2 cursor-pointer animate-in fade-in slide-in-from-bottom-5 ${isError ? 'bg-red-600' : 'bg-emerald-600'}`}
+    >
+      <span className="shrink-0 mt-0.5">
+        {isError ? <AlertTriangle size={16} /> : <CheckCircle2 size={16} />}
+      </span>
+      <span className="text-sm leading-snug">{toast.message}</span>
+    </div>
+  );
+}
+
 function resultLabel(t, item) {
   if (item.result_code != null) {
     const key = RESULT_CODE_I18N[item.result_code];
@@ -349,6 +376,36 @@ export default function Admin() {
   const [pickerProducts, setPickerProducts] = useState(null);
   const [pickerSearch, setPickerSearch] = useState('');
 
+  // Platform admin (only the operator running the whole fleet). The flag comes
+  // from app_metadata, which only the service_role can write — see migration
+  // 20260804120000_superadmin_role.sql. Hiding the tab is cosmetic; the real
+  // check is inside the admin-create-user function.
+  const isSuperadmin = session?.user?.app_metadata?.is_superadmin === true;
+  const [users, setUsers] = useState(null);
+  const [usersLoading, setUsersLoading] = useState(false);
+  const [newUser, setNewUser] = useState(null);      // {email,password,full_name} while the form is open
+  const [userSaving, setUserSaving] = useState(false);
+  const [pwdTarget, setPwdTarget] = useState(null);      // {id,email,password}
+  const [userDeleteTarget, setUserDeleteTarget] = useState(null); // {id,email}
+
+  // "Add device" modal — the owner registers a machine by typing its SmartVend
+  // Internal ID + Secret; device-claim verifies the pair and writes micromarkets.
+  const [addingDevice, setAddingDevice] = useState(null); // {machid,secret,name,kind}
+  const [deviceSaving, setDeviceSaving] = useState(false);
+
+  // Fleet view for the superadmin. RLS hides other owners' machines from the
+  // browser session, so this list comes from the device-admin function.
+  const [adminDevices, setAdminDevices] = useState(null);
+  const [adminOwners, setAdminOwners] = useState([]);
+  const [devicesLoading, setDevicesLoading] = useState(false);
+  const [transferTarget, setTransferTarget] = useState(null); // {id,name,owner_id}
+  const [transferConfirm, setTransferConfirm] = useState(null); // {market,from,to}
+  const [transferring, setTransferring] = useState(false);
+  const [deleteTarget, setDeleteTarget] = useState(null);     // {machid,name,sales,inventory}
+
+  // Rename, available to the owner of the machine (plain RLS-scoped UPDATE).
+  const [renamingMarket, setRenamingMarket] = useState(null); // {id,name}
+
 
   async function openCatalogPicker() {
     setShowCatalogPicker(true);
@@ -378,9 +435,15 @@ export default function Admin() {
     }
   }
 
+  // One shared timer: without clearing the previous one, an older toast's
+  // timeout would cut a newly raised warning short.
+  const toastTimer = useRef(null);
   const showToast = (message, type = 'success') => {
     setToast({ message, type });
-    setTimeout(() => setToast(null), 3000);
+    clearTimeout(toastTimer.current);
+    // Warnings linger — they usually carry an instruction ("move it via
+    // Transfer"), not just an acknowledgement.
+    toastTimer.current = setTimeout(() => setToast(null), type === 'error' ? 6000 : 3000);
   };
 
   useEffect(() => {
@@ -433,6 +496,252 @@ export default function Admin() {
       fetchCatalogProducts();
     }
   }, [session, activeTab]);
+
+  // The superadmin lands on Administration, not Sales — it's the panel they
+  // actually open the app for. Runs once: after that the operator's own tab
+  // choice stands, including going back to Sales.
+  const landedRef = useRef(false);
+  useEffect(() => {
+    if (session && isSuperadmin && !landedRef.current) {
+      landedRef.current = true;
+      setActiveTab('users');
+    }
+  }, [session, isSuperadmin]);
+
+  useEffect(() => {
+    if (session && isSuperadmin && activeTab === 'users') {
+      fetchUsers();
+      fetchAdminDevices();
+    }
+  }, [session, isSuperadmin, activeTab]);
+
+  // Call one of the admin edge functions with the operator's own session token
+  // (supabase-js attaches it automatically while a session exists). invoke()
+  // reports every non-2xx as the same generic message, so dig the function's
+  // own JSON `error` out of the response body.
+  async function invokeAdminFn(name, options) {
+    const { data, error } = await supabase.functions.invoke(name, options);
+    if (error) {
+      let payload = null;
+      try { payload = await error.context?.json(); } catch (_) { /* not JSON */ }
+      const err = new Error(payload?.error || error.message);
+      err.code = payload?.error;   // stable machine-readable code
+      err.details = payload;       // full body — e.g. the row counts on a delete
+      throw err;
+    }
+    return data;
+  }
+
+  async function fetchUsers() {
+    setUsersLoading(true);
+    try {
+      const data = await invokeAdminFn('admin-create-user', { method: 'GET' });
+      setUsers(data?.users || []);
+    } catch (err) {
+      console.error('Error fetching users:', err);
+      showToast(`${t('users_load_error')}: ${err.message}`, 'error');
+      setUsers([]);
+    } finally {
+      setUsersLoading(false);
+    }
+  }
+
+  async function createUser() {
+    const email = (newUser?.email || '').trim();
+    const password = newUser?.password || '';
+    if (!email) return showToast(t('user_email_required'), 'error');
+    if (password.length < 8) return showToast(t('user_password_too_short'), 'error');
+
+    setUserSaving(true);
+    try {
+      const data = await invokeAdminFn('admin-create-user', {
+        body: { email, password, full_name: (newUser.full_name || '').trim() },
+      });
+      if (data?.user) setUsers(prev => [data.user, ...(prev || [])]);
+      else fetchUsers();
+      setNewUser(null);
+      showToast(t('user_created'));
+    } catch (err) {
+      // The function answers 409 with the gotrue wording for a taken email.
+      const taken = /already/i.test(err.message || '');
+      showToast(taken ? t('user_email_taken') : `${t('user_create_error')}: ${err.message}`, 'error');
+    } finally {
+      setUserSaving(false);
+    }
+  }
+
+  async function changePassword() {
+    const password = pwdTarget?.password || '';
+    if (password.length < 8) return showToast(t('user_password_too_short'), 'error');
+    setUserSaving(true);
+    try {
+      await invokeAdminFn('admin-create-user', {
+        body: { action: 'set_password', user_id: pwdTarget.id, password },
+      });
+      setPwdTarget(null);
+      showToast(t('password_changed'));
+    } catch (err) {
+      showToast(`${t('password_change_error')}: ${err.message}`, 'error');
+    } finally {
+      setUserSaving(false);
+    }
+  }
+
+  async function deleteUser() {
+    if (!userDeleteTarget) return;
+    setUserSaving(true);
+    try {
+      await invokeAdminFn('admin-create-user', {
+        body: { action: 'delete', user_id: userDeleteTarget.id },
+      });
+      setUserDeleteTarget(null);
+      await fetchUsers();
+      showToast(t('user_deleted'));
+    } catch (err) {
+      // The function blocks deletion while the account still owns machines —
+      // orphaned rows would be invisible in every panel.
+      if (err.code === 'has_machines') {
+        showToast(t('user_err_has_machines', { count: err.details?.machines ?? 0 }), 'error');
+      } else if (err.code === 'cannot_delete_self') {
+        showToast(t('user_err_cannot_delete_self'), 'error');
+      } else {
+        showToast(`${t('user_delete_error')}: ${err.message}`, 'error');
+      }
+      setUserDeleteTarget(null);
+    } finally {
+      setUserSaving(false);
+    }
+  }
+
+  async function fetchAdminDevices() {
+    setDevicesLoading(true);
+    try {
+      const data = await invokeAdminFn('device-admin', { body: { action: 'list' } });
+      setAdminDevices(data?.markets || []);
+      setAdminOwners(data?.owners || []);
+    } catch (err) {
+      console.error('Error fetching devices:', err);
+      showToast(`${t('devices_load_error')}: ${err.message}`, 'error');
+      setAdminDevices([]);
+    } finally {
+      setDevicesLoading(false);
+    }
+  }
+
+  async function transferDevice() {
+    const { market, to } = transferConfirm || {};
+    if (!market || !to) return;
+    setTransferring(true);
+    try {
+      const data = await invokeAdminFn('device-admin', {
+        body: { action: 'transfer', machid: market.id, owner_id: to.id },
+      });
+      setTransferConfirm(null);
+      setTransferTarget(null);
+      await Promise.all([fetchAdminDevices(), fetchUsers(), fetchMarkets()]);
+      showToast(`${t('device_transferred')} → ${data?.owner_email ?? to.email}`);
+    } catch (err) {
+      showToast(`${t('device_transfer_error')}: ${err.message}`, 'error');
+    } finally {
+      setTransferring(false);
+    }
+  }
+
+  // Two-phase on purpose: the first call comes back with `confirm_required`
+  // plus the row counts, so the confirmation dialog can say exactly how much
+  // sales history the CASCADE is about to take with it.
+  async function deleteDevice(machid, confirm = false) {
+    try {
+      await invokeAdminFn('device-admin', { body: { action: 'delete', machid, confirm } });
+      setDeleteTarget(null);
+      await Promise.all([fetchAdminDevices(), fetchMarkets()]);
+      showToast(t('device_deleted'));
+    } catch (err) {
+      if (err.code === 'confirm_required') {
+        setDeleteTarget(err.details || { machid });
+        return;
+      }
+      if (err.code === 'has_pending_orders') {
+        showToast(t('device_del_pending'), 'error');
+        setDeleteTarget(null);
+        return;
+      }
+      showToast(`${t('device_delete_error')}: ${err.message}`, 'error');
+      setDeleteTarget(null);
+    }
+  }
+
+  // An owner renaming its own machine goes straight to the table: the "Owner
+  // manages micromarkets" policy already limits authenticated UPDATEs to
+  // owner_id = auth.uid(), and only the name column is in the payload. From the
+  // superadmin's fleet list (viaAdmin) the same UPDATE would match zero rows
+  // for someone else's machine, so that path goes through device-admin.
+  async function renameMarket() {
+    const name = (renamingMarket?.name || '').trim();
+    if (!name) return showToast(t('device_name_required'), 'error');
+    try {
+      if (renamingMarket.viaAdmin) {
+        await invokeAdminFn('device-admin', {
+          body: { action: 'rename', machid: renamingMarket.id, name },
+        });
+      } else {
+        const { error } = await supabase
+          .from('micromarkets').update({ name }).eq('id', renamingMarket.id);
+        if (error) throw error;
+      }
+      setRenamingMarket(null);
+      await fetchMarkets();
+      if (isSuperadmin && adminDevices) fetchAdminDevices();
+      showToast(t('device_renamed'));
+    } catch (err) {
+      showToast(`${t('device_rename_error')}: ${err.message}`, 'error');
+    }
+  }
+
+  // Machine-readable codes from supabase/functions/device-claim/index.ts →
+  // operator-facing text. Anything else falls through to the raw message.
+  const DEVICE_CLAIM_ERRORS = {
+    bad_machid: 'device_err_bad_machid',
+    secret_required: 'device_err_secret_required',
+    machine_not_found: 'device_err_not_found',
+    secret_mismatch: 'device_err_secret_mismatch',
+  };
+
+  async function claimDevice() {
+    const machid = String(addingDevice?.machid ?? '').trim();
+    const secret = String(addingDevice?.secret ?? '').trim();
+    if (!/^\d+$/.test(machid)) return showToast(t('device_err_bad_machid'), 'error');
+    if (!secret) return showToast(t('device_err_secret_required'), 'error');
+
+    setDeviceSaving(true);
+    try {
+      const data = await invokeAdminFn('device-claim', {
+        body: {
+          machid: Number(machid),
+          secret,
+          name: (addingDevice.name || '').trim(),
+          kind: addingDevice.kind || 'vending',
+        },
+      });
+      setAddingDevice(null);
+      await fetchMarkets();
+      if (isSuperadmin && adminDevices) fetchAdminDevices();
+      showToast(data?.claimed ? t('device_linked') : t('device_added'));
+    } catch (err) {
+      // A machine that's already assigned can only be moved via transfer —
+      // name whoever holds it so it's obvious where to go next.
+      if (err.code === 'already_claimed') {
+        showToast(t('device_err_already_claimed', {
+          email: err.details?.owner_email || '—',
+        }), 'error');
+        return;
+      }
+      const key = DEVICE_CLAIM_ERRORS[err.code];
+      showToast(key ? t(key) : `${t('device_add_error')}: ${err.message}`, 'error');
+    } finally {
+      setDeviceSaving(false);
+    }
+  }
 
   async function fetchCatalogProducts() {
     setLoading(true);
@@ -618,7 +927,7 @@ export default function Admin() {
       // operator drills into a specific machine. Sales/Catalog don't need one.
     } catch (err) {
       console.error('Error fetching markets:', err);
-      alert(t('could_not_load_markets'));
+      showToast(t('could_not_load_markets'), 'error');
     }
   }
 
@@ -746,18 +1055,17 @@ export default function Admin() {
       setCropTarget('inventory');
     } catch (err) {
       console.error('Error uploading image:', err);
-      alert(t('photo_upload_error') + ': ' + (err.message || JSON.stringify(err)));
-      showToast(t('photo_upload_error_toast'), 'error');
+      showToast(`${t('photo_upload_error')}: ${err.message || JSON.stringify(err)}`, 'error');
     } finally {
       setUploadingImage(false);
     }
   };
 
   async function addCategory() {
-    if (!newCatRu.trim() || !newCatKz.trim() || !newCatEn.trim()) return alert(t('fill_all_languages'));
+    if (!newCatRu.trim() || !newCatKz.trim() || !newCatEn.trim()) return showToast(t('fill_all_languages'), 'error');
     try {
       const ownerId = session?.user?.id;
-      if (!ownerId) return alert(t('session_inactive'));
+      if (!ownerId) return showToast(t('session_inactive'), 'error');
       const { error } = await supabase.from('categories').insert({
         name_ru: newCatRu.trim(),
         name_kz: newCatKz.trim(),
@@ -769,7 +1077,7 @@ export default function Admin() {
       fetchCategories();
       showToast(t('category_added'));
     } catch (err) {
-      alert(t('save_error') + ': ' + err.message);
+      showToast(`${t('save_error')}: ${err.message}`, 'error');
     }
   }
 
@@ -780,16 +1088,16 @@ export default function Admin() {
       fetchCategories();
       showToast(t('category_deleted'));
     } catch (err) {
-      alert(t('category_delete_error'));
+      showToast(t('category_delete_error'), 'error');
     }
   }
 
   async function saveProduct() {
     if (!editingProduct.product_id) {
-      return alert(t('pick_product_from_catalog'));
+      return showToast(t('pick_product_from_catalog'), 'error');
     }
     if (editingProduct.price == null || editingProduct.price === '') {
-      return alert(t('specify_price'));
+      return showToast(t('specify_price'), 'error');
     }
 
     setLoading(true);
@@ -828,7 +1136,7 @@ export default function Admin() {
       fetchProducts(selectedMarketId);
     } catch (err) {
       console.error('Error saving product:', err);
-      alert(t('save_product_error') + ': ' + (err.message || JSON.stringify(err)));
+      showToast(`${t('save_product_error')}: ${err.message || JSON.stringify(err)}`, 'error');
     } finally {
       setLoading(false);
     }
@@ -938,7 +1246,7 @@ export default function Admin() {
               onClick={async () => {
                 setAuthLoading(true);
                 const { error } = await supabase.auth.signInWithPassword({ email, password });
-                if (error) alert(t('login_error') + ': ' + error.message);
+                if (error) showToast(`${t('login_error')}: ${error.message}`, 'error');
                 setAuthLoading(false);
               }}
               disabled={authLoading}
@@ -948,6 +1256,7 @@ export default function Admin() {
             </button>
           </div>
         </div>
+        <Toast toast={toast} onClose={() => setToast(null)} />
       </div>
     );
   }
@@ -984,6 +1293,15 @@ export default function Admin() {
           </div>
           <div className="h-10 w-[1px] bg-slate-300 hidden sm:block"></div>
           <div className="flex bg-slate-200 p-1 rounded-xl border border-slate-300 w-full sm:w-auto">
+            {/* Administration first — it's the superadmin's landing tab. */}
+            {isSuperadmin && (
+              <button
+                onClick={() => setActiveTab('users')}
+                className={`flex-1 sm:flex-none px-2.5 sm:px-4 py-2 sm:py-1.5 rounded-lg font-bold transition-all text-xs ${activeTab === 'users' ? 'bg-white text-primary shadow-md' : 'text-slate-600 hover:text-slate-900'}`}
+              >
+                {t('tab_users')}
+              </button>
+            )}
             <button
               onClick={() => setActiveTab('sales')}
               className={`flex-1 sm:flex-none px-2.5 sm:px-4 py-2 sm:py-1.5 rounded-lg font-bold transition-all text-xs ${activeTab === 'sales' ? 'bg-white text-primary shadow-md' : 'text-slate-600 hover:text-slate-900'}`}
@@ -1029,7 +1347,23 @@ export default function Admin() {
       </header>
 
       <div className="bg-white rounded-2xl sm:rounded-3xl p-3 sm:p-4 md:p-8 shadow-lg border border-slate-300">
-          {activeTab === 'catalog' ? (
+          {activeTab === 'users' && isSuperadmin ? (
+            <UsersTab
+              users={users}
+              loading={usersLoading}
+              onCreate={() => setNewUser({ email: '', password: '', full_name: '' })}
+              onAddDevice={() => setAddingDevice({ machid: '', secret: '', name: '', kind: 'vending' })}
+              onChangePassword={(u) => setPwdTarget({ id: u.id, email: u.email, password: '' })}
+              onDeleteUser={(u) => setUserDeleteTarget({ id: u.id, email: u.email })}
+              currentUserId={session?.user?.id}
+              onRefresh={() => { fetchUsers(); fetchAdminDevices(); }}
+              devices={adminDevices}
+              devicesLoading={devicesLoading}
+              onTransfer={(m) => setTransferTarget(m)}
+              onDelete={(machid) => deleteDevice(machid)}
+              onRename={(m) => setRenamingMarket({ ...m, viaAdmin: true })}
+            />
+          ) : activeTab === 'catalog' ? (
             <CatalogTab
               products={catalogProducts}
               categories={categories}
@@ -1055,27 +1389,46 @@ export default function Admin() {
           ) : activeTab === 'inventory' ? (
             !selectedMarketId ? (
               <div>
+                {/* No "add device" button here: enrolling a machine is a
+                    platform-admin act and lives on the Users tab. This tab is
+                    what an owner sees, and device-claim refuses them anyway. */}
                 <h2 className="text-2xl font-black text-slate-900 mb-1">{t('devices')}</h2>
                 <p className="text-[11px] font-bold text-slate-500 uppercase tracking-widest mb-6">{t('select_machine')}</p>
                 <div className="space-y-2">
                   {markets.map(m => (
-                    <button
+                    <div
                       key={m.id}
-                      onClick={() => setSelectedMarketId(m.id)}
-                      className="w-full flex items-center gap-3 p-4 rounded-2xl bg-slate-50 border-2 border-slate-200 hover:border-primary hover:bg-white hover:shadow-md transition-all text-left"
+                      className="w-full flex items-center gap-3 p-4 rounded-2xl bg-slate-50 border-2 border-slate-200 hover:border-primary hover:bg-white hover:shadow-md transition-all"
                     >
-                      <div className="w-11 h-11 rounded-xl bg-indigo-600 text-white flex items-center justify-center shrink-0">
-                        <Package size={20} />
-                      </div>
-                      <div className="flex-1 min-w-0">
-                        <div className="font-bold text-slate-900 truncate">{m.name || `${t('market')} #${m.id}`}</div>
-                        <div className="text-[11px] font-bold text-slate-500 uppercase tracking-widest">{t('apparatus_no')}{m.id}</div>
-                      </div>
+                      <button
+                        onClick={() => setSelectedMarketId(m.id)}
+                        className="flex items-center gap-3 flex-1 min-w-0 text-left"
+                      >
+                        <div className="w-11 h-11 rounded-xl bg-indigo-600 text-white flex items-center justify-center shrink-0">
+                          <Package size={20} />
+                        </div>
+                        <div className="flex-1 min-w-0">
+                          <div className="font-bold text-slate-900 truncate">{m.name || `${t('market')} #${m.id}`}</div>
+                          <div className="text-[11px] font-bold text-slate-500 uppercase tracking-widest">{t('apparatus_no')}{m.id}</div>
+                        </div>
+                      </button>
                       <span className={`text-[9px] font-black uppercase tracking-wider px-2 py-1 rounded-lg shrink-0 ${m.kind === 'micromarket_static' ? 'bg-emerald-100 text-emerald-700' : 'bg-indigo-100 text-indigo-700'}`}>
                         {m.kind === 'micromarket_static' ? t('badge_micromarket') : t('badge_vending')}
                       </span>
-                      <ChevronRight size={18} className="text-slate-400" />
-                    </button>
+                      <button
+                        onClick={() => setRenamingMarket({ id: m.id, name: m.name || '' })}
+                        title={t('rename')}
+                        className="p-2 rounded-lg bg-white border border-slate-300 text-slate-600 hover:text-primary hover:border-primary transition-all shrink-0"
+                      >
+                        <Pencil size={15} />
+                      </button>
+                      <button
+                        onClick={() => setSelectedMarketId(m.id)}
+                        className="shrink-0 text-slate-400 hover:text-primary transition-colors"
+                      >
+                        <ChevronRight size={18} />
+                      </button>
+                    </div>
                   ))}
                   {markets.length === 0 && (
                     <p className="text-sm text-slate-400 italic p-4">{t('no_machines')}</p>
@@ -1561,17 +1914,11 @@ export default function Admin() {
         </div>
       )}
 
-      {/* Уведомления (Toast) */}
       {qrModalMarket && (
         <QrModal market={qrModalMarket} onClose={() => setQrModalMarket(null)} />
       )}
 
-      {toast && (
-        <div className={`fixed bottom-6 left-1/2 -translate-x-1/2 px-6 py-3 rounded-full font-bold text-white shadow-xl z-[100] flex items-center gap-2 animate-in fade-in slide-in-from-bottom-5 ${toast.type === 'error' ? 'bg-red-500' : 'bg-primary'}`}>
-          {toast.type === 'error' ? <X size={16} /> : <Save size={16} />}
-          {toast.message}
-        </div>
-      )}
+      <Toast toast={toast} onClose={() => setToast(null)} />
 
       {/* Catalog picker — overlays on top of the inventory edit modal,
           so it's z-[60] (modal is z-50). Filters the SKU list by the
@@ -1804,7 +2151,7 @@ export default function Admin() {
               >
                 {t('cancel')}
               </button>
-              <button 
+              <button
                 onClick={confirmDelete}
                 className="flex-1 py-3 px-4 bg-red-600 text-white rounded-xl font-bold hover:bg-red-700 shadow-lg shadow-red-200 transition-all active:scale-95"
               >
@@ -1812,6 +2159,626 @@ export default function Admin() {
               </button>
             </div>
           </div>
+        </div>
+      )}
+
+      {/* Add device — Internal ID + Secret are copied off the machine's page in
+          the SmartVend partner cabinet; device-claim checks the pair against
+          the SmartVend list before it writes anything. */}
+      {addingDevice && (
+        <div className="fixed inset-0 z-[110] bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-white rounded-3xl w-full max-w-md shadow-2xl border-2 border-slate-300 max-h-[90vh] overflow-y-auto">
+            <div className="flex justify-between items-center px-6 pt-6 pb-4 border-b-2 border-slate-200">
+              <div>
+                <h3 className="font-black text-xl text-slate-900">{t('add_device')}</h3>
+                <span className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">{t('add_device_hint')}</span>
+              </div>
+              <button
+                onClick={() => setAddingDevice(null)}
+                className="p-2 bg-slate-200 border border-slate-300 text-slate-700 rounded-full hover:bg-slate-300"
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            <div className="p-6 space-y-4">
+              <div>
+                <label className="text-xs font-bold text-slate-500 ml-1">{t('device_internal_id')}</label>
+                <input
+                  value={addingDevice.machid}
+                  onChange={e => setAddingDevice({ ...addingDevice, machid: e.target.value.replace(/\D/g, '') })}
+                  inputMode="numeric"
+                  autoFocus
+                  placeholder="3001000"
+                  className="w-full mt-1 p-3 border-2 border-slate-300 focus:border-primary focus:outline-none rounded-xl font-bold bg-white text-slate-900 placeholder-slate-300"
+                />
+              </div>
+              <div>
+                <label className="text-xs font-bold text-slate-500 ml-1">{t('device_secret')}</label>
+                <input
+                  value={addingDevice.secret}
+                  onChange={e => setAddingDevice({ ...addingDevice, secret: e.target.value })}
+                  autoComplete="off"
+                  spellCheck={false}
+                  className="w-full mt-1 p-3 border-2 border-slate-300 focus:border-primary focus:outline-none rounded-xl font-mono text-sm bg-white text-slate-900"
+                />
+                <p className="text-[11px] text-slate-400 mt-1 ml-1">{t('device_secret_hint')}</p>
+              </div>
+              <div>
+                <label className="text-xs font-bold text-slate-500 ml-1">{t('device_name')}</label>
+                <input
+                  value={addingDevice.name}
+                  onChange={e => setAddingDevice({ ...addingDevice, name: e.target.value })}
+                  placeholder={t('device_name_placeholder')}
+                  className="w-full mt-1 p-3 border-2 border-slate-300 focus:border-primary focus:outline-none rounded-xl font-bold bg-white text-slate-900 placeholder-slate-300"
+                />
+              </div>
+              <div>
+                <label className="text-xs font-bold text-slate-500 ml-1">{t('device_kind')}</label>
+                <div className="grid grid-cols-2 gap-2 mt-1">
+                  {[
+                    { value: 'vending', label: t('badge_vending'), hint: t('device_kind_vending_hint') },
+                    { value: 'micromarket_static', label: t('badge_micromarket'), hint: t('device_kind_static_hint') },
+                  ].map(opt => (
+                    <button
+                      key={opt.value}
+                      onClick={() => setAddingDevice({ ...addingDevice, kind: opt.value })}
+                      className={`p-3 rounded-xl border-2 text-left transition-all ${addingDevice.kind === opt.value ? 'border-primary bg-primary/5' : 'border-slate-200 hover:border-slate-300'}`}
+                    >
+                      <div className="font-black text-sm text-slate-900">{opt.label}</div>
+                      <div className="text-[10px] font-bold text-slate-500 leading-tight mt-0.5">{opt.hint}</div>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            </div>
+
+            <div className="flex gap-3 px-6 pb-6">
+              <button
+                onClick={() => setAddingDevice(null)}
+                className="flex-1 py-3 px-4 bg-slate-200 rounded-xl font-bold text-slate-700 hover:bg-slate-300 transition-all"
+              >
+                {t('cancel')}
+              </button>
+              <button
+                onClick={claimDevice}
+                disabled={deviceSaving}
+                className="flex-1 py-3 px-4 bg-primary text-white rounded-xl font-black shadow-lg shadow-primary/20 flex items-center justify-center gap-2 active:scale-95 transition-all disabled:opacity-60"
+              >
+                {deviceSaving ? <Loader2 className="animate-spin" size={18} /> : t('add')}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Rename a machine. Owner path is a plain RLS-scoped UPDATE; the
+          superadmin's fleet list sets viaAdmin and goes through device-admin. */}
+      {renamingMarket && (
+        <div className="fixed inset-0 z-[110] bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-white rounded-3xl w-full max-w-sm shadow-2xl border-2 border-slate-300">
+            <div className="flex justify-between items-center px-6 pt-6 pb-4 border-b-2 border-slate-200">
+              <div>
+                <h3 className="font-black text-xl text-slate-900">{t('rename')}</h3>
+                <span className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">
+                  {t('apparatus_no')}{renamingMarket.id}
+                </span>
+              </div>
+              <button
+                onClick={() => setRenamingMarket(null)}
+                className="p-2 bg-slate-200 border border-slate-300 text-slate-700 rounded-full hover:bg-slate-300"
+              >
+                <X size={18} />
+              </button>
+            </div>
+            <div className="p-6">
+              <label className="text-xs font-bold text-slate-500 ml-1">{t('device_name')}</label>
+              <input
+                value={renamingMarket.name}
+                onChange={e => setRenamingMarket({ ...renamingMarket, name: e.target.value })}
+                onKeyDown={e => { if (e.key === 'Enter') renameMarket(); }}
+                autoFocus
+                className="w-full mt-1 p-3 border-2 border-slate-300 focus:border-primary focus:outline-none rounded-xl font-bold bg-white text-slate-900"
+              />
+            </div>
+            <div className="flex gap-3 px-6 pb-6">
+              <button
+                onClick={() => setRenamingMarket(null)}
+                className="flex-1 py-3 px-4 bg-slate-200 rounded-xl font-bold text-slate-700 hover:bg-slate-300 transition-all"
+              >
+                {t('cancel')}
+              </button>
+              <button
+                onClick={renameMarket}
+                className="flex-1 py-3 px-4 bg-primary text-white rounded-xl font-black shadow-lg shadow-primary/20 active:scale-95 transition-all"
+              >
+                {t('save')}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Transfer a machine to another account — superadmin only. */}
+      {transferTarget && (
+        <div className="fixed inset-0 z-[110] bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-white rounded-3xl w-full max-w-md shadow-2xl border-2 border-slate-300 max-h-[85vh] flex flex-col">
+            <div className="flex justify-between items-center px-6 pt-6 pb-4 border-b-2 border-slate-200">
+              <div>
+                <h3 className="font-black text-xl text-slate-900">{t('transfer_device')}</h3>
+                <span className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">
+                  {transferTarget.name || `${t('apparatus_no')}${transferTarget.id}`}
+                </span>
+              </div>
+              <button
+                onClick={() => setTransferTarget(null)}
+                className="p-2 bg-slate-200 border border-slate-300 text-slate-700 rounded-full hover:bg-slate-300"
+              >
+                <X size={18} />
+              </button>
+            </div>
+            <div className="px-6 py-4 text-[11px] font-bold text-slate-500">{t('transfer_pick_owner')}</div>
+            <div className="flex-1 overflow-y-auto px-6 pb-6 space-y-2">
+              {adminOwners.map(o => (
+                <button
+                  key={o.id}
+                  onClick={() => setTransferConfirm({
+                    market: transferTarget,
+                    from: adminOwners.find(x => x.id === transferTarget.owner_id) || null,
+                    to: o,
+                  })}
+                  disabled={o.id === transferTarget.owner_id}
+                  className={`w-full p-3 rounded-xl border-2 text-left transition-all ${o.id === transferTarget.owner_id ? 'border-primary bg-primary/5 cursor-default' : 'border-slate-200 hover:border-primary hover:bg-slate-50'}`}
+                >
+                  <div className="font-bold text-sm text-slate-900 truncate">{o.email}</div>
+                  {o.id === transferTarget.owner_id && (
+                    <div className="text-[10px] font-black uppercase tracking-wider text-primary mt-0.5">
+                      {t('current_owner')}
+                    </div>
+                  )}
+                </button>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Set a new password. No reset mail: the project has no SMTP, and the
+          account was handed over with a password in the first place. */}
+      {pwdTarget && (
+        <div className="fixed inset-0 z-[110] bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-white rounded-3xl w-full max-w-sm shadow-2xl border-2 border-slate-300">
+            <div className="flex justify-between items-center px-6 pt-6 pb-4 border-b-2 border-slate-200">
+              <div className="min-w-0">
+                <h3 className="font-black text-xl text-slate-900">{t('change_password')}</h3>
+                <span className="text-[10px] font-bold text-slate-500 uppercase tracking-widest truncate block">
+                  {pwdTarget.email}
+                </span>
+              </div>
+              <button
+                onClick={() => setPwdTarget(null)}
+                className="p-2 bg-slate-200 border border-slate-300 text-slate-700 rounded-full hover:bg-slate-300 shrink-0"
+              >
+                <X size={18} />
+              </button>
+            </div>
+            <div className="p-6">
+              <label className="text-xs font-bold text-slate-500 ml-1">{t('change_password_for')} {pwdTarget.email}</label>
+              <input
+                type="text"
+                value={pwdTarget.password}
+                onChange={e => setPwdTarget({ ...pwdTarget, password: e.target.value })}
+                onKeyDown={e => { if (e.key === 'Enter') changePassword(); }}
+                autoFocus
+                autoComplete="new-password"
+                className="w-full mt-1 p-3 border-2 border-slate-300 focus:border-primary focus:outline-none rounded-xl font-mono text-sm bg-white text-slate-900"
+              />
+              <p className="text-[11px] text-slate-400 mt-1 ml-1">{t('user_password_hint')}</p>
+            </div>
+            <div className="flex gap-3 px-6 pb-6">
+              <button
+                onClick={() => setPwdTarget(null)}
+                className="flex-1 py-3 px-4 bg-slate-200 rounded-xl font-bold text-slate-700 hover:bg-slate-300 transition-all"
+              >
+                {t('cancel')}
+              </button>
+              <button
+                onClick={changePassword}
+                disabled={userSaving}
+                className="flex-1 py-3 px-4 bg-primary text-white rounded-xl font-black shadow-lg shadow-primary/20 flex items-center justify-center gap-2 active:scale-95 transition-all disabled:opacity-60"
+              >
+                {userSaving ? <Loader2 className="animate-spin" size={18} /> : t('save')}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Delete an account. The function refuses while it still owns machines. */}
+      {userDeleteTarget && (
+        <div className="fixed inset-0 z-[110] bg-black/50 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-white rounded-3xl p-8 w-full max-w-sm shadow-2xl text-center">
+            <div className="w-16 h-16 bg-red-100 text-red-600 rounded-full flex items-center justify-center mx-auto mb-4">
+              <AlertTriangle size={32} />
+            </div>
+            <h3 className="text-xl font-black mb-2 text-slate-900">{t('delete_user_title')}</h3>
+            <p className="text-sm text-slate-600 mb-2 break-all">{userDeleteTarget.email}</p>
+            <p className="text-xs text-slate-500 mb-6">{t('delete_user_hint')}</p>
+            <div className="flex gap-3">
+              <button
+                onClick={() => setUserDeleteTarget(null)}
+                disabled={userSaving}
+                className="flex-1 py-3 px-4 bg-slate-200 rounded-xl font-bold text-slate-700 hover:bg-slate-300 transition-all disabled:opacity-60"
+              >
+                {t('cancel')}
+              </button>
+              <button
+                onClick={deleteUser}
+                disabled={userSaving}
+                className="flex-1 py-3 px-4 bg-red-600 text-white rounded-xl font-bold hover:bg-red-700 shadow-lg shadow-red-200 transition-all active:scale-95 flex items-center justify-center disabled:opacity-60"
+              >
+                {userSaving ? <Loader2 className="animate-spin" size={18} /> : t('yes_delete')}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Transfer confirmation — spells out both accounts, because after this
+          the previous owner loses the machine from their admin panel. */}
+      {transferConfirm && (
+        <div className="fixed inset-0 z-[120] bg-black/50 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-white rounded-3xl p-7 w-full max-w-sm shadow-2xl">
+            <h3 className="text-xl font-black mb-1 text-slate-900 text-center">{t('transfer_confirm_title')}</h3>
+            <p className="text-xs font-bold text-slate-500 uppercase tracking-widest text-center mb-5">
+              {transferConfirm.market.name || `${t('apparatus_no')}${transferConfirm.market.id}`}
+              {' · '}{t('apparatus_no')}{transferConfirm.market.id}
+            </p>
+
+            <div className="space-y-2 mb-5">
+              <div className="p-3 rounded-xl bg-slate-100 border border-slate-200">
+                <div className="text-[10px] font-black uppercase tracking-wider text-slate-500">{t('transfer_from')}</div>
+                <div className="font-bold text-sm text-slate-900 truncate">
+                  {transferConfirm.from?.email || t('no_owner')}
+                </div>
+              </div>
+              <div className="flex justify-center text-slate-400"><ChevronDown size={18} /></div>
+              <div className="p-3 rounded-xl bg-primary/5 border-2 border-primary">
+                <div className="text-[10px] font-black uppercase tracking-wider text-primary">{t('transfer_to')}</div>
+                <div className="font-bold text-sm text-slate-900 truncate">{transferConfirm.to.email}</div>
+              </div>
+            </div>
+
+            <p className="text-[11px] text-slate-500 text-center mb-5">{t('transfer_confirm_hint')}</p>
+
+            <div className="flex gap-3">
+              <button
+                onClick={() => setTransferConfirm(null)}
+                disabled={transferring}
+                className="flex-1 py-3 px-4 bg-slate-200 rounded-xl font-bold text-slate-700 hover:bg-slate-300 transition-all disabled:opacity-60"
+              >
+                {t('cancel')}
+              </button>
+              <button
+                onClick={transferDevice}
+                disabled={transferring}
+                className="flex-1 py-3 px-4 bg-primary text-white rounded-xl font-black shadow-lg shadow-primary/20 flex items-center justify-center gap-2 active:scale-95 transition-all disabled:opacity-60"
+              >
+                {transferring ? <Loader2 className="animate-spin" size={18} /> : t('confirm_btn')}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Delete confirmation. The counts come back from device-admin's first
+          (unconfirmed) call — sales cascade, so say so out loud. */}
+      {deleteTarget && (
+        <div className="fixed inset-0 z-[110] bg-black/50 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-white rounded-3xl p-8 w-full max-w-sm shadow-2xl text-center">
+            <div className="w-16 h-16 bg-red-100 text-red-600 rounded-full flex items-center justify-center mx-auto mb-4">
+              <AlertTriangle size={32} />
+            </div>
+            <h3 className="text-xl font-black mb-2 text-slate-900">{t('delete_device_title')}</h3>
+            <p className="text-sm text-slate-600 mb-2">
+              {deleteTarget.name || `${t('apparatus_no')}${deleteTarget.machid}`}
+            </p>
+            {(deleteTarget.sales > 0 || deleteTarget.inventory > 0) && (
+              <p className="text-xs font-bold text-red-600 bg-red-50 border border-red-200 rounded-xl p-3 mb-4">
+                {t('delete_device_cascade', {
+                  sales: deleteTarget.sales ?? 0,
+                  inventory: deleteTarget.inventory ?? 0,
+                })}
+              </p>
+            )}
+            <p className="text-xs text-slate-500 mb-6">{t('delete_device_irreversible')}</p>
+            <div className="flex gap-3">
+              <button
+                onClick={() => setDeleteTarget(null)}
+                className="flex-1 py-3 px-4 bg-slate-200 rounded-xl font-bold text-slate-700 hover:bg-slate-300 transition-all"
+              >
+                {t('cancel')}
+              </button>
+              <button
+                onClick={() => deleteDevice(deleteTarget.machid, true)}
+                className="flex-1 py-3 px-4 bg-red-600 text-white rounded-xl font-bold hover:bg-red-700 shadow-lg shadow-red-200 transition-all active:scale-95"
+              >
+                {t('yes_delete')}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Create owner account — superadmin only. The password is set here and
+          handed to the owner directly; there is no signup/invite mail flow. */}
+      {newUser && (
+        <div className="fixed inset-0 z-[110] bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-white rounded-3xl w-full max-w-md shadow-2xl border-2 border-slate-300">
+            <div className="flex justify-between items-center px-6 pt-6 pb-4 border-b-2 border-slate-200">
+              <div>
+                <h3 className="font-black text-xl text-slate-900">{t('new_user')}</h3>
+                <span className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">{t('new_user_hint')}</span>
+              </div>
+              <button
+                onClick={() => setNewUser(null)}
+                className="p-2 bg-slate-200 border border-slate-300 text-slate-700 rounded-full hover:bg-slate-300"
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            <div className="p-6 space-y-4">
+              <div>
+                <label className="text-xs font-bold text-slate-500 ml-1">Email</label>
+                <input
+                  type="email"
+                  value={newUser.email}
+                  onChange={e => setNewUser({ ...newUser, email: e.target.value })}
+                  autoFocus
+                  autoComplete="off"
+                  className="w-full mt-1 p-3 border-2 border-slate-300 focus:border-primary focus:outline-none rounded-xl font-bold bg-white text-slate-900"
+                />
+              </div>
+              <div>
+                <label className="text-xs font-bold text-slate-500 ml-1">{t('password')}</label>
+                <input
+                  type="text"
+                  value={newUser.password}
+                  onChange={e => setNewUser({ ...newUser, password: e.target.value })}
+                  autoComplete="new-password"
+                  className="w-full mt-1 p-3 border-2 border-slate-300 focus:border-primary focus:outline-none rounded-xl font-mono text-sm bg-white text-slate-900"
+                />
+                <p className="text-[11px] text-slate-400 mt-1 ml-1">{t('user_password_hint')}</p>
+              </div>
+              <div>
+                <label className="text-xs font-bold text-slate-500 ml-1">{t('user_full_name')}</label>
+                <input
+                  value={newUser.full_name}
+                  onChange={e => setNewUser({ ...newUser, full_name: e.target.value })}
+                  className="w-full mt-1 p-3 border-2 border-slate-300 focus:border-primary focus:outline-none rounded-xl font-bold bg-white text-slate-900"
+                />
+              </div>
+            </div>
+
+            <div className="flex gap-3 px-6 pb-6">
+              <button
+                onClick={() => setNewUser(null)}
+                className="flex-1 py-3 px-4 bg-slate-200 rounded-xl font-bold text-slate-700 hover:bg-slate-300 transition-all"
+              >
+                {t('cancel')}
+              </button>
+              <button
+                onClick={createUser}
+                disabled={userSaving}
+                className="flex-1 py-3 px-4 bg-primary text-white rounded-xl font-black shadow-lg shadow-primary/20 flex items-center justify-center gap-2 active:scale-95 transition-all disabled:opacity-60"
+              >
+                {userSaving ? <Loader2 className="animate-spin" size={18} /> : t('create')}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ---- Administration tab (superadmin only) ----
+// The account list is the whole tab: expanding a profile reveals the machines
+// assigned to it, with rename / transfer / delete on each. Machines that have
+// no owner would have nowhere to appear in an owner-keyed list, so they get
+// their own group at the bottom — otherwise they'd be unreachable from the UI.
+//
+// Accounts come from admin-create-user, machines from device-admin; both need
+// the service_role key, so neither can happen in the browser. The fleet list
+// can't come from a plain query either — RLS shows the superadmin only its own
+// machines. The tab is hidden for non-superadmins; the functions refuse them
+// regardless.
+function UsersTab({
+  users,
+  loading,
+  onCreate,
+  onAddDevice,
+  onChangePassword,
+  onDeleteUser,
+  currentUserId,
+  onRefresh,
+  devices,
+  devicesLoading,
+  onTransfer,
+  onDelete,
+  onRename,
+}) {
+  const { t, i18n } = useTranslation();
+  const [expandedId, setExpandedId] = useState(null);
+
+  const byOwner = new Map();
+  for (const m of devices ?? []) {
+    const key = m.owner_id || '__none__';
+    if (!byOwner.has(key)) byOwner.set(key, []);
+    byOwner.get(key).push(m);
+  }
+  const orphans = byOwner.get('__none__') ?? [];
+
+  // One machine row, shared by the per-account lists and the orphan group.
+  const deviceRow = (m) => (
+    <div
+      key={m.id}
+      className="flex items-center gap-3 p-3 rounded-xl bg-white border border-slate-200"
+    >
+      <div className="w-9 h-9 rounded-lg bg-indigo-600 text-white flex items-center justify-center shrink-0">
+        <Package size={16} />
+      </div>
+      <div className="flex-1 min-w-0">
+        <div className="font-bold text-sm text-slate-900 truncate">{m.name || `${t('apparatus_no')}${m.id}`}</div>
+        <div className="text-[11px] font-bold text-slate-500">{t('apparatus_no')}{m.id}</div>
+      </div>
+      <span className={`text-[9px] font-black uppercase tracking-wider px-2 py-1 rounded-lg shrink-0 ${m.kind === 'micromarket_static' ? 'bg-emerald-100 text-emerald-700' : 'bg-indigo-100 text-indigo-700'}`}>
+        {m.kind === 'micromarket_static' ? t('badge_micromarket') : t('badge_vending')}
+      </span>
+      <div className="flex gap-1.5 shrink-0">
+        <button
+          onClick={() => onRename({ id: m.id, name: m.name || '' })}
+          title={t('rename')}
+          className="p-2 rounded-lg bg-white border border-slate-300 text-slate-600 hover:text-primary hover:border-primary transition-all"
+        >
+          <Pencil size={14} />
+        </button>
+        <button
+          onClick={() => onTransfer(m)}
+          title={t('transfer_device')}
+          className="p-2 rounded-lg bg-white border border-slate-300 text-slate-600 hover:text-primary hover:border-primary transition-all"
+        >
+          <ChevronRight size={14} />
+        </button>
+        <button
+          onClick={() => onDelete(m.id)}
+          disabled={devicesLoading}
+          title={t('delete')}
+          className="p-2 rounded-lg bg-white border border-slate-300 text-slate-600 hover:text-red-600 hover:border-red-300 transition-all disabled:opacity-50"
+        >
+          <Trash2 size={14} />
+        </button>
+      </div>
+    </div>
+  );
+
+  return (
+    <div>
+      <div className="flex justify-between items-start gap-3 mb-6">
+        <div>
+          <h2 className="text-2xl font-black text-slate-900 mb-1">{t('users_section')}</h2>
+          <p className="text-[11px] font-bold text-slate-500 uppercase tracking-widest">{t('users_subtitle')}</p>
+        </div>
+        <div className="flex gap-2 shrink-0 flex-wrap justify-end">
+          <button
+            onClick={onRefresh}
+            disabled={loading}
+            className="px-3 py-2.5 bg-slate-200 rounded-xl font-bold text-sm text-slate-700 hover:bg-slate-300 transition-all disabled:opacity-60"
+          >
+            {loading ? <Loader2 className="animate-spin" size={16} /> : <History size={16} />}
+          </button>
+          <button
+            onClick={onCreate}
+            className="bg-primary text-white px-4 py-2.5 rounded-xl font-bold text-sm shadow-lg shadow-primary/20 flex items-center gap-2 active:scale-95 transition-all"
+          >
+            <Plus size={16} /> {t('new_user')}
+          </button>
+          {/* Enrolling a machine is a platform-admin act, so it lives here
+              next to account creation rather than on the owner-facing tab. */}
+          <button
+            onClick={onAddDevice}
+            className="bg-slate-900 text-white px-4 py-2.5 rounded-xl font-bold text-sm shadow-lg shadow-slate-900/20 flex items-center gap-2 active:scale-95 transition-all"
+          >
+            <Plus size={16} /> {t('add_device')}
+          </button>
+        </div>
+      </div>
+
+      {users == null ? (
+        <div className="flex justify-center p-10"><Loader2 className="animate-spin text-primary" size={28} /></div>
+      ) : users.length === 0 ? (
+        <p className="text-sm text-slate-400 italic p-4">{t('no_users')}</p>
+      ) : (
+        <div className="space-y-2">
+          {users.map(u => {
+            const owned = byOwner.get(u.id) ?? [];
+            const open = expandedId === u.id;
+            return (
+              <div key={u.id} className="rounded-2xl bg-slate-50 border-2 border-slate-200 overflow-hidden">
+                <div className="flex items-center gap-3 p-4">
+                  <button
+                    onClick={() => setExpandedId(open ? null : u.id)}
+                    className="flex items-center gap-3 flex-1 min-w-0 text-left"
+                  >
+                    <div className={`w-11 h-11 rounded-xl text-white flex items-center justify-center shrink-0 font-black ${u.role === 'superadmin' ? 'bg-amber-500' : 'bg-slate-500'}`}>
+                      {(u.email || '?').charAt(0).toUpperCase()}
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <div className="font-bold text-slate-900 truncate">{u.email}</div>
+                      <div className="text-[11px] font-bold text-slate-500 truncate">
+                        {u.full_name ? `${u.full_name} · ` : ''}
+                        {t('user_since')} {u.created_at ? new Date(u.created_at).toLocaleDateString(i18n.language) : '—'}
+                      </div>
+                    </div>
+                  </button>
+                  {u.role === 'superadmin' && (
+                    <span className="text-[9px] font-black uppercase tracking-wider px-2 py-1 rounded-lg bg-amber-100 text-amber-700 shrink-0">
+                      {t('role_superadmin')}
+                    </span>
+                  )}
+                  <button
+                    onClick={() => setExpandedId(open ? null : u.id)}
+                    className="flex items-center gap-1 text-[9px] font-black uppercase tracking-wider px-2 py-1 rounded-lg bg-indigo-100 text-indigo-700 shrink-0 hover:bg-indigo-200 transition-all"
+                  >
+                    {u.machines} {t('devices_short')}
+                    <ChevronDown size={12} className={`transition-transform ${open ? 'rotate-180' : ''}`} />
+                  </button>
+                  <div className="flex gap-1.5 shrink-0">
+                    <button
+                      onClick={() => onChangePassword(u)}
+                      title={t('change_password')}
+                      className="p-2 rounded-lg bg-white border border-slate-300 text-slate-600 hover:text-primary hover:border-primary transition-all"
+                    >
+                      <KeyRound size={15} />
+                    </button>
+                    {/* Deleting your own account would lock you out of the panel —
+                        the function refuses it too. */}
+                    <button
+                      onClick={() => onDeleteUser(u)}
+                      disabled={u.id === currentUserId}
+                      title={t('delete')}
+                      className="p-2 rounded-lg bg-white border border-slate-300 text-slate-600 hover:text-red-600 hover:border-red-300 transition-all disabled:opacity-40 disabled:hover:text-slate-600 disabled:hover:border-slate-300"
+                    >
+                      <Trash2 size={15} />
+                    </button>
+                  </div>
+                </div>
+
+                {open && (
+                  <div className="px-4 pb-4 pt-1 border-t border-slate-200 bg-slate-100/60">
+                    {devices == null ? (
+                      <div className="flex justify-center p-6"><Loader2 className="animate-spin text-primary" size={22} /></div>
+                    ) : owned.length === 0 ? (
+                      <p className="text-xs text-slate-400 italic py-3">{t('user_no_devices')}</p>
+                    ) : (
+                      <div className="space-y-2 pt-3">{owned.map(deviceRow)}</div>
+                    )}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {/* Machines with no owner have no profile to hide under — surface them
+          separately so they can still be assigned or removed. */}
+      {orphans.length > 0 && (
+        <div className="mt-8 pt-6 border-t-2 border-slate-200">
+          <h3 className="text-sm font-black text-rose-600 mb-1">{t('devices_no_owner')}</h3>
+          <p className="text-[11px] font-bold text-slate-500 uppercase tracking-widest mb-4">{t('devices_no_owner_hint')}</p>
+          <div className="space-y-2">{orphans.map(deviceRow)}</div>
         </div>
       )}
     </div>
