@@ -1,6 +1,6 @@
 # Типы машин и схемы оплаты
 
-Документ описывает разделение системы на два **разных** типа продающих устройств и identity-модель, на которой они работают. Зафиксирован 2026-05-29 при проектировании static-QR флоу для веб-приложения `apps/web_app`.
+Документ описывает разделение системы на два **разных** типа продающих устройств и identity-модель, на которой они работают. Написан 2026-05-29 как проект static-QR флоу; сверен с реализацией и переписан 2026-08-04 — проектные предположения (webhook/cron от LV, свой MQTT-брокер, unlock из бэкенда, kiosk-пользователь в Supabase Auth) не сбылись, здесь описано то, что есть в коде.
 
 > Карта компонентов верхнего уровня — в [system_architecture.md](system_architecture.md). Этот документ углубляется в платёжные потоки и identity-модель.
 
@@ -15,9 +15,9 @@
 | Тип товара | Снэки/напитки в моторных спиралях | Свободно на полке за замком |
 | Что значит «выдача» | Мотор крутится, light-curtain ловит падение товара | Замок открывается, покупатель сам берёт |
 | Кто инициирует платёж | Планшет `apps/tablet` (вызывает LV API напрямую) | Edge-функция (вызывается с телефона покупателя по QR) |
-| Кто узнаёт об оплате | Планшет сам polling'ит LV gateway | Бэкэнд: webhook или cron от LV |
-| Условие «сделка завершена» | Мотор подтвердил выдачу → бэкэнд закрывает платёж в LV | LV подтвердил оплату → бэкэнд **сразу** закрывает, без подтверждения от машины |
-| Как машина узнаёт «открой/выдай» | Сама же инициировала, dispense immediately после своего polling'а | **MQTT-сообщение от бэкэнда** после события оплаты |
+| Кто узнаёт об оплате | Планшет сам polling'ит LV gateway | Реле — по MQTT-событию от брокера SmartVend |
+| Условие «сделка завершена» | Мотор подтвердил выдачу → бэкэнд закрывает платёж в LV | Реле дёрнуло `complete-order`, тот подтвердил оплату в LV и записал продажу; замок открывается только после 200 |
+| Как машина узнаёт «открой/выдай» | Сама же инициировала, dispense immediately после своего polling'а | **MQTT от брокера SmartVend** → реле подтверждает оплату через `complete-order` и открывает по 200 |
 | `micromarkets.kind` | `'vending'` | `'micromarket_static'` (третье значение `'micromarket_tablet'` — legacy default для старых строк) |
 
 Эти два потока **намеренно разделены**: их объединение в одной кодовой ветке в прошлом создавало ошибки (один тип ждал подтверждения от машины, другой нет — на static-QR это означало незакрытые платежи).
@@ -29,10 +29,10 @@
 | Identity | Где работает | Как авторизуется | Что может |
 |---|---|---|---|
 | **Owner** | `apps/web_app` (режим админки) | Supabase Auth: `signInWithPassword(email, password)` | Видит свои машины (`owner_id = auth.uid()`), правит каталог/инвентарь/цены, читает продажи |
-| **Kiosk** (только для vending) | `apps/tablet` на планшете внутри машины | Supabase Auth: `signInWithPassword('kiosk-{machid}@local.smartvend', secret)` — один раз при пэйринге | Пишет `sales`/`sales_items` для **своей** машины (`kiosk_user_id = auth.uid()`), правит свой `inventory.stock` после выдачи |
+| **Kiosk** (только для vending) | `apps/tablet` на планшете внутри машины | Отдельного Supabase-пользователя нет: работает под `anon`, пару `(machid, secret)` проверяет `SECURITY DEFINER` RPC (`_assert_machine`) на каждый вызов | Пишет `sales`/`sales_items` и правит `inventory.stock` только своей машины — через secret-scoped RPC; прямые anon-записи закрыты миграцией `20260603170000` |
 | **Customer** (для static-QR) | `apps/web_app` (режим витрины) в браузере телефона, открыт по статическому QR | **Никак** — anon role, без логина | Читает каталог. **В БД не пишет вообще** — все мутации происходят в edge-функциях с service_role после редиректа в Каспи |
 
-У static-QR машины **нет планшета** → нет third identity, которая нуждается в Supabase Auth. ESP32 relay не работает с Supabase напрямую — он слушает MQTT-брокер и щёлкает реле по сообщениям. Авторизуется в брокере отдельно (mTLS или username/password), Supabase его не видит.
+У static-QR машины **нет планшета** → нет third identity, которая нуждается в Supabase Auth. ESP32 relay в Supabase Auth не заводится, но с Supabase работает: ходит по HTTPS с publishable-ключом в `device-provision` (за MQTT-кредами) и в `complete-order` (за подтверждением оплаты). В брокере SmartVend авторизуется парой uuid/secret из того же `device-provision`.
 
 ---
 
@@ -40,19 +40,19 @@
 
 ```
 ┌──────────────┐
-│ QR-наклейка  │  https://customer.example.kz/?marketId=3001000
+│ QR-наклейка  │  https://<vercel>/micromarket?t=<qr_token>     
 │ на машине    │
 └──────┬───────┘
        │ Скан камерой телефона
        ▼
 ┌──────────────────────────────────────────────────────────────┐
-│ Customer SPA в браузере телефона (anon JWT)                  │
+│ Customer SPA в браузере телефона (anon, без логина)          │
 │                                                              │
-│   1. Прочитал каталог (anon SELECT на inventory/products)    │
+│   1. Прочитал каталог: rpc get_storefront(qr_token)          │
 │   2. Локальная корзина (state в React)                       │
 │   3. Tap "Оплатить":                                         │
-│        supabase.functions.invoke('checkout-qr', {            │
-│          marketId, items:[{inventoryId, qty}]                │
+│        supabase.functions.invoke('create-payment', {         │
+│          token: qr_token, items:[{id, count}]                │
 │        })                                                    │
 │   4. Получил {paymentUrl}                                    │
 │   5. window.location = paymentUrl  ──→  Kaspi app           │
@@ -60,7 +60,7 @@
 └──────────────────────────────────────────────────────────────┘
 
 ┌──────────────────────────────────────────────────────────────┐
-│ Edge Function checkout-qr (service_role)                     │
+│ Edge Function create-payment (service_role)                  │
 │                                                              │
 │   • SELECT price, micromarket_id FROM inventory              │
 │       WHERE id IN (items.inventoryId)                        │
@@ -82,34 +82,48 @@
                        │
                        ▼
 ┌──────────────────────────────────────────────────────────────┐
-│ LV/SmartVend → НАШ БЭКЭНД                                    │
-│                                                              │
-│   Вариант A (предпочтительный): webhook                      │
-│     POST /lv-webhook от smartvend.kz                         │
-│     • verify signature                                       │
-│     • UPDATE pending_orders SET status='paid'                │
-│     • INSERT INTO sales (...)                                │
-│     • publish MQTT: machines/{machid}/unlock                 │
-│                                                              │
-│   Вариант B (если webhook не доступен): edge-cron            │
-│     Раз в N сек poll'ит LV для pending_orders.status=pending │
-│     То же действие, что в A                                  │
+│ MQTT-брокер SmartVend (mqtt.smartvend.kz:14003)              │
+│   Не наш. Топик vending/{uuid}/in, событие «Processed order» │
+│   Subscriber: ESP32 relay внутри static-QR машины            │
+│   Креды (uuid/secret) реле берёт у device-provision          │
 └──────────────────────────────────────────────────────────────┘
-
+                       │
+                       ▼
 ┌──────────────────────────────────────────────────────────────┐
-│ MQTT broker (внешний)                                        │
-│   Topic: machines/{machid}/unlock                            │
-│   Subscriber: ESP32 relay внутри статик-QR машины            │
+│ ESP32 relay → POST /complete-order { orderid }               │
 └──────────────────────────────────────────────────────────────┘
-
+                       │
+                       ▼
+┌──────────────────────────────────────────────────────────────┐
+│ Edge Function complete-order (service_role)                  │
+│   • достаёт pending_orders + secret машины                   │
+│   • POST payment_result в LV, ждёт code=1                    │
+│   • claim'ит заказ атомарно, INSERT sales/sales_items,       │
+│     списывает stock                                          │
+│   • RETURN 200                                               │
+└──────────────────────────────────────────────────────────────┘
+                       │ 200
+                       ▼
 ┌──────────────────────────────────────────────────────────────┐
 │ ESP32 relay                                                  │
-│   Получил MQTT → щёлкает реле → замок открывается            │
+│   Только теперь щёлкает реле → замок открывается             │
 │   Покупатель забирает товар → закрывает дверцу               │
 └──────────────────────────────────────────────────────────────┘
 ```
 
-Браузер покупателя в этой цепи участвует только в шагах 1–5. После редиректа в Каспи телефон может быть выключен, разряжен, выкинут — машина откроется по MQTT-сообщению, не зависящему от устройства покупателя. Поэтому в `apps/web_app/src/App.jsx` для QR-флоу **не нужен** ни `signInAnonymously()`, ни polling `verify-payment`, ни persistence в `localStorage` — каталог + корзина + один invoke + редирект.
+**Бэкенд ничего не шлёт устройству.** Своего MQTT-брокера у проекта нет,
+обратного канала «Supabase → реле» тоже; реле само инициирует все обращения.
+
+**Захват платежа ровно один — реле.** `payment_result` работает не только как
+проверка статуса: если его не опросить примерно за минуту, SmartVend
+возвращает платёж сам. Отсюда инвариант «деньги берутся только вместе с
+открытием замка»: реле офлайн → `payment_result` никто не дёргает →
+автовозврат, покупатель видит таймаут на витрине. Поэтому браузер платёж
+закрывать не должен (он лишь поллит `get_order_status` на чтение), а фоновый
+серверный поллинг в `create-payment` намеренно отключён — второй путь захвата
+записал бы продажу без открытия двери.
+
+Браузер покупателя платёж не закрывает и на исход не влияет: после редиректа в Каспи телефон может быть выключен, разряжен, выкинут — заказ закроет реле. Если вкладка жива, `App.jsx` раз в 4 секунды поллит `get_order_status` (**только чтение**) и показывает успех, когда заказ закрыло устройство; через 5 минут — таймаут. Заказ переживает перезагрузку вкладки через `localStorage`. Никакого `signInAnonymously()` в этом флоу нет.
 
 ---
 
@@ -134,7 +148,7 @@
       • apps/tablet пишет в Supabase: sales + sales_items + декремент stock
 ```
 
-Здесь Supabase узнаёт о продаже **постфактум** через apps/tablet (authenticated как kiosk-user). Бэкэнд не участвует в payment-флоу — он только хранит результат.
+Здесь Supabase узнаёт о продаже **постфактум** через apps/tablet — под `anon`, но через secret-scoped `SECURITY DEFINER` RPC, которые проверяют `(machid, secret)` на каждый вызов. Бэкэнд не участвует в payment-флоу, он только хранит результат.
 
 ---
 
@@ -143,24 +157,24 @@
 Главное последствие разделения — **поверхность атаки для anon-ключа сужается радикально**:
 
 - На static-QR флоу нет ни одной DB-записи от anon (всё через edge с service_role).
-- На vending флоу записи идут от authenticated kiosk-user через RLS по `kiosk_user_id`.
+- На vending флоу записи идут через secret-scoped RPC, которые сверяют `(machid, secret)` внутри и пишут только строки своей машины.
 - Текущие широко открытые policies `"Anon insert sales (real market)"`, `"Anon update inventory (real market)"` (audit findings E1–E5) уходят полностью — никто их не использует.
 - Утечка `micromarkets.secret` через anon SELECT (E4/C1) закрывается column-grant'ом, потому что:
-  - vending: apps/tablet верифицирует секрет через `auth.signInWithPassword`, а не через прямой SELECT.
+  - vending: apps/tablet верифицирует секрет через RPC `verify_pairing`, а не через прямой SELECT.
   - static-QR: секрет нужен только edge-функции, та работает с service_role.
 
 См. полный аудит безопасности в memory `project_supabase_security_state` (legacy-проект `c--m109e`) — закроется ≥80% находок одной этой архитектурной перепрошивкой.
 
 ---
 
-## TBD до начала имплементации static-QR
+## Как решились вопросы, открытые при проектировании
 
-1. **LV → бэкэнд**: webhook (предпочтительно) или наш cron-poll? Зависит от поддержки в `LE third-party QR payment API_V2.3.pdf`.
-2. **MQTT-брокер**: где хостится (self-hosted EMQX/mosquitto, HiveMQ Cloud, AWS IoT)? Как auth для ESP32 (mTLS-cert vs username/pwd)? Topic-схема.
-3. **Идемпотентность**: что если LV пришлёт webhook дважды или cron два раза заметит ту же оплату? UNIQUE-constraint на `sales.payment_id`.
-4. **Refund-флоу для static-QR**: если ESP32 ответил `ack=fail` или вообще не ответил (замок сгорел, Wi-Fi пропал) — как инициируется возврат? У vending это решается с light-curtain'ом, здесь нужен явный механизм.
-5. **`micromarkets.kind`** — значение для static-QR зафиксировано как `'micromarket_static'` (миграция `20260508120000_micromarkets_kind.sql`, CHECK `('micromarket_tablet','micromarket_static','vending')`).
-6. **Provisioning new machine**: edge-функция `provision_kiosk` для vending должна создавать auth-user. Для static-QR — не должна (планшета нет), но должна выдать MQTT-creds для ESP32. Два разных кода.
+1. **LV → бэкэнд.** Ни webhook, ни наш cron не понадобились: событие об оплате приходит на реле через MQTT-брокер SmartVend, а бэкенд дёргает `payment_result` уже по запросу от реле. `pg_cron`-задание `reconcile-payments` было заведено (`20260603220000`) и снято (`20260605120000`); функция `cron-process-payments` удалена из проекта.
+2. **MQTT-брокер.** Свой не поднимали — используется брокер SmartVend `mqtt.smartvend.kz:14003`, auth по username/password (uuid/secret), топик `vending/{uuid}/in`. Обратного канала «бэкенд → реле» нет.
+3. **Идемпотентность.** Заказ клеймится атомарно: `UPDATE pending_orders SET status='completed' WHERE orderid=… AND status='pending' RETURNING`. Кто не выиграл гонку — выходит без записи.
+4. **Refund для static-QR.** Отдельный механизм не понадобился: если реле офлайн, `payment_result` никто не опрашивает и SmartVend возвращает платёж сам примерно через минуту. Именно поэтому второй путь захвата недопустим.
+5. **`micromarkets.kind`** — `'micromarket_static'` (миграция `20260508120000_micromarkets_kind.sql`, CHECK `('micromarket_tablet','micromarket_static','vending')`).
+6. **Provisioning.** Auth-user для планшета не заводится вовсе (см. identity-модель). Регистрация машины — `device-claim`, только суперадмин; MQTT-креды для ESP выдаёт `device-provision`. Порядок описан в [system_architecture.md](system_architecture.md#провижининг-кто-и-как-заводит-аккаунты-и-машины).
 
 ---
 

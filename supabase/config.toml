@@ -1,28 +1,26 @@
 
-# static_qr payment functions. verify_jwt MUST be false: the project uses the
-# new publishable key (sb_publishable_…) which is not a JWT, so verify_jwt=true
-# rejects the storefront's requests with 401 "Invalid JWT". These functions are
-# public payment endpoints (no secret is exposed; the amount is computed
-# server-side), so anon access is intended.
+# verify_jwt is false everywhere on purpose. The project uses the new
+# publishable key (sb_publishable_…), which is not a JWT, so verify_jwt=true
+# answers 401 "Invalid JWT" to the storefront and the devices. It would also
+# buy nothing on the admin endpoints: the gateway's check is satisfied by the
+# publishable key alone, which every browser bundle carries. Authorization
+# therefore lives inside each function, which validates the caller's session
+# token itself.
+
+# static_qr payment start: the phone sends a qr_token + items, the function
+# recomputes the amount from inventory server-side and signs the SmartVend
+# request with the machine's secret. Public endpoint by design — no secret
+# leaves the server and no price comes from the client.
 [functions.create-payment]
 enabled = true
 verify_jwt = false
 
-[functions.verify-payment]
-enabled = true
-verify_jwt = false
-
-# Server-side reconciliation, invoked by the pg_cron job 'reconcile-payments'
-# (no JWT — called from the DB via net.http_post).
-[functions.cron-process-payments]
-enabled = true
-verify_jwt = false
-
-# Push-based finalization from the ESP32 relay. On a SmartVend MQTT "Processed
-# order" event the device POSTs { orderid } here with the publishable key (not a
-# JWT) — so verify_jwt MUST be false. The function re-verifies the payment with
-# the gateway before recording, so the public endpoint can't be used to forge a
-# sale.
+# Push-based finalization from the ESP32 relay, and the ONLY capture path for
+# static_qr. On a SmartVend MQTT "Processed order" event the device POSTs
+# { orderid } here; the function re-verifies with the gateway and records the
+# sale, and only on 200 does the relay open the lock. That ordering is what
+# keeps "money taken" and "door opened" inseparable — if the relay is offline
+# nobody polls payment_result and SmartVend auto-refunds.
 [functions.complete-order]
 enabled = true
 verify_jwt = false
@@ -30,35 +28,27 @@ entrypoint = "./functions/complete-order/index.ts"
 
 # Device provisioning: ESP32 sends a machid, gets back its MQTT identity
 # (uuid/secret/name) looked up from the public SmartVend machine list — the
-# device can't download that 1.85MB list itself. verify_jwt=false (publishable
-# key, not a JWT).
+# device can't download that list itself.
 [functions.device-provision]
 enabled = true
 verify_jwt = false
 entrypoint = "./functions/device-provision/index.ts"
 
-# Admin-panel endpoints. Both are called from the browser with the operator's
-# own session token, and both validate that token themselves (and, for
-# admin-create-user, the app_metadata.is_superadmin flag). verify_jwt stays
-# false for the same reason as above — the gateway's JWT check is satisfied by
-# the publishable key alone, so it would add nothing while breaking the
-# preflight/anon-key path; the real authorization lives inside the functions.
-
-# Superadmin-only: create the Supabase Auth accounts that own micromarkets.
+# Superadmin-only account management: list, create, set password, delete.
 [functions.admin-create-user]
 enabled = true
 verify_jwt = false
 entrypoint = "./functions/admin-create-user/index.ts"
 
-# Owner self-service: register a machine by Internal ID + Secret. Verifies the
-# pair against the SmartVend list before writing micromarkets.
+# Superadmin-only: register a machine by Internal ID + Secret, verified against
+# the SmartVend list before writing micromarkets.
 [functions.device-claim]
 enabled = true
 verify_jwt = false
 entrypoint = "./functions/device-claim/index.ts"
 
 # Superadmin-only fleet management: list every machine, transfer one to another
-# account, delete one. Needed because RLS hides other owners' machines even
+# account, rename, delete. Needed because RLS hides other owners' machines even
 # from the superadmin's browser session.
 [functions.device-admin]
 enabled = true
