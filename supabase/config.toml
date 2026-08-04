@@ -36,3 +36,31 @@ entrypoint = "./functions/complete-order/index.ts"
 enabled = true
 verify_jwt = false
 entrypoint = "./functions/device-provision/index.ts"
+
+# Admin-panel endpoints. Both are called from the browser with the operator's
+# own session token, and both validate that token themselves (and, for
+# admin-create-user, the app_metadata.is_superadmin flag). verify_jwt stays
+# false for the same reason as above — the gateway's JWT check is satisfied by
+# the publishable key alone, so it would add nothing while breaking the
+# preflight/anon-key path; the real authorization lives inside the functions.
+
+# Superadmin-only: create the Supabase Auth accounts that own micromarkets.
+[functions.admin-create-user]
+enabled = true
+verify_jwt = false
+entrypoint = "./functions/admin-create-user/index.ts"
+
+# Owner self-service: register a machine by Internal ID + Secret. Verifies the
+# pair against the SmartVend list before writing micromarkets.
+[functions.device-claim]
+enabled = true
+verify_jwt = false
+entrypoint = "./functions/device-claim/index.ts"
+
+# Superadmin-only fleet management: list every machine, transfer one to another
+# account, delete one. Needed because RLS hides other owners' machines even
+# from the superadmin's browser session.
+[functions.device-admin]
+enabled = true
+verify_jwt = false
+entrypoint = "./functions/device-admin/index.ts"
