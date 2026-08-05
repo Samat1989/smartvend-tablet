@@ -129,19 +129,29 @@ class ActionPill extends StatelessWidget {
                         ],
                       ),
                     ),
-                    Container(
-                      width: 42,
-                      height: 42,
-                      decoration: const BoxDecoration(
-                        color: Colors.white,
-                        shape: BoxShape.circle,
-                      ),
-                      child: const Icon(
-                        Icons.arrow_forward,
-                        color: AppColors.iosBlack,
-                        size: 28,
-                      ),
-                    ),
+                    // The arrow promises "this takes you somewhere", so it
+                    // only shows when the pill actually leads anywhere — an
+                    // empty cart (or a pay button the board has disabled)
+                    // renders without it instead of inviting a tap that
+                    // does nothing.
+                    if (onTap != null)
+                      Container(
+                        width: 42,
+                        height: 42,
+                        decoration: const BoxDecoration(
+                          color: Colors.white,
+                          shape: BoxShape.circle,
+                        ),
+                        child: const Icon(
+                          Icons.arrow_forward,
+                          color: AppColors.iosBlack,
+                          size: 28,
+                        ),
+                      )
+                    else
+                      // Right padding is tuned for the circle sitting at the
+                      // edge; without it the value would hug the border.
+                      const SizedBox(width: 12),
                   ],
                 ),
               ),

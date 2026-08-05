@@ -855,10 +855,11 @@ class _ShelfTab extends StatelessWidget {
 
 // ─────────────────────────── Bottom action ───────────────────────────
 
-/// Persistent action bar pinned to the bottom of the catalog. Layout:
-/// [round back button] [action pill] — both fixed sizes so the bar
-/// height never jumps between empty / filled / pay states (the home
-/// and cart screens share the same widgets to keep that promise).
+/// Persistent action bar pinned to the bottom of the catalog. Holds just
+/// the centred action pill — the catalog is the root screen, so there is
+/// nowhere to go back to. (The cart screen keeps a RoundBackButton beside
+/// its pill, where "back" actually means something.) The pill is a fixed
+/// size, so the bar height never jumps between empty / filled states.
 class _BottomActionBar extends StatelessWidget {
   const _BottomActionBar();
 
@@ -892,12 +893,6 @@ class _BottomActionBar extends StatelessWidget {
         child: Row(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            RoundBackButton(
-              // No meaningful "back" on the home root — placeholder for
-              // a future screensaver / attract-loop screen.
-              onTap: () {},
-            ),
-            const SizedBox(width: 12),
             ActionPill(
               icon: Icons.shopping_cart_outlined,
               label: s.t('cart'),

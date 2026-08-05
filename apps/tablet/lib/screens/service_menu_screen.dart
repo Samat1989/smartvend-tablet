@@ -6,7 +6,6 @@ import '../board/board_client.dart';
 import '../services/device_storage.dart';
 import '../services/kiosk_bridge.dart';
 import '../services/strings.dart';
-import '../services/vending_service.dart';
 import 'board_diag_screen.dart';
 import 'climate_screen.dart';
 import 'inventory_edit_screen.dart';
@@ -118,19 +117,12 @@ class ServiceMenuScreen extends StatelessWidget {
                             builder: (_) => const BoardDiagScreen()),
                       ),
                     ),
-                    _Tile(
-                      icon: Icons.refresh,
-                      label: s.t('reload'),
-                      color: Colors.green,
-                      onTap: () async {
-                        await context.read<VendingService>().reload();
-                        if (context.mounted) {
-                          ScaffoldMessenger.of(context).showSnackBar(
-                            SnackBar(content: Text(s.t('reload'))),
-                          );
-                        }
-                      },
-                    ),
+                    // No manual "Обновить" tile: VendingService already
+                    // re-fetches the catalog every 60 s (see
+                    // _startAutoRefresh), skipping only while a customer has
+                    // items in the cart. A button that just races that timer
+                    // gave the operator nothing and crowded the menu. The
+                    // error screen still offers a retry.
                     _Tile(
                       icon: Icons.system_update,
                       label: 'Обновление',
