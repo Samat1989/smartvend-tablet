@@ -151,7 +151,14 @@ class _LayoutEditorScreenState extends State<LayoutEditorScreen> {
     for (final sh in l.shelves) {
       slots += sh.slots.length;
     }
-    return 'Полок: ${l.shelves.length} · слотов: $slots';
+    var twins = 0;
+    for (final sh in l.shelves) {
+      for (final sl in sh.slots) {
+        if (sl.isTwin) twins++;
+      }
+    }
+    final base = 'Полок: ${l.shelves.length} · ячеек: $slots';
+    return twins == 0 ? base : '$base · сдвоенных: $twins';
   }
 
   Future<void> _save() async {
@@ -177,15 +184,41 @@ class _LayoutEditorScreenState extends State<LayoutEditorScreen> {
               mainAxisSize: MainAxisSize.min,
               children: [
                 const Padding(
-                  padding: EdgeInsets.fromLTRB(20, 16, 20, 8),
+                  padding: EdgeInsets.fromLTRB(20, 16, 20, 4),
                   child: Align(
                     alignment: Alignment.centerLeft,
                     child: Text(
-                      'Выберите шаблон',
+                      'Шаблоны раскладки',
                       style: TextStyle(
                         color: Colors.white,
                         fontSize: 18,
                         fontWeight: FontWeight.w800,
+                      ),
+                    ),
+                  ),
+                ),
+                const Padding(
+                  padding: EdgeInsets.fromLTRB(20, 0, 20, 12),
+                  child: Align(
+                    alignment: Alignment.centerLeft,
+                    child: Text(
+                      'Шаблон заменит текущую раскладку целиком. '
+                      'Подписи и моторы можно править после применения.',
+                      style: TextStyle(color: Colors.white60, fontSize: 12),
+                    ),
+                  ),
+                ),
+                const Padding(
+                  padding: EdgeInsets.fromLTRB(20, 0, 20, 4),
+                  child: Align(
+                    alignment: Alignment.centerLeft,
+                    child: Text(
+                      'ЗАВОДСКИЕ',
+                      style: TextStyle(
+                        color: Colors.white54,
+                        fontSize: 11,
+                        fontWeight: FontWeight.bold,
+                        letterSpacing: 1.2,
                       ),
                     ),
                   ),
@@ -198,8 +231,10 @@ class _LayoutEditorScreenState extends State<LayoutEditorScreen> {
                         style: const TextStyle(
                             color: Colors.white,
                             fontWeight: FontWeight.w700)),
-                    subtitle: Text(tpl.description,
+                    subtitle: Text(
+                        '${tpl.description}\n${_describeLayout(tpl.build())}',
                         style: const TextStyle(color: Colors.white60)),
+                    isThreeLine: true,
                     onTap: () => Navigator.of(ctx).pop(tpl),
                   ),
                 if (_customTemplates.isNotEmpty) ...[
@@ -684,21 +719,36 @@ class _LayoutEditorScreenState extends State<LayoutEditorScreen> {
         elevation: 0,
         title: Text(s.t('service_layout_editor'),
             style: const TextStyle(fontWeight: FontWeight.bold)),
+        // Labelled buttons, not bare icons: on a kiosk touch screen there
+        // is no hover, so a tooltip never appears and the operator has to
+        // guess what a bookmark or a check mark does. The two "saves" are
+        // easy to mix up, so both say what they save.
         actions: [
-          IconButton(
-            tooltip: 'Сохранить как шаблон',
-            icon: const Icon(Icons.bookmark_add_outlined),
-            onPressed: _saveAsTemplate,
+          Padding(
+            padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 4),
+            child: TextButton.icon(
+              style: TextButton.styleFrom(foregroundColor: Colors.white),
+              icon: const Icon(Icons.grid_view),
+              label: const Text('Взять шаблон'),
+              onPressed: _pickTemplate,
+            ),
           ),
-          IconButton(
-            tooltip: 'Шаблоны раскладки',
-            icon: const Icon(Icons.dashboard_customize),
-            onPressed: _pickTemplate,
+          Padding(
+            padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 4),
+            child: TextButton.icon(
+              style: TextButton.styleFrom(foregroundColor: Colors.white),
+              icon: const Icon(Icons.bookmark_add_outlined),
+              label: const Text('Сохранить как шаблон'),
+              onPressed: _saveAsTemplate,
+            ),
           ),
-          IconButton(
-            tooltip: 'Сохранить',
-            icon: const Icon(Icons.check),
-            onPressed: _save,
+          Padding(
+            padding: const EdgeInsets.fromLTRB(4, 8, 12, 8),
+            child: FilledButton.icon(
+              icon: const Icon(Icons.check),
+              label: const Text('Готово'),
+              onPressed: _save,
+            ),
           ),
         ],
       ),
@@ -784,25 +834,45 @@ class _ShelfRail extends StatelessWidget {
                           ),
                           const SizedBox(width: 8),
                           Expanded(
-                            child: Text(
-                              shelves[i].label,
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                              style: TextStyle(
-                                color: Colors.white.withValues(
-                                    alpha: active ? 1 : 0.7),
-                                fontWeight: active
-                                    ? FontWeight.w700
-                                    : FontWeight.w500,
-                              ),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  shelves[i].label,
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: TextStyle(
+                                    color: Colors.white.withValues(
+                                        alpha: active ? 1 : 0.7),
+                                    fontWeight: active
+                                        ? FontWeight.w700
+                                        : FontWeight.w500,
+                                  ),
+                                ),
+                                Text(
+                                  '${shelves[i].slots.length} ячеек',
+                                  style: TextStyle(
+                                    color:
+                                        Colors.white.withValues(alpha: 0.45),
+                                    fontSize: 11,
+                                  ),
+                                ),
+                              ],
                             ),
                           ),
-                          Text(
-                            '${shelves[i].slots.length}',
-                            style: TextStyle(
-                              color: Colors.white.withValues(alpha: 0.5),
-                              fontSize: 12,
-                            ),
+                          // Explicit menu — rename/delete used to be reachable
+                          // only by long-pressing the row, which nothing on
+                          // screen hinted at. Long-press still works.
+                          IconButton(
+                            visualDensity: VisualDensity.compact,
+                            constraints: const BoxConstraints(
+                                minWidth: 32, minHeight: 32),
+                            padding: EdgeInsets.zero,
+                            tooltip: 'Переименовать или удалить полку',
+                            icon: Icon(Icons.more_vert,
+                                size: 18,
+                                color: Colors.white.withValues(alpha: 0.6)),
+                            onPressed: () => _showShelfActions(ctx, i),
                           ),
                         ],
                       ),
@@ -894,18 +964,30 @@ class _SlotsPanel extends StatelessWidget {
           Row(
             children: [
               Expanded(
-                child: Text(
-                  shelf!.label,
-                  style: const TextStyle(
-                    color: Colors.white,
-                    fontSize: 18,
-                    fontWeight: FontWeight.w800,
-                  ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      shelf!.label,
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 18,
+                        fontWeight: FontWeight.w800,
+                      ),
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      'Ячеек: ${slots.length} · нажмите на ячейку, '
+                      'чтобы изменить подпись и моторы',
+                      style: const TextStyle(
+                          color: Colors.white54, fontSize: 12),
+                    ),
+                  ],
                 ),
               ),
               FilledButton.icon(
                 icon: const Icon(Icons.add),
-                label: const Text('Слот'),
+                label: const Text('Добавить ячейку'),
                 onPressed: onAddSlot,
               ),
             ],
@@ -914,7 +996,7 @@ class _SlotsPanel extends StatelessWidget {
           Expanded(
             child: slots.isEmpty
                 ? const Center(
-                    child: Text('Слотов ещё нет — нажмите «Слот»',
+                    child: Text('Ячеек ещё нет — нажмите «Добавить ячейку»',
                         style: TextStyle(color: Colors.white54)))
                 : GridView.builder(
                     gridDelegate:
@@ -933,22 +1015,56 @@ class _SlotsPanel extends StatelessWidget {
                         child: InkWell(
                           borderRadius: BorderRadius.circular(12),
                           onTap: () => onEditSlot(i),
-                          onLongPress: () => onDeleteSlot(i),
                           child: Padding(
-                            padding: const EdgeInsets.all(12),
+                            padding: const EdgeInsets.fromLTRB(12, 8, 4, 10),
                             child: Column(
                               crossAxisAlignment: CrossAxisAlignment.start,
                               children: [
-                                Text(
-                                  sl.label,
-                                  style: const TextStyle(
-                                    color: Colors.white,
-                                    fontSize: 18,
-                                    fontWeight: FontWeight.w800,
-                                  ),
+                                // Explicit edit / delete buttons. These used
+                                // to be tap and long-press with nothing on
+                                // screen saying so — the operator could not
+                                // tell a cell was editable, let alone
+                                // removable.
+                                Row(
+                                  children: [
+                                    Expanded(
+                                      child: Text(
+                                        sl.label,
+                                        maxLines: 1,
+                                        overflow: TextOverflow.ellipsis,
+                                        style: const TextStyle(
+                                          color: Colors.white,
+                                          fontSize: 18,
+                                          fontWeight: FontWeight.w800,
+                                        ),
+                                      ),
+                                    ),
+                                    IconButton(
+                                      visualDensity: VisualDensity.compact,
+                                      constraints: const BoxConstraints(
+                                          minWidth: 36, minHeight: 36),
+                                      padding: EdgeInsets.zero,
+                                      tooltip: 'Изменить ячейку',
+                                      icon: const Icon(Icons.edit_outlined,
+                                          color: Colors.white70, size: 18),
+                                      onPressed: () => onEditSlot(i),
+                                    ),
+                                    IconButton(
+                                      visualDensity: VisualDensity.compact,
+                                      constraints: const BoxConstraints(
+                                          minWidth: 36, minHeight: 36),
+                                      padding: EdgeInsets.zero,
+                                      tooltip: 'Удалить ячейку',
+                                      icon: const Icon(Icons.delete_outline,
+                                          color: Colors.white54, size: 18),
+                                      onPressed: () => onDeleteSlot(i),
+                                    ),
+                                  ],
                                 ),
                                 const Spacer(),
-                                Row(
+                                Padding(
+                                  padding: const EdgeInsets.only(right: 8),
+                                  child: Row(
                                   children: [
                                     if (sl.isTwin)
                                       Container(
@@ -961,12 +1077,14 @@ class _SlotsPanel extends StatelessWidget {
                                           borderRadius:
                                               BorderRadius.circular(6),
                                         ),
-                                        child: const Text('TWIN',
+                                        // Was "TWIN" — meaningless to the
+                                        // operator servicing the cabinet.
+                                        child: const Text('СДВОЕННАЯ',
                                             style: TextStyle(
                                               color: AppColors.iosOrange,
                                               fontSize: 9,
                                               fontWeight: FontWeight.w900,
-                                              letterSpacing: 1.2,
+                                              letterSpacing: 1.0,
                                             )),
                                       ),
                                     Expanded(
@@ -988,6 +1106,7 @@ class _SlotsPanel extends StatelessWidget {
                                       ),
                                     ),
                                   ],
+                                  ),
                                 ),
                               ],
                             ),
