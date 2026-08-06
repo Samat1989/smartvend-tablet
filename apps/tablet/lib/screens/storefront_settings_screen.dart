@@ -9,13 +9,18 @@ import '../theme.dart';
 import '../widgets/product_card.dart';
 
 /// Service-mode settings that only affect what the customer sees on the
-/// catalog, with a live preview beside them. Everything here is local to
-/// this tablet — nothing is pushed to the cloud, so two machines of the
-/// same owner can be laid out differently if their cabinets are.
+/// catalog, with a live preview underneath them. Everything here is local to
+/// this tablet — nothing is pushed to the cloud, so two machines of the same
+/// owner can be laid out differently if their cabinets are.
 ///
-/// The preview renders the real [ProductCard] (`interactive: false`), not a
-/// look-alike: a mock would drift from the catalog the moment either is
-/// touched, and then it would be lying to the operator.
+/// Controls sit in a header strip and the preview gets the full width below.
+/// The preview is the point of the screen, and it only tells the truth about
+/// card proportions when it's as wide as the catalog it stands for — squeezed
+/// into a side column it made cards look narrower than they really are.
+///
+/// It renders the real [ProductCard] (`interactive: false`), not a look-alike:
+/// a mock would drift from the catalog the moment either is touched, and then
+/// it would be lying to the operator.
 class StorefrontSettingsScreen extends StatelessWidget {
   const StorefrontSettingsScreen({super.key});
 
@@ -46,80 +51,93 @@ class StorefrontSettingsScreen extends StatelessWidget {
             style: const TextStyle(fontWeight: FontWeight.bold)),
       ),
       body: SafeArea(
-        child: Row(
+        child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            // ─── Settings ───
-            SizedBox(
-              width: 380,
-              child: ListView(
-                padding: const EdgeInsets.all(16),
+            // ─── Settings header ───
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 4, 16, 14),
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text(
-                    s.t('storefront_columns'),
-                    style: const TextStyle(
-                      color: Colors.white,
-                      fontSize: 15,
-                      fontWeight: FontWeight.w700,
+                  // Columns
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          s.t('storefront_columns'),
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 15,
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                        const SizedBox(height: 8),
+                        SegmentedButton<int>(
+                          segments: [
+                            for (var n = DeviceStorage.minGridColumns;
+                                n <= DeviceStorage.maxGridColumns;
+                                n++)
+                              ButtonSegment(value: n, label: Text('$n')),
+                          ],
+                          selected: {storage.gridColumns},
+                          showSelectedIcon: false,
+                          onSelectionChanged: (v) =>
+                              storage.setGridColumns(v.first),
+                        ),
+                      ],
                     ),
                   ),
-                  const SizedBox(height: 2),
-                  Text(
-                    s.t('storefront_columns_hint'),
-                    style: const TextStyle(
-                        color: Colors.white54, fontSize: 12, height: 1.3),
-                  ),
-                  const SizedBox(height: 10),
-                  SegmentedButton<int>(
-                    segments: [
-                      for (var n = DeviceStorage.minGridColumns;
-                          n <= DeviceStorage.maxGridColumns;
-                          n++)
-                        ButtonSegment(value: n, label: Text('$n')),
-                    ],
-                    selected: {storage.gridColumns},
-                    showSelectedIcon: false,
-                    onSelectionChanged: (v) =>
-                        storage.setGridColumns(v.first),
-                  ),
-                  const SizedBox(height: 24),
-                  const Divider(color: Colors.white24),
-                  const SizedBox(height: 8),
-                  SwitchListTile(
-                    contentPadding: EdgeInsets.zero,
-                    value: storage.showSlotNumber,
-                    onChanged: (v) => storage.setShowSlotNumber(v),
-                    title: Text(
-                      s.t('storefront_show_slot'),
-                      style: const TextStyle(
-                        color: Colors.white,
-                        fontSize: 15,
-                        fontWeight: FontWeight.w700,
-                      ),
+                  const SizedBox(width: 24),
+                  // Slot number
+                  Expanded(
+                    flex: 2,
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Row(
+                          children: [
+                            Switch(
+                              value: storage.showSlotNumber,
+                              onChanged: (v) => storage.setShowSlotNumber(v),
+                            ),
+                            const SizedBox(width: 8),
+                            Expanded(
+                              child: Text(
+                                s.t('storefront_show_slot'),
+                                style: const TextStyle(
+                                  color: Colors.white,
+                                  fontSize: 15,
+                                  fontWeight: FontWeight.w700,
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 2),
+                        Text(
+                          s.t('storefront_show_slot_hint'),
+                          style: const TextStyle(
+                              color: Colors.white54, fontSize: 12, height: 1.3),
+                        ),
+                        if (storage.showSlotNumber && sample == null)
+                          Padding(
+                            padding: const EdgeInsets.only(top: 6),
+                            child: Text(
+                              s.t('storefront_slot_no_layout'),
+                              style: const TextStyle(
+                                  color: Colors.orangeAccent, fontSize: 12),
+                            ),
+                          ),
+                      ],
                     ),
-                    subtitle: Padding(
-                      padding: const EdgeInsets.only(top: 4),
-                      child: Text(
-                        s.t('storefront_show_slot_hint'),
-                        style: const TextStyle(
-                            color: Colors.white54, fontSize: 12, height: 1.3),
-                      ),
-                    ),
                   ),
-                  if (storage.showSlotNumber && sample == null)
-                    Padding(
-                      padding: const EdgeInsets.only(top: 8),
-                      child: Text(
-                        s.t('storefront_slot_no_layout'),
-                        style: const TextStyle(
-                            color: Colors.orangeAccent, fontSize: 12),
-                      ),
-                    ),
                 ],
               ),
             ),
-            const VerticalDivider(width: 1, color: Colors.white24),
-            // ─── Live preview ───
+            const Divider(height: 1, color: Colors.white24),
+            // ─── Live preview, full width ───
             Expanded(child: _Preview(products: svc.catalog)),
           ],
         ),
@@ -128,9 +146,9 @@ class StorefrontSettingsScreen extends StatelessWidget {
   }
 }
 
-/// Scaled-down slice of the catalog. Shows the first few products the
-/// machine actually carries; falls back to placeholders when the catalog
-/// hasn't loaded, so the operator can still judge the column count.
+/// Slice of the catalog at the operator's current settings. Shows the first
+/// few products the machine actually carries; falls back to a message when
+/// the catalog hasn't loaded, so the column count can still be judged.
 class _Preview extends StatelessWidget {
   const _Preview({required this.products});
 
@@ -140,8 +158,8 @@ class _Preview extends StatelessWidget {
   Widget build(BuildContext context) {
     final s = context.watch<Strings>();
     final cols = context.watch<DeviceStorage>().gridColumns;
-    // Two full rows is enough to read the layout without scrolling.
-    final shown = products.take(cols * 2).toList();
+    // Three rows' worth; the grid scrolls if they don't all fit.
+    final shown = products.take(cols * 3).toList();
 
     return Container(
       color: AppColors.iosBackground,
@@ -149,7 +167,7 @@ class _Preview extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           Padding(
-            padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
+            padding: const EdgeInsets.fromLTRB(16, 10, 16, 0),
             child: Text(
               s.t('storefront_preview'),
               style: const TextStyle(
@@ -173,8 +191,8 @@ class _Preview extends StatelessWidget {
                     crossAxisCount: cols,
                     mainAxisSpacing: 10,
                     crossAxisSpacing: 10,
-                    // Same ratio the catalog uses, so what the operator
-                    // sees here is the proportion they'll get.
+                    // Same ratio the catalog uses, so what the operator sees
+                    // here is the proportion they'll get.
                     childAspectRatio: 0.895,
                     children: [
                       for (final p in shown)
