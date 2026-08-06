@@ -175,6 +175,29 @@ class Strings extends ChangeNotifier {
       'kk': 'Витрина',
       'en': 'Storefront',
     },
+    'storefront_columns': {
+      'ru': 'Товаров в строке',
+      'kk': 'Жолдағы тауар саны',
+      'en': 'Products per row',
+    },
+    'storefront_columns_hint': {
+      'ru': 'Чем больше колонок, тем мельче карточки. '
+          'Справа видно, как это будет выглядеть.',
+      'kk': 'Бағандар неғұрлым көп болса, карточкалар соғұрлым ұсақ. '
+          'Оң жақта қалай көрінетіні көрсетілген.',
+      'en': 'More columns means smaller cards. The preview on the right '
+          'shows the result.',
+    },
+    'storefront_preview': {
+      'ru': 'ПРЕДПРОСМОТР',
+      'kk': 'АЛДЫН АЛА ҚАРАУ',
+      'en': 'PREVIEW',
+    },
+    'storefront_preview_empty': {
+      'ru': 'Каталог пуст — нечего показать',
+      'kk': 'Каталог бос — көрсететін ештеңе жоқ',
+      'en': 'Catalog is empty — nothing to show',
+    },
     'storefront_show_slot': {
       'ru': 'Показывать номер ячейки',
       'kk': 'Ұяшық нөмірін көрсету',
@@ -250,11 +273,6 @@ class Strings extends ChangeNotifier {
       'ru': 'Товары',
       'kk': 'Тауарлар',
       'en': 'Products',
-    },
-    'service_layout': {
-      'ru': 'Раскладка каталога',
-      'kk': 'Каталог орналасуы',
-      'en': 'Catalog layout',
     },
     'service_sensor_mode': {
       'ru': 'Режим выдачи',

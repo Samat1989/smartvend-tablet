@@ -75,12 +75,10 @@ class ServiceMenuScreen extends StatelessWidget {
                             builder: (_) => const InventoryEditScreen()),
                       ),
                     ),
-                    _Tile(
-                      icon: Icons.grid_view,
-                      label: s.t('service_layout'),
-                      color: Colors.deepPurple,
-                      onTap: () => _changeLayout(context),
-                    ),
+                    // «Раскладка каталога» was a placeholder that only ever
+                    // showed a "в разработке" dialog. Its job is now split
+                    // for real between «Витрина» (how the catalog looks) and
+                    // «Редактор раскладки» (which motor sits where).
                     _Tile(
                       icon: Icons.dashboard_customize,
                       label: s.t('service_layout_editor'),
@@ -163,32 +161,6 @@ class ServiceMenuScreen extends StatelessWidget {
       ),
     );
   }
-
-  /// Placeholder while the catalog layout editor is being reworked.
-  /// The old "columns per row" picker has been retired in favour of a
-  /// per-machine layout editor (see [LayoutEditorScreen]); this tile
-  /// will eventually hand the operator a richer view chooser.
-  Future<void> _changeLayout(BuildContext context) async {
-    await showDialog<void>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('Раскладка каталога'),
-        content: const Text(
-          'Раздел в разработке — скоро будет.\n\n'
-          'Для настройки слотов используйте «Редактор раскладки» — '
-          'там сейчас задаётся структура полок и моторов.',
-          style: TextStyle(height: 1.4),
-        ),
-        actions: [
-          FilledButton(
-            onPressed: () => Navigator.of(ctx).pop(),
-            child: const Text('OK'),
-          ),
-        ],
-      ),
-    );
-  }
-
 
   Future<void> _changePin(BuildContext context) async {
     final s = context.read<Strings>();

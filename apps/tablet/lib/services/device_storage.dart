@@ -46,8 +46,11 @@ class DeviceStorage extends ChangeNotifier {
   static const _defaultClimateSetpoint = 6.0;
   static const _defaultClimateLightOn = true;
   static const _defaultClimateHasGlassHeater = true;
+  // Catalog columns. Capped at 3: past that the 44-dp add button and the
+  // counter pill eat most of a card's width and the product photo stops
+  // being readable from arm's length.
   static const minGridColumns = 2;
-  static const maxGridColumns = 5;
+  static const maxGridColumns = 3;
 
   /// Service-PIN policy.
   static const minPinLength = 4;
@@ -72,8 +75,10 @@ class DeviceStorage extends ChangeNotifier {
   String? get secret => _secret;
   String get language => _prefs.getString(_kLanguage) ?? 'ru';
 
-  int get gridColumns =>
-      _prefs.getInt(_kGridColumns) ?? _defaultGridColumns;
+  // Clamped on read as well as on write: a tablet that stored 4 or 5
+  // before the cap would otherwise keep rendering them.
+  int get gridColumns => (_prefs.getInt(_kGridColumns) ?? _defaultGridColumns)
+      .clamp(minGridColumns, maxGridColumns);
 
   int get dispenseSensorMode =>
       _prefs.getInt(_kDispenseSensorMode) ?? _defaultDispenseSensorMode;
