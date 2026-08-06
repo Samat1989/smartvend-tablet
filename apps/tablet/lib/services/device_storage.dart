@@ -35,6 +35,7 @@ class DeviceStorage extends ChangeNotifier {
   // cross-wired cabinets (see BoardClient.lytSwapRowCol).
   static const _kLytSwapRowCol = 'lyt_swap_row_col';
   static const _kShowSlotNumber = 'storefront_show_slot_number';
+  static const _kShowShelfLabels = 'storefront_show_shelf_labels';
   static const _kMachineLayout = 'machine_layout_v1';
   // Operator-saved layout templates (JSON list of {name, layout}) —
   // see CustomLayoutTemplate in models/machine_layout.dart.
@@ -133,6 +134,17 @@ class DeviceStorage extends ChangeNotifier {
 
   Future<void> setShowSlotNumber(bool v) async {
     await _prefs.setBool(_kShowSlotNumber, v);
+    notifyListeners();
+  }
+
+  /// Show the shelf header (numbered square + shelf label) above each row
+  /// group on the catalog. On by default — that's how the storefront has
+  /// always looked. Worth turning off on a cabinet whose shelves aren't
+  /// labelled, where the header is just noise between rows of products.
+  bool get showShelfLabels => _prefs.getBool(_kShowShelfLabels) ?? true;
+
+  Future<void> setShowShelfLabels(bool v) async {
+    await _prefs.setBool(_kShowShelfLabels, v);
     notifyListeners();
   }
 

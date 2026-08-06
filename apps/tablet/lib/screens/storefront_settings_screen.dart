@@ -1,12 +1,14 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
+import '../models/machine_layout.dart';
 import '../models/product.dart';
 import '../services/device_storage.dart';
 import '../services/strings.dart';
 import '../services/vending_service.dart';
 import '../theme.dart';
 import '../widgets/product_card.dart';
+import '../widgets/shelf_header.dart';
 
 /// Service-mode settings that only affect what the customer sees on the
 /// catalog, with a live preview underneath them. Everything here is local to
@@ -89,59 +91,103 @@ class StorefrontSettingsScreen extends StatelessWidget {
                       ],
                     ),
                   ),
-                  const SizedBox(width: 24),
-                  // Slot number
+                  const SizedBox(width: 20),
                   Expanded(
-                    flex: 2,
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Row(
-                          children: [
-                            Switch(
-                              value: storage.showSlotNumber,
-                              onChanged: (v) => storage.setShowSlotNumber(v),
-                            ),
-                            const SizedBox(width: 8),
-                            Expanded(
-                              child: Text(
-                                s.t('storefront_show_slot'),
-                                style: const TextStyle(
-                                  color: Colors.white,
-                                  fontSize: 15,
-                                  fontWeight: FontWeight.w700,
-                                ),
-                              ),
-                            ),
-                          ],
-                        ),
-                        const SizedBox(height: 2),
-                        Text(
-                          s.t('storefront_show_slot_hint'),
-                          style: const TextStyle(
-                              color: Colors.white54, fontSize: 12, height: 1.3),
-                        ),
-                        if (storage.showSlotNumber && sample == null)
-                          Padding(
-                            padding: const EdgeInsets.only(top: 6),
-                            child: Text(
-                              s.t('storefront_slot_no_layout'),
-                              style: const TextStyle(
-                                  color: Colors.orangeAccent, fontSize: 12),
-                            ),
-                          ),
-                      ],
+                    flex: 3,
+                    child: _SwitchBlock(
+                      value: storage.showSlotNumber,
+                      onChanged: storage.setShowSlotNumber,
+                      title: s.t('storefront_show_slot'),
+                      hint: s.t('storefront_show_slot_hint'),
+                    ),
+                  ),
+                  const SizedBox(width: 20),
+                  Expanded(
+                    flex: 3,
+                    child: _SwitchBlock(
+                      value: storage.showShelfLabels,
+                      onChanged: storage.setShowShelfLabels,
+                      title: s.t('storefront_show_shelves'),
+                      hint: s.t('storefront_show_shelves_hint'),
                     ),
                   ),
                 ],
               ),
             ),
+            // Both toggles read their text out of the machine layout, so
+            // without one there is nothing to show and the switches would
+            // look broken.
+            if ((storage.showSlotNumber || storage.showShelfLabels) &&
+                sample == null)
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 0, 16, 10),
+                child: Text(
+                  s.t('storefront_slot_no_layout'),
+                  style: const TextStyle(
+                      color: Colors.orangeAccent, fontSize: 12),
+                ),
+              ),
             const Divider(height: 1, color: Colors.white24),
             // ─── Live preview, full width ───
-            Expanded(child: _Preview(products: svc.catalog)),
+            Expanded(
+              child: _Preview(
+                products: svc.catalog,
+                // Real first shelf of this machine, so the header in the
+                // preview carries the same numbering the catalog will.
+                shelf: svc.layout.shelves.isEmpty
+                    ? null
+                    : svc.layout.shelves.first,
+              ),
+            ),
           ],
         ),
       ),
+    );
+  }
+}
+
+/// One labelled toggle in the settings header: switch, title, explanation.
+class _SwitchBlock extends StatelessWidget {
+  const _SwitchBlock({
+    required this.value,
+    required this.onChanged,
+    required this.title,
+    required this.hint,
+  });
+
+  final bool value;
+  final ValueChanged<bool> onChanged;
+  final String title;
+  final String hint;
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            Switch(value: value, onChanged: onChanged),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Text(
+                title,
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontSize: 15,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 2),
+        Text(
+          hint,
+          style: const TextStyle(
+              color: Colors.white54, fontSize: 12, height: 1.3),
+        ),
+      ],
     );
   }
 }
@@ -150,14 +196,19 @@ class StorefrontSettingsScreen extends StatelessWidget {
 /// few products the machine actually carries; falls back to a message when
 /// the catalog hasn't loaded, so the column count can still be judged.
 class _Preview extends StatelessWidget {
-  const _Preview({required this.products});
+  const _Preview({required this.products, required this.shelf});
 
   final List<Product> products;
+
+  /// First shelf of the machine layout, or null when no layout is set —
+  /// then there is no header to preview.
+  final Shelf? shelf;
 
   @override
   Widget build(BuildContext context) {
     final s = context.watch<Strings>();
-    final cols = context.watch<DeviceStorage>().gridColumns;
+    final storage = context.watch<DeviceStorage>();
+    final cols = storage.gridColumns;
     // Three rows' worth; the grid scrolls if they don't all fit.
     final shown = products.take(cols * 3).toList();
 
@@ -178,6 +229,12 @@ class _Preview extends StatelessWidget {
               ),
             ),
           ),
+          // The real ShelfHeader, same widget the catalog uses.
+          if (storage.showShelfLabels && shelf != null)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
+              child: ShelfHeader(shelfNumber: 1, label: shelf!.label),
+            ),
           Expanded(
             child: shown.isEmpty
                 ? Center(

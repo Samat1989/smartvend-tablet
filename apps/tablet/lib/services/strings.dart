@@ -188,6 +188,19 @@ class Strings extends ChangeNotifier {
       'en': 'More columns means smaller cards. The preview on the right '
           'shows the result.',
     },
+    'storefront_show_shelves': {
+      'ru': 'Показывать названия полок',
+      'kk': 'Сөре атауларын көрсету',
+      'en': 'Show shelf names',
+    },
+    'storefront_show_shelves_hint': {
+      'ru': 'Заголовок с номером и названием полки над каждым рядом. '
+          'Выключите, если полки на автомате не подписаны.',
+      'kk': 'Әр қатардың үстінде сөре нөмірі мен атауы бар тақырып. '
+          'Аппаратта сөрелер белгіленбесе, өшіріңіз.',
+      'en': 'A header with the shelf number and name above each row. '
+          'Turn off if the cabinet shelves are not labelled.',
+    },
     'storefront_preview': {
       'ru': 'ПРЕДПРОСМОТР',
       'kk': 'АЛДЫН АЛА ҚАРАУ',

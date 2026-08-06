@@ -14,6 +14,7 @@ import '../services/vending_service.dart';
 import '../theme.dart';
 import '../widgets/action_pill.dart';
 import '../widgets/product_card.dart';
+import '../widgets/shelf_header.dart';
 import 'cart_screen.dart';
 import 'screensaver_screen.dart';
 import 'service_pin_screen.dart';
@@ -409,48 +410,12 @@ class _ShelfGroup extends StatelessWidget {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        // Header row: muted 25-dp numbered square + 14-pt range label.
-        // Was orange/black; toned down to gray-on-gray so the shelf
-        // dividers don't compete with the product cards.
-        Row(
-          children: [
-            Container(
-              width: 25,
-              height: 25,
-              decoration: BoxDecoration(
-                color: AppColors.iosGray.withValues(alpha: 0.35),
-                borderRadius: BorderRadius.circular(8),
-              ),
-              alignment: Alignment.center,
-              child: Text(
-                '$shelfNumber',
-                style: const TextStyle(
-                  color: AppColors.iosGray,
-                  fontSize: 14,
-                  fontWeight: FontWeight.w800,
-                  letterSpacing: -0.3,
-                  height: 1,
-                ),
-              ),
-            ),
-            const SizedBox(width: 8),
-            Expanded(
-              child: Text(
-                label,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: const TextStyle(
-                  color: AppColors.iosGray,
-                  fontSize: 14,
-                  fontWeight: FontWeight.w700,
-                  letterSpacing: -0.3,
-                  fontFeatures: [FontFeature.tabularFigures()],
-                ),
-              ),
-            ),
-          ],
-        ),
-        const SizedBox(height: 8),
+        // Shelf header — hideable from «Витрина». On a cabinet whose shelves
+        // aren't labelled it's noise between the rows of products.
+        if (context.watch<DeviceStorage>().showShelfLabels) ...[
+          ShelfHeader(shelfNumber: shelfNumber, label: label),
+          const SizedBox(height: 8),
+        ],
         if (products.isEmpty)
           Padding(
             padding: const EdgeInsets.symmetric(vertical: 12),
