@@ -170,11 +170,21 @@ if ($newVersion -ne $curVersion) {
     if ($LASTEXITCODE -ne 0) { Fail "git commit failed" }
 }
 
-# --- Working tree must be clean ---------------------------------------------
-$status = git status --porcelain
-if ($status) {
-    Write-Host $status
-    Fail "Working tree not clean. Commit or stash before releasing."
+# --- No uncommitted TRACKED changes -----------------------------------------
+# The point of this gate is that the tag describes what was built. Untracked
+# files are not in the commit and not in the APK either, so they can't break
+# that — and blocking on them means one stray directory anywhere in the
+# monorepo (say firmware sources someone hasn't committed yet) stops tablet
+# releases forever. They're still worth seeing, so they're printed.
+$untracked = git status --porcelain --untracked-files=all | Where-Object { $_ -like '??*' }
+if ($untracked) {
+    Write-Host "Untracked files present (not part of the release):" -ForegroundColor Yellow
+    Write-Host ($untracked -join "`n")
+}
+$dirty = git status --porcelain --untracked-files=no
+if ($dirty) {
+    Write-Host $dirty
+    Fail "Tracked files have uncommitted changes. Commit or stash before releasing."
 }
 
 # --- Build signed APKs ------------------------------------------------------
