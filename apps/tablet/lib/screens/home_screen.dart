@@ -533,6 +533,16 @@ class _ProductCard extends StatelessWidget {
     // touched. Cards without a shadow read as flat content; the
     // shadow makes the selected ones lift off the page.
     final selected = count > 0;
+
+    // Slot number from the machine layout, shown only when the operator
+    // enabled it in «Витрина». Null when the layout has no slot for this
+    // motor (product assigned before the layout was built) — nothing to
+    // show then, and a wrong number is worse than none.
+    final showSlot = context.watch<DeviceStorage>().showSlotNumber;
+    final slotLabel =
+        showSlot ? svc.layout.slotForMotor(product.motorId)?.label : null;
+    final hasPhoto = (product.imageUrl ?? '').isNotEmpty;
+
     return AnimatedContainer(
       duration: const Duration(milliseconds: 180),
       curve: Curves.easeOut,
@@ -563,13 +573,61 @@ class _ProductCard extends StatelessWidget {
                     Positioned.fill(
                       child: ColoredBox(
                         color: AppColors.iosBackground,
-                        child: ProductThumb(
-                          product: product,
-                          emojiSize: 56,
-                          fit: BoxFit.cover,
-                        ),
+                        // No photo and the operator wants numbers: put the
+                        // slot number where the picture would be. A big
+                        // digit is far more useful to someone standing at
+                        // the cabinet than the generic 📦 fallback.
+                        child: (slotLabel != null && !hasPhoto)
+                            ? Center(
+                                child: FittedBox(
+                                  fit: BoxFit.scaleDown,
+                                  child: Padding(
+                                    padding: const EdgeInsets.all(16),
+                                    child: Text(
+                                      slotLabel,
+                                      style: const TextStyle(
+                                        color: AppColors.iosBlack,
+                                        fontSize: 64,
+                                        fontWeight: FontWeight.w800,
+                                        letterSpacing: -1,
+                                      ),
+                                    ),
+                                  ),
+                                ),
+                              )
+                            : ProductThumb(
+                                product: product,
+                                emojiSize: 56,
+                                fit: BoxFit.cover,
+                              ),
                       ),
                     ),
+                    // Card with a photo — the number rides in a small badge
+                    // at the bottom-left, clear of the counter pill (top
+                    // left) and the add button (top right).
+                    if (slotLabel != null && hasPhoto)
+                      Positioned(
+                        bottom: 10,
+                        left: 12,
+                        child: DecoratedBox(
+                          decoration: BoxDecoration(
+                            color: Colors.white.withValues(alpha: 0.92),
+                            borderRadius: BorderRadius.circular(8),
+                          ),
+                          child: Padding(
+                            padding: const EdgeInsets.symmetric(
+                                horizontal: 8, vertical: 3),
+                            child: Text(
+                              slotLabel,
+                              style: const TextStyle(
+                                color: AppColors.iosBlack,
+                                fontSize: 14,
+                                fontWeight: FontWeight.w800,
+                              ),
+                            ),
+                          ),
+                        ),
+                      ),
                     // Counter pill on the left, blue plus on the right —
                     // mirrors the Figma "Selected" Card state. Counter
                     // pill is hidden until at least one is in the cart.

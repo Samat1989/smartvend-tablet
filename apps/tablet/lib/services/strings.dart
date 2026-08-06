@@ -162,7 +162,56 @@ class Strings extends ChangeNotifier {
       'kk': 'Тоңазытқыш',
       'en': 'Refrigeration',
     },
-    'service_unpair': {'ru': 'Сбросить пэйринг', 'kk': 'Қосылымды тастау', 'en': 'Reset pairing'},
+    // "Unpair" reads as jargon to the operator — from their side this is
+    // simply signing the tablet out of the machine's account, after which
+    // the pairing screen asks for the machine number and key again.
+    'service_unpair': {
+      'ru': 'Выйти из аккаунта',
+      'kk': 'Аккаунттан шығу',
+      'en': 'Sign out',
+    },
+    'service_storefront': {
+      'ru': 'Витрина',
+      'kk': 'Витрина',
+      'en': 'Storefront',
+    },
+    'storefront_show_slot': {
+      'ru': 'Показывать номер ячейки',
+      'kk': 'Ұяшық нөмірін көрсету',
+      'en': 'Show slot number',
+    },
+    'storefront_show_slot_hint': {
+      'ru': 'На карточке товара появится номер ячейки из раскладки. '
+          'Если у товара нет фото, номер покажется вместо картинки. '
+          'Включайте, если ячейки на дверце пронумерованы.',
+      'kk': 'Тауар картасында раскладкадағы ұяшық нөмірі шығады. '
+          'Тауардың фотосы болмаса, нөмір суреттің орнына көрсетіледі. '
+          'Есіктегі ұяшықтар нөмірленген болса қосыңыз.',
+      'en': 'Product cards get the slot number from the layout. Cards '
+          'without a photo show the number in place of the picture. '
+          'Turn on if the cabinet doors are numbered.',
+    },
+    'storefront_slot_sample': {
+      'ru': 'Пример номера на этом аппарате:',
+      'kk': 'Осы аппараттағы нөмір мысалы:',
+      'en': 'Example number on this machine:',
+    },
+    'storefront_slot_no_layout': {
+      'ru': 'Раскладка ещё не задана — номера показывать не из чего. '
+          'Откройте «Редактор раскладки».',
+      'kk': 'Раскладка әлі жасалмаған — нөмір алатын жер жоқ. '
+          '«Раскладка редакторын» ашыңыз.',
+      'en': 'No layout yet — there are no numbers to show. Open the '
+          'layout editor first.',
+    },
+    'service_unpair_hint': {
+      'ru': 'Планшет отвяжется от аппарата. Чтобы вернуться к работе, '
+          'нужно будет снова ввести номер аппарата и секретный ключ.',
+      'kk': 'Планшет аппараттан ажыратылады. Жұмысқа оралу үшін аппарат '
+          'нөмірі мен құпия кілтті қайта енгізу қажет болады.',
+      'en': 'The tablet will be unlinked from the machine. To resume, you '
+          'will have to enter the machine number and secret key again.',
+    },
     'service_exit_kiosk': {
       'ru': 'Выйти в Android',
       'kk': 'Android-қа шығу',

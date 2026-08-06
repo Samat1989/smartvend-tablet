@@ -11,6 +11,7 @@ import 'climate_screen.dart';
 import 'inventory_edit_screen.dart';
 import 'layout_editor_screen.dart';
 import 'screensaver_media_screen.dart';
+import 'storefront_settings_screen.dart';
 import 'tester_screen.dart';
 import 'update_screen.dart';
 
@@ -90,6 +91,15 @@ class ServiceMenuScreen extends StatelessWidget {
                       ),
                     ),
                     _Tile(
+                      icon: Icons.storefront,
+                      label: s.t('service_storefront'),
+                      color: Colors.cyan.shade700,
+                      onTap: () => Navigator.of(context).push(
+                        MaterialPageRoute(
+                            builder: (_) => const StorefrontSettingsScreen()),
+                      ),
+                    ),
+                    _Tile(
                       icon: Icons.slideshow,
                       label: s.t('service_screensaver_media'),
                       color: Colors.pink,
@@ -139,7 +149,7 @@ class ServiceMenuScreen extends StatelessWidget {
                       onTap: () => _exitToAndroid(context),
                     ),
                     _Tile(
-                      icon: Icons.link_off,
+                      icon: Icons.logout,
                       label: s.t('service_unpair'),
                       color: Colors.redAccent,
                       onTap: () => _confirmUnpair(context),
@@ -264,8 +274,17 @@ class ServiceMenuScreen extends StatelessWidget {
       context: context,
       builder: (ctx) => AlertDialog(
         title: Text(s.t('service_unpair')),
-        content: Text('${s.t('service_machine_id')}'
-            '${context.read<DeviceStorage>().machid ?? '?'}'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text('${s.t('service_machine_id')}'
+                '${context.read<DeviceStorage>().machid ?? '?'}'),
+            const SizedBox(height: 10),
+            Text(s.t('service_unpair_hint'),
+                style: const TextStyle(fontSize: 13, height: 1.35)),
+          ],
+        ),
         actions: [
           TextButton(
             onPressed: () => Navigator.of(ctx).pop(false),

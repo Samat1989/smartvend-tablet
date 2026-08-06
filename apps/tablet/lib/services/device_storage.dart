@@ -34,6 +34,7 @@ class DeviceStorage extends ChangeNotifier {
   // BarysVend only: swap ряд/колонка in outgoing dispense frames for
   // cross-wired cabinets (see BoardClient.lytSwapRowCol).
   static const _kLytSwapRowCol = 'lyt_swap_row_col';
+  static const _kShowSlotNumber = 'storefront_show_slot_number';
   static const _kMachineLayout = 'machine_layout_v1';
   // Operator-saved layout templates (JSON list of {name, layout}) —
   // see CustomLayoutTemplate in models/machine_layout.dart.
@@ -116,6 +117,17 @@ class DeviceStorage extends ChangeNotifier {
 
   Future<void> setLytSwapRowCol(bool v) async {
     await _prefs.setBool(_kLytSwapRowCol, v);
+    notifyListeners();
+  }
+
+  /// Show the slot number from the machine layout on storefront product
+  /// cards. Off by default: on a cabinet whose doors aren't numbered the
+  /// digits mean nothing to the customer. When on, a card with no photo
+  /// shows the number in place of the picture instead of a generic emoji.
+  bool get showSlotNumber => _prefs.getBool(_kShowSlotNumber) ?? false;
+
+  Future<void> setShowSlotNumber(bool v) async {
+    await _prefs.setBool(_kShowSlotNumber, v);
     notifyListeners();
   }
 
