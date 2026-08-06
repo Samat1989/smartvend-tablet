@@ -66,6 +66,14 @@ dist/
 **/supabase/.temp/
 **/supabase/.branches/
 
+# --- STM32CubeIDE scratch project ---------------------------------------
+# Not part of the product: an STM32F103 workspace (Lesson_1) with its
+# Debug/ objects, .elf/.bin and IDE metadata checked in alongside the
+# sources. Left untracked on purpose — it was also what blocked the
+# release script's clean-tree check until that check was narrowed to
+# tracked files.
+firmware/vm_12_GP/
+
 # --- Secrets / env (NEVER commit) ---------------------------------------
 .env
 .env.*
