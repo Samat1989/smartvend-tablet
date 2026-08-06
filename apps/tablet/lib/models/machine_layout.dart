@@ -240,7 +240,7 @@ MachineLayout _buildBarysvendV272() {
   var label = 1;
 
   shelves.add(Shelf(
-    label: '1 — 5 (широкие)',
+    label: '1 — 5',
     slots: [
       for (var c = 1; c <= 9; c += 2)
         Slot(label: '${label++}', motorIds: [100 + c]),
