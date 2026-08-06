@@ -364,13 +364,21 @@ class _ProductList extends StatelessWidget {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   for (var i = 0; i < shelves.length; i++) ...[
+                    // The group itself is always built — its GlobalKey backs
+                    // the right-rail scroll targets, and dropping it would
+                    // shift every shelf number after it.
                     _ShelfGroup(
                       key: shelfKey(i + 1),
                       shelfNumber: i + 1,
                       label: shelves[i].label,
                       products: shelves[i].products,
                     ),
-                    if (i < shelves.length - 1)
+                    // …but skip the gap after a group that renders nothing,
+                    // or an empty shelf leaves a double-height hole in the
+                    // catalog once headers are off.
+                    if (i < shelves.length - 1 &&
+                        !(shelves[i].products.isEmpty &&
+                            !context.watch<DeviceStorage>().showShelfLabels))
                       const SizedBox(height: 20),
                   ],
                 ],
@@ -407,24 +415,31 @@ class _ShelfGroup extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final s = context.watch<Strings>();
+    // Shelf header — hideable from «Витрина». On a cabinet whose shelves
+    // aren't labelled it's noise between the rows of products.
+    final showLabels = context.watch<DeviceStorage>().showShelfLabels;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        // Shelf header — hideable from «Витрина». On a cabinet whose shelves
-        // aren't labelled it's noise between the rows of products.
-        if (context.watch<DeviceStorage>().showShelfLabels) ...[
+        if (showLabels) ...[
           ShelfHeader(shelfNumber: shelfNumber, label: label),
           const SizedBox(height: 8),
         ],
         if (products.isEmpty)
-          Padding(
-            padding: const EdgeInsets.symmetric(vertical: 12),
-            child: Text(
-              s.t('no_products'),
-              style: const TextStyle(
-                  color: AppColors.iosGray, fontSize: 13),
-            ),
-          )
+          // "Нет товаров" only makes sense under a header that says WHICH
+          // shelf is empty. With headers off it's an orphan line in the
+          // middle of the grid, so the whole group renders nothing.
+          if (showLabels)
+            Padding(
+              padding: const EdgeInsets.symmetric(vertical: 12),
+              child: Text(
+                s.t('no_products'),
+                style: const TextStyle(
+                    color: AppColors.iosGray, fontSize: 13),
+              ),
+            )
+          else
+            const SizedBox.shrink()
         else
           GridView.count(
             shrinkWrap: true,
