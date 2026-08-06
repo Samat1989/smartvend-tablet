@@ -2,15 +2,42 @@
 # create a GitHub Release, and upload every ABI split as an asset.
 #
 # Requirements (one-time):
-#   1. winget install GitHub.cli   (or `choco install gh`)
-#   2. gh auth login               (browser OAuth, like vercel)
+#   1. GitHub CLI — winget install --id GitHub.cli -e
+#   2. Auth, either one:
+#        • .github_token at the repo root (fine-grained PAT, Contents:
+#          read+write on the repo) — picked up automatically, no login
+#        • gh auth login
 #   3. android/release.jks + android/key.properties present (see
 #      android/README_RELEASE_SIGNING.md)
 #
 # Usage:
-#   .\scripts\release.ps1 -Version 1.0.6+1006
-#   .\scripts\release.ps1 -Version 1.0.6+1006 -Notes "Fixes X, adds Y"
-#   .\scripts\release.ps1                          # uses pubspec version as-is
+#   .\scripts\release.ps1                       # auto-bump patch, derive build
+#   .\scripts\release.ps1 -Version 1.2.0        # explicit version, derived build
+#   .\scripts\release.ps1 -Version 1.2.0+10200  # explicit version AND build
+#   .\scripts\release.ps1 -Notes "Fixes X"      # release notes (else auto)
+#
+# VERSION AND BUILD NUMBERS — the part that is easy to get wrong.
+#
+# The build number is DERIVED from the version, never invented:
+#     build = major*10000 + minor*100 + patch      (1.1.21 -> 10121)
+# With each part capped at 99 this is strictly monotonic as the version
+# grows, so versionCode can't drift out of sync with the version name.
+#
+# The TAG carries a different number than pubspec, on purpose. Flutter's
+# --split-per-abi adds an ABI offset to the shipped versionCode
+# (armeabi-v7a = +1000), so the APK installed on a tablet reports
+# `pubspec build + 1000`. UpdateService compares the tag's build against
+# the installed versionCode, so the tag must encode the POST-offset value
+# or every release looks older than what's already on the machine.
+# pubspec keeps the pre-offset base so day-to-day Flutter tooling stays sane.
+#
+#     pubspec.yaml   version: 1.1.21+10121
+#     git tag        v1.1.21+11121
+#     installed APK  versionCode 11121
+#
+# The offset is 1000 because UpdateService.assetName is pinned to
+# app-armeabi-v7a-release.apk — the tablet always installs that split.
+# If that ever changes, change $AbiOffset with it (arm64-v8a = 2000).
 #
 # The script fails loud — any unexpected state (dirty tree, missing
 # keystore, tag already taken, gh not logged in) stops the run before
@@ -19,6 +46,7 @@
 [CmdletBinding()]
 param(
     [string]$Version,
+    [int]$Build,
     [string]$Notes,
     [switch]$Draft,
     [switch]$SkipBuild,
@@ -37,21 +65,35 @@ function Fail($msg) {
     exit 1
 }
 
-# --- Resolve project root (parent of scripts/) ------------------------------
-$projectRoot = Resolve-Path (Join-Path $PSScriptRoot '..')
+# --- Resolve paths ----------------------------------------------------------
+$projectRoot = Resolve-Path (Join-Path $PSScriptRoot '..')      # apps/tablet
+$repoRoot    = Resolve-Path (Join-Path $projectRoot '..\..')    # monorepo root
 Set-Location $projectRoot
 Write-Host "Project: $projectRoot"
+
+$AbiOffset = 1000   # armeabi-v7a — see the header before touching this
 
 # --- Preflight: gh CLI ------------------------------------------------------
 Section "Checking prerequisites"
 
 if (-not (Get-Command gh -ErrorAction SilentlyContinue)) {
-    Fail "GitHub CLI not installed. Run: winget install GitHub.cli"
+    Fail "GitHub CLI not installed. Run: winget install --id GitHub.cli -e (then open a NEW shell)"
+}
+
+# Token file beats an interactive login: the release box has a PAT and no
+# browser. Only set it when the caller hasn't already provided one.
+$tokenFile = Join-Path $repoRoot '.github_token'
+if (-not $env:GH_TOKEN -and (Test-Path $tokenFile)) {
+    $tok = (Get-Content $tokenFile -Raw).Trim()
+    if ($tok) {
+        $env:GH_TOKEN = $tok
+        Write-Host "Auth: .github_token"
+    }
 }
 
 gh auth status 2>&1 | Out-Null
 if ($LASTEXITCODE -ne 0) {
-    Fail "Not logged in to gh. Run: gh auth login"
+    Fail "Not logged in to gh. Put a PAT in $tokenFile, or run: gh auth login"
 }
 
 if (-not (Get-Command flutter -ErrorAction SilentlyContinue)) {
@@ -65,56 +107,81 @@ if (-not (Test-Path 'android/key.properties')) {
     Fail "android/key.properties not found. Copy from key.properties.example."
 }
 
-# --- Bump pubspec version when -Version is provided -------------------------
+# --- Work out the next version ----------------------------------------------
 $pubspecPath = Join-Path $projectRoot 'pubspec.yaml'
+$pubspecText = Get-Content $pubspecPath -Raw -Encoding UTF8
+if ($pubspecText -notmatch "(?m)^version:\s*(\d+)\.(\d+)\.(\d+)\+(\d+)\s*$") {
+    Fail "Could not parse 'version: X.Y.Z+NNNN' from pubspec.yaml"
+}
+$curVersion = "$($Matches[1]).$($Matches[2]).$($Matches[3])+$($Matches[4])"
+$majCur, $minCur, $patchCur = [int]$Matches[1], [int]$Matches[2], [int]$Matches[3]
+Write-Host "Current: $curVersion"
 
+$explicitBuild = $null
 if ($Version) {
-    if ($Version -notmatch '^\d+\.\d+\.\d+\+\d+$') {
-        Fail "Version must look like 1.0.6+1006 (got '$Version')."
+    if ($Version -match '^(\d+)\.(\d+)\.(\d+)\+(\d+)$') {
+        $majNew, $minNew, $patchNew = [int]$Matches[1], [int]$Matches[2], [int]$Matches[3]
+        $explicitBuild = [int]$Matches[4]
+    } elseif ($Version -match '^(\d+)\.(\d+)\.(\d+)$') {
+        $majNew, $minNew, $patchNew = [int]$Matches[1], [int]$Matches[2], [int]$Matches[3]
+    } else {
+        Fail "Version must be 1.2.0 or 1.2.0+10200 (got '$Version')."
     }
-    Section "Bumping pubspec to $Version"
-    $content = Get-Content $pubspecPath -Raw
-    $updated = $content -replace '(?m)^version:\s*[^\r\n]+', "version: $Version"
-    if ($updated -eq $content) {
-        Fail "Could not find a `version:` line in pubspec.yaml."
-    }
-    Set-Content -Path $pubspecPath -Value $updated -NoNewline
+} else {
+    # Auto-increment with rollover at 99: patch +1, carry into minor, then
+    # into major. Keeps releases monotonic with zero manual input.
+    $majNew, $minNew, $patchNew = $majCur, $minCur, ($patchCur + 1)
+    if ($patchNew -gt 99) { $patchNew = 0; $minNew++ }
+    if ($minNew   -gt 99) { $minNew   = 0; $majNew++ }
+}
+
+$derivedBuild = $majNew * 10000 + $minNew * 100 + $patchNew
+if ($PSBoundParameters.ContainsKey('Build')) {
+    $buildNew = $Build
+} elseif ($null -ne $explicitBuild) {
+    $buildNew = $explicitBuild
+} else {
+    $buildNew = $derivedBuild
+}
+
+$newVersion = "$majNew.$minNew.$patchNew+$buildNew"
+$tagBuild   = $buildNew + $AbiOffset
+$tagName    = "v$majNew.$minNew.$patchNew+$tagBuild"
+Write-Host "New:     $newVersion   (tag: $tagName, shipped versionCode: $tagBuild)"
+
+# --- Tag must not exist yet — check BEFORE touching pubspec ------------------
+git fetch --tags origin 2>&1 | Out-Null
+if ((git tag -l $tagName) -eq $tagName) {
+    Fail "Tag $tagName already exists locally. Pick another version."
+}
+if (git ls-remote --tags origin "refs/tags/$tagName") {
+    Fail "Tag $tagName already exists on origin. Pick another version."
+}
+
+# --- Bump pubspec + commit --------------------------------------------------
+if ($newVersion -ne $curVersion) {
+    Section "Bumping pubspec to $newVersion"
+    $updated = $pubspecText -replace "(?m)^version:\s*\d+\.\d+\.\d+\+\d+\s*$", "version: $newVersion"
+    if ($updated -eq $pubspecText) { Fail "Failed to rewrite the version line." }
+    Set-Content -Path $pubspecPath -Value $updated -NoNewline -Encoding UTF8
     git add $pubspecPath
     if ($LASTEXITCODE -ne 0) { Fail "git add failed" }
-    git commit -m "Bump version to $Version"
+    git commit -m "Bump version to $newVersion"
     if ($LASTEXITCODE -ne 0) { Fail "git commit failed" }
 }
 
-# --- Read effective version + assemble tag name -----------------------------
-$versionLine = (Get-Content $pubspecPath) | Where-Object { $_ -match '^version:' } | Select-Object -First 1
-$currentVersion = ($versionLine -replace 'version:\s*', '').Trim()
-if (-not $currentVersion) { Fail "Could not read version from pubspec.yaml" }
-$tagName = "v$currentVersion"
-Write-Host "Release: $tagName"
-
-# --- Working tree must be clean (commit happened above if -Version) ---------
+# --- Working tree must be clean ---------------------------------------------
 $status = git status --porcelain
 if ($status) {
     Write-Host $status
     Fail "Working tree not clean. Commit or stash before releasing."
 }
 
-# --- Tag must not already exist on origin -----------------------------------
-git fetch --tags origin 2>&1 | Out-Null
-$existing = git tag -l $tagName
-if ($existing -eq $tagName) {
-    Fail "Tag $tagName already exists locally. Bump version (use -Version <next>)."
-}
-$existingRemote = git ls-remote --tags origin "refs/tags/$tagName"
-if ($existingRemote) {
-    Fail "Tag $tagName already exists on origin. Bump version."
-}
-
 # --- Build signed APKs ------------------------------------------------------
-$apkDir  = 'build/app/outputs/flutter-apk'
-$armApk  = "$apkDir/app-armeabi-v7a-release.apk"
-$arm64Apk= "$apkDir/app-arm64-v8a-release.apk"
-$x86Apk  = "$apkDir/app-x86_64-release.apk"
+$apkDir   = 'build/app/outputs/flutter-apk'
+$armApk   = "$apkDir/app-armeabi-v7a-release.apk"
+$arm64Apk = "$apkDir/app-arm64-v8a-release.apk"
+$x86Apk   = "$apkDir/app-x86_64-release.apk"
 
 if ($SkipBuild) {
     Section "Skipping build (-SkipBuild). Reusing existing APKs."
@@ -184,4 +251,4 @@ Section "Done"
 Write-Host "Release URL: $url" -ForegroundColor Green
 Write-Host "APK URL:     $url/download/$(Split-Path $armApk -Leaf)"
 Write-Host ""
-Write-Host "On the tablet: service-mode → Обновление → Проверить обновление."
+Write-Host "On the tablet: service-mode -> Обновление -> Проверить обновление."
