@@ -150,7 +150,13 @@ class VendingService extends ChangeNotifier {
     await _api.ping(
       machid: machid,
       secret: secret,
-      boardOk: board.isHealthy,
+      // null = "we don't know", and for BarysVend we genuinely don't: that
+      // protocol has no health poll, so `isHealthy` there degrades to
+      // `isConnected` — the serial port is open, which says nothing about
+      // whether the board answers. Reporting that as a healthy board would
+      // put a green light on a machine that can't dispense. Only M102 has a
+      // real verdict (its watchdog counts consecutive command failures).
+      boardOk: board.isLyt ? null : board.isHealthy,
       appVersion: _appVersion,
     );
   }

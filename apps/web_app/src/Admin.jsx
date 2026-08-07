@@ -325,7 +325,7 @@ function DeviceStatusDot({ status, withLabel = false }) {
   const { t, i18n } = useTranslation();
   const seen = status?.last_seen_at ? new Date(status.last_seen_at) : null;
 
-  let tone, label;
+  let tone, label, note;
   if (!status) {
     tone = 'bg-slate-300';
     label = t('status_never');
@@ -338,11 +338,18 @@ function DeviceStatusDot({ status, withLabel = false }) {
   } else {
     tone = 'bg-emerald-500';
     label = t('status_online');
+    // null ≠ false. BarysVend has no health poll, so the tablet reports
+    // "unknown" and the lamp only speaks for the tablet. Said out loud in
+    // the tooltip, otherwise it looks like the board check silently works
+    // on some machines and not others.
+    if (status.board_ok == null) note = t('status_board_unknown');
   }
 
-  const title = seen
-    ? `${label} · ${t('status_last_seen')} ${seen.toLocaleString(i18n.language)}`
-    : label;
+  const title = [
+    label,
+    seen && `${t('status_last_seen')} ${seen.toLocaleString(i18n.language)}`,
+    note,
+  ].filter(Boolean).join(' · ');
 
   return (
     <span className="flex items-center gap-1.5 shrink-0" title={title}>
