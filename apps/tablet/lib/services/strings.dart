@@ -201,6 +201,36 @@ class Strings extends ChangeNotifier {
       'en': 'A header with the shelf number and name above each row. '
           'Turn off if the cabinet shelves are not labelled.',
     },
+    'ss_settings': {
+      'ru': 'Настройки заставки',
+      'kk': 'Скринсейвер баптаулары',
+      'en': 'Attract loop settings',
+    },
+    'ss_delay': {
+      'ru': 'Запускать после простоя',
+      'kk': 'Тоқтап тұрғаннан кейін іске қосу',
+      'en': 'Start after idle',
+    },
+    'ss_slide': {
+      'ru': 'Держать слайд',
+      'kk': 'Слайдты ұстау',
+      'en': 'Slide duration',
+    },
+    'ss_wait_video': {
+      'ru': 'Досматривать видео до конца',
+      'kk': 'Бейнені соңына дейін көрсету',
+      'en': 'Play videos to the end',
+    },
+    'ss_wait_video_hint': {
+      'ru': 'Ролик доиграет полностью, и только потом включится следующая '
+          'заставка. Если выключить — видео оборвётся по времени слайда.',
+      'kk': 'Ролик толық ойналады, содан кейін ғана келесі слайд қосылады. '
+          'Өшірсеңіз — бейне слайд уақыты бойынша үзіледі.',
+      'en': 'A clip finishes before the next slide comes up. With this off '
+          'the video is cut at the slide duration.',
+    },
+    'ss_sec': {'ru': 'сек', 'kk': 'сек', 'en': 's'},
+    'ss_min': {'ru': 'мин', 'kk': 'мин', 'en': 'min'},
     'storefront_preview': {
       'ru': 'ПРЕДПРОСМОТР',
       'kk': 'АЛДЫН АЛА ҚАРАУ',

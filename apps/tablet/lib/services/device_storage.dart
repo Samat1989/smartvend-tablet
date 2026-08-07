@@ -36,6 +36,9 @@ class DeviceStorage extends ChangeNotifier {
   static const _kLytSwapRowCol = 'lyt_swap_row_col';
   static const _kShowSlotNumber = 'storefront_show_slot_number';
   static const _kShowShelfLabels = 'storefront_show_shelf_labels';
+  static const _kScreensaverDelaySec = 'screensaver_delay_sec';
+  static const _kScreensaverSlideSec = 'screensaver_slide_sec';
+  static const _kScreensaverWaitVideo = 'screensaver_wait_video_end';
   static const _kMachineLayout = 'machine_layout_v1';
   // Operator-saved layout templates (JSON list of {name, layout}) —
   // see CustomLayoutTemplate in models/machine_layout.dart.
@@ -145,6 +148,42 @@ class DeviceStorage extends ChangeNotifier {
 
   Future<void> setShowShelfLabels(bool v) async {
     await _prefs.setBool(_kShowShelfLabels, v);
+    notifyListeners();
+  }
+
+  // ─── Attract loop (screensaver) ─────────────────────────────────
+  // Defaults reproduce the previous hard-coded behaviour: 5 minutes idle
+  // before the loop opens, 3 seconds per slide.
+  static const screensaverDelayChoicesSec = [60, 120, 300, 600, 900, 1800];
+  static const screensaverSlideChoicesSec = [3, 5, 8, 10, 15, 20, 30];
+
+  /// Idle time before the attract loop takes over the catalog.
+  int get screensaverDelaySec =>
+      _prefs.getInt(_kScreensaverDelaySec) ?? 300;
+
+  Future<void> setScreensaverDelaySec(int v) async {
+    await _prefs.setInt(_kScreensaverDelaySec, v);
+    notifyListeners();
+  }
+
+  /// How long one slide stays on screen. For videos this is only used
+  /// when [screensaverWaitVideoEnd] is off — otherwise the clip's own
+  /// length decides.
+  int get screensaverSlideSec => _prefs.getInt(_kScreensaverSlideSec) ?? 3;
+
+  Future<void> setScreensaverSlideSec(int v) async {
+    await _prefs.setInt(_kScreensaverSlideSec, v);
+    notifyListeners();
+  }
+
+  /// Let a video play to its end before moving on. On by default: the
+  /// old loop cut every clip off at the slide interval, which made
+  /// anything longer than a few seconds pointless to upload.
+  bool get screensaverWaitVideoEnd =>
+      _prefs.getBool(_kScreensaverWaitVideo) ?? true;
+
+  Future<void> setScreensaverWaitVideoEnd(bool v) async {
+    await _prefs.setBool(_kScreensaverWaitVideo, v);
     notifyListeners();
   }
 

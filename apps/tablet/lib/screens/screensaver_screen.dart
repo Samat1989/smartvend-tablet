@@ -7,6 +7,7 @@ import 'package:video_player/video_player.dart';
 
 import '../models/motor_layout.dart';
 import '../models/product.dart';
+import '../services/device_storage.dart';
 import '../services/media_service.dart';
 import '../services/strings.dart';
 import '../services/vending_service.dart';
@@ -30,12 +31,15 @@ class ScreensaverScreen extends StatefulWidget {
 }
 
 class _ScreensaverScreenState extends State<ScreensaverScreen> {
-  static const Duration _slideDwell = Duration(seconds: 3);
-
   Timer? _timer;
   int _currentIndex = 0;
   VideoPlayerController? _videoController;
   String? _videoForPath;
+
+  /// Slide the current timer / video listener belongs to. Guards against
+  /// re-arming on every rebuild — the screen rebuilds whenever MediaService
+  /// or VendingService notifies, which has nothing to do with slide timing.
+  int? _armedIndex;
 
   @override
   void initState() {
@@ -43,18 +47,58 @@ class _ScreensaverScreenState extends State<ScreensaverScreen> {
     // Re-scan media right when the attract loop starts so newly
     // copied files appear without restarting the app.
     context.read<MediaService>().refresh();
-    _timer = Timer.periodic(_slideDwell, (_) {
-      final slides = _buildSlides();
-      if (slides.isEmpty) return;
-      setState(() => _currentIndex = (_currentIndex + 1) % slides.length);
-    });
   }
 
   @override
   void dispose() {
     _timer?.cancel();
+    _videoController?.removeListener(_onVideoTick);
     _videoController?.dispose();
     super.dispose();
+  }
+
+  void _advance(int slideCount) {
+    if (!mounted || slideCount == 0) return;
+    _timer?.cancel();
+    setState(() => _currentIndex = (_currentIndex + 1) % slideCount);
+  }
+
+  /// Ends the slide when the clip finishes. video_player reports no
+  /// "completed" event, so we watch for the position reaching the duration
+  /// with playback stopped — with looping off that only happens at the end.
+  void _onVideoTick() {
+    final c = _videoController;
+    if (c == null || !c.value.isInitialized) return;
+    final d = c.value.duration;
+    if (d <= Duration.zero) return;
+    if (c.value.isPlaying) return;
+    if (c.value.position < d - const Duration(milliseconds: 250)) return;
+    final count = _buildSlides().length;
+    if (count <= 1) {
+      // Single slide: nothing to advance to, so replay instead of
+      // freezing on the last frame.
+      c.seekTo(Duration.zero);
+      c.play();
+      return;
+    }
+    _advance(count);
+  }
+
+  /// Arms whatever ends the current slide: a timer for images and shelves,
+  /// or the video's own end when the operator asked to let clips finish.
+  void _armSlide(int slideCount, {required bool videoPlaying}) {
+    _timer?.cancel();
+    final storage = context.read<DeviceStorage>();
+    // Keyed on a clip that really started, not merely on the slide being a
+    // video: a file that failed to initialise would otherwise leave nothing
+    // to end the slide and the loop would stop dead on the placeholder.
+    if (videoPlaying && storage.screensaverWaitVideoEnd) {
+      return; // _onVideoTick moves on when the clip ends
+    }
+    _timer = Timer(
+      Duration(seconds: storage.screensaverSlideSec),
+      () => _advance(slideCount),
+    );
   }
 
   /// Same shelf-resolution rule the catalog uses (MachineLayout first,
@@ -116,38 +160,58 @@ class _ScreensaverScreenState extends State<ScreensaverScreen> {
     return out;
   }
 
-  Future<void> _attachVideoIfNeeded(_Slide slide) async {
+  /// Returns true when a video is actually playing for this slide —
+  /// the caller needs to know, because only then may the slide end on
+  /// the clip instead of on a timer.
+  Future<bool> _attachVideoIfNeeded(_Slide slide) async {
     if (slide is! _MediaSlide || slide.item.kind != MediaKind.video) {
       if (_videoController != null) {
+        _videoController!.removeListener(_onVideoTick);
         await _videoController!.dispose();
         _videoController = null;
         _videoForPath = null;
       }
-      return;
+      return false;
     }
-    if (_videoForPath == slide.item.path && _videoController != null) return;
+    final waitEnd = context.read<DeviceStorage>().screensaverWaitVideoEnd;
+    if (_videoForPath == slide.item.path && _videoController != null) {
+      // Same clip coming round again (single-video loop): restart it
+      // rather than leaving the last frame frozen on screen.
+      await _videoController!.seekTo(Duration.zero);
+      await _videoController!.play();
+      return true;
+    }
     final old = _videoController;
     _videoController = null;
     _videoForPath = null;
+    old?.removeListener(_onVideoTick);
     await old?.dispose();
     final ctrl = VideoPlayerController.file(File(slide.item.path));
     try {
       await ctrl.initialize();
-      await ctrl.setLooping(true);
+      // Looping would hide the end of the clip, which is exactly the
+      // event we advance on. With waitEnd off the slide timer cuts the
+      // video anyway, and looping keeps short clips from freezing.
+      await ctrl.setLooping(!waitEnd);
       await ctrl.setVolume(0); // silent attract loop
       await ctrl.play();
       if (!mounted) {
         await ctrl.dispose();
-        return;
+        return false;
       }
+      if (waitEnd) ctrl.addListener(_onVideoTick);
       setState(() {
         _videoController = ctrl;
         _videoForPath = slide.item.path;
       });
+      return true;
     } catch (e) {
       // Bad video file (codec unsupported, corrupt) — fall through;
-      // the slide will render the "media unavailable" placeholder.
+      // the slide will render the "media unavailable" placeholder, and the
+      // caller falls back to the plain timer so a broken clip can't stall
+      // the loop forever.
       await ctrl.dispose();
+      return false;
     }
   }
 
@@ -164,9 +228,17 @@ class _ScreensaverScreenState extends State<ScreensaverScreen> {
     // Kick off video init when a video slide rolls in. fire-and-forget;
     // the controller's own listener triggers a rebuild via setState.
     if (slide != null) {
+      final idx = _currentIndex % slides.length;
       // Schedule for after this build frame to avoid setState-in-build.
-      WidgetsBinding.instance
-          .addPostFrameCallback((_) => _attachVideoIfNeeded(slide));
+      // Only when the slide actually changed — the screen also rebuilds on
+      // every MediaService / VendingService notification.
+      if (_armedIndex != idx) {
+        _armedIndex = idx;
+        WidgetsBinding.instance.addPostFrameCallback((_) async {
+          final playing = await _attachVideoIfNeeded(slide);
+          if (mounted) _armSlide(slides.length, videoPlaying: playing);
+        });
+      }
     }
     return Scaffold(
       backgroundColor: AppColors.iosBackground,

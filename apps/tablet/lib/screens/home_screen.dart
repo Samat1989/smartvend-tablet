@@ -82,7 +82,10 @@ class _HomeScreenState extends State<HomeScreen> {
   static const Duration _shelfCycleAfter = Duration(seconds: 30);
   static const Duration _shelfCycleStep = Duration(seconds: 10);
   static const Duration _cartAbandonAfter = Duration(minutes: 2);
-  static const Duration _screensaverAfter = Duration(minutes: 5);
+  // Idle delay before the attract loop is operator-set — a shop window
+  // wants it after half a minute, a busy corridor not at all for ten.
+  Duration get _screensaverAfter =>
+      Duration(seconds: context.read<DeviceStorage>().screensaverDelaySec);
   Timer? _idleTick;
   DateTime? _lastShelfAdvanceAt;
   bool _screensaverOpen = false;
