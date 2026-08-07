@@ -91,7 +91,12 @@ if (-not $env:GH_TOKEN -and (Test-Path $tokenFile)) {
     }
 }
 
-gh auth status 2>&1 | Out-Null
+# No `2>&1` here. gh writes auth status to stderr even when it succeeds, and
+# under Windows PowerShell 5.1 redirecting a native command's stderr wraps
+# each line in an ErrorRecord — which $ErrorActionPreference='Stop' then turns
+# into a fatal NativeCommandError on a perfectly good login. Send stderr to
+# the null device instead and judge by the exit code alone.
+gh auth status 2>$null | Out-Null
 if ($LASTEXITCODE -ne 0) {
     Fail "Not logged in to gh. Put a PAT in $tokenFile, or run: gh auth login"
 }
@@ -150,7 +155,9 @@ $tagName    = "v$majNew.$minNew.$patchNew+$tagBuild"
 Write-Host "New:     $newVersion   (tag: $tagName, shipped versionCode: $tagBuild)"
 
 # --- Tag must not exist yet — check BEFORE touching pubspec ------------------
-git fetch --tags origin 2>&1 | Out-Null
+# Same 5.1 stderr trap as the gh check above — git fetch reports progress
+# on stderr, which `2>&1` would turn into a fatal error record.
+git fetch --tags origin 2>$null | Out-Null
 if ((git tag -l $tagName) -eq $tagName) {
     Fail "Tag $tagName already exists locally. Pick another version."
 }
@@ -213,7 +220,7 @@ $fingerprint = & keytool -list -keystore android/release.jks `
     -storepass (Get-Content android/key.properties | `
         Where-Object { $_ -match '^storePassword=' } | `
         ForEach-Object { ($_ -split '=', 2)[1] }) `
-    -alias smartvend 2>&1 | Select-String 'SHA-256' | ForEach-Object { $_.Line.Trim() }
+    -alias smartvend 2>$null | Select-String 'SHA-256' | ForEach-Object { $_.Line.Trim() }
 if (-not $fingerprint) {
     Fail "Could not read keystore fingerprint."
 }
