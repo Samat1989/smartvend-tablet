@@ -1491,7 +1491,20 @@ export default function Admin() {
                 <h2 className="text-2xl font-black text-slate-900 mb-1">{t('devices')}</h2>
                 <p className="text-[11px] font-bold text-slate-500 uppercase tracking-widest mb-6">{t('select_machine')}</p>
                 <div className="space-y-2">
-                  {markets.map(m => (
+                  {markets.map(m => {
+                    // Status + type badge. On a phone they don't fit on the
+                    // name's line — the row put five fixed-width items next
+                    // to a shrinking name and everything collided — so they
+                    // drop under it and get the full width instead.
+                    const meta = (
+                      <>
+                        <DeviceStatusDot status={m.status} withLabel />
+                        <span className={`text-[9px] font-black uppercase tracking-wider px-2 py-1 rounded-lg shrink-0 ${m.kind === 'micromarket_static' ? 'bg-emerald-100 text-emerald-700' : 'bg-indigo-100 text-indigo-700'}`}>
+                          {m.kind === 'micromarket_static' ? t('badge_micromarket') : t('badge_vending')}
+                        </span>
+                      </>
+                    );
+                    return (
                     <div
                       key={m.id}
                       className="w-full flex items-center gap-3 p-4 rounded-2xl bg-slate-50 border-2 border-slate-200 hover:border-primary hover:bg-white hover:shadow-md transition-all"
@@ -1506,12 +1519,10 @@ export default function Admin() {
                         <div className="flex-1 min-w-0">
                           <div className="font-bold text-slate-900 truncate">{m.name || `${t('market')} #${m.id}`}</div>
                           <div className="text-[11px] font-bold text-slate-500 uppercase tracking-widest">{t('apparatus_no')}{m.id}</div>
+                          <div className="flex sm:hidden items-center gap-2 mt-2 flex-wrap">{meta}</div>
                         </div>
                       </button>
-                      <DeviceStatusDot status={m.status} withLabel />
-                      <span className={`text-[9px] font-black uppercase tracking-wider px-2 py-1 rounded-lg shrink-0 ${m.kind === 'micromarket_static' ? 'bg-emerald-100 text-emerald-700' : 'bg-indigo-100 text-indigo-700'}`}>
-                        {m.kind === 'micromarket_static' ? t('badge_micromarket') : t('badge_vending')}
-                      </span>
+                      <div className="hidden sm:flex items-center gap-3 shrink-0">{meta}</div>
                       <button
                         onClick={() => setRenamingMarket({ id: m.id, name: m.name || '' })}
                         title={t('rename')}
@@ -1526,7 +1537,8 @@ export default function Admin() {
                         <ChevronRight size={18} />
                       </button>
                     </div>
-                  ))}
+                    );
+                  })}
                   {markets.length === 0 && (
                     <p className="text-sm text-slate-400 italic p-4">{t('no_machines')}</p>
                   )}
@@ -2732,11 +2744,21 @@ function UsersTab({
       <div className="flex-1 min-w-0">
         <div className="font-bold text-sm text-slate-900 truncate">{m.name || `${t('apparatus_no')}${m.id}`}</div>
         <div className="text-[11px] font-bold text-slate-500">{t('apparatus_no')}{m.id}</div>
+        {/* Same crowding as the owner list, worse: three action buttons here.
+            Status and type move under the name on a phone. */}
+        <div className="flex sm:hidden items-center gap-2 mt-1.5 flex-wrap">
+          <DeviceStatusDot status={m.heartbeat} />
+          <span className={`text-[9px] font-black uppercase tracking-wider px-2 py-1 rounded-lg ${m.kind === 'micromarket_static' ? 'bg-emerald-100 text-emerald-700' : 'bg-indigo-100 text-indigo-700'}`}>
+            {m.kind === 'micromarket_static' ? t('badge_micromarket') : t('badge_vending')}
+          </span>
+        </div>
       </div>
-      <DeviceStatusDot status={m.heartbeat} />
-      <span className={`text-[9px] font-black uppercase tracking-wider px-2 py-1 rounded-lg shrink-0 ${m.kind === 'micromarket_static' ? 'bg-emerald-100 text-emerald-700' : 'bg-indigo-100 text-indigo-700'}`}>
-        {m.kind === 'micromarket_static' ? t('badge_micromarket') : t('badge_vending')}
-      </span>
+      <div className="hidden sm:flex items-center gap-3 shrink-0">
+        <DeviceStatusDot status={m.heartbeat} />
+        <span className={`text-[9px] font-black uppercase tracking-wider px-2 py-1 rounded-lg ${m.kind === 'micromarket_static' ? 'bg-emerald-100 text-emerald-700' : 'bg-indigo-100 text-indigo-700'}`}>
+          {m.kind === 'micromarket_static' ? t('badge_micromarket') : t('badge_vending')}
+        </span>
+      </div>
       <div className="flex gap-1.5 shrink-0">
         <button
           onClick={() => onRename({ id: m.id, name: m.name || '' })}
