@@ -49,16 +49,16 @@ class _PairingScreenState extends State<PairingScreen> {
     // savePairing so a refusal leaves the tablet unpaired instead of half
     // set up on a cabinet that belongs to someone else's tablet.
     final storage = context.read<DeviceStorage>();
-    final claimErr = await _api.claimMachine(
+    final claim = await _api.claimMachine(
       machid: machid,
       secret: secret,
       deviceId: await storage.deviceId(),
     );
     if (!mounted) return;
-    if (claimErr != null) {
+    if (!claim.ok) {
       setState(() {
         _busy = false;
-        _error = claimErr;
+        _error = claim.message;
       });
       return;
     }

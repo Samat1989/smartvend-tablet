@@ -113,6 +113,10 @@ class VendingService extends ChangeNotifier {
   }
 
   void _startAutoRefresh() {
+    // Timer.periodic's first tick is a full interval away; take the claim now
+    // so the machine is held from boot rather than a minute into it. Cheap
+    // and idempotent — _ensureClaim is a no-op after the first success.
+    unawaited(_ensureClaim());
     _autoRefreshTimer?.cancel();
     _autoRefreshTimer = Timer.periodic(_autoRefreshInterval, (_) {
       if (!_storage.isPaired) return;
@@ -136,10 +140,45 @@ class VendingService extends ChangeNotifier {
   /// Cached so the heartbeat doesn't hit the platform channel every minute.
   String? _appVersion;
 
+  /// Claims are normally taken on the pairing screen, but a tablet that was
+  /// already paired before this build existed never passes through it — it
+  /// would run unclaimed forever, and two such tablets on one machid would
+  /// both keep selling, which is the whole thing the claim prevents. So the
+  /// claim is also taken once per app start.
+  ///
+  /// Losing the race means another tablet holds the machine: unpair and drop
+  /// to the pairing screen, same as losing it later via the heartbeat. On a
+  /// fleet with one tablet per machine this is invisible — the claim is free
+  /// and gets taken silently.
+  bool _claimAttempted = false;
+
+  Future<void> _ensureClaim() async {
+    final machid = _storage.machid;
+    final secret = _storage.secret;
+    if (machid == null || secret == null) return;
+    if (_claimAttempted) return;
+    _claimAttempted = true;
+    final claim = await _api.claimMachine(
+      machid: machid,
+      secret: secret,
+      deviceId: await _storage.deviceId(),
+    );
+    // Only an explicit "occupied" unpairs. A network failure must not: the
+    // machine would go out of service every time it booted before its GSM
+    // link came up. A retry costs one request on the next heartbeat.
+    if (claim.occupied) {
+      await _storage.clearPairing();
+    } else if (!claim.ok) {
+      _claimAttempted = false;
+    }
+  }
+
   Future<void> _sendPing() async {
     final machid = _storage.machid;
     final secret = _storage.secret;
     if (machid == null || secret == null) return;
+    await _ensureClaim();
+    if (!_storage.isPaired) return; // claim was refused — nothing to report
     _appVersion ??= await () async {
       try {
         final info = await PackageInfo.fromPlatform();

@@ -33,6 +33,29 @@ class FetchResult<T> {
 /// machine's secret nor write on its behalf (see docs/security-audit-2026-06.md,
 /// findings F1/F2/F4). The machine secret is provisioned at pairing and kept in
 /// DeviceStorage; it is passed to each write RPC but never read back from the DB.
+/// Outcome of a claim attempt.
+///
+/// [occupied] is a flag rather than something the caller sniffs out of
+/// [message]: the pairing screen only shows the text, but the heartbeat
+/// *unpairs the tablet* on it, and deciding that by matching translated prose
+/// would break silently the day the wording changes.
+class ClaimOutcome {
+  const ClaimOutcome.ok()
+      : occupied = false,
+        message = null;
+  const ClaimOutcome.occupied(this.message) : occupied = true;
+  const ClaimOutcome.failed(this.message) : occupied = false;
+
+  /// Another tablet holds this machine. Distinct from a transport failure:
+  /// only this one may cost the tablet its pairing.
+  final bool occupied;
+
+  /// Ready-to-show reason; null on success.
+  final String? message;
+
+  bool get ok => message == null;
+}
+
 class SupabaseApi {
   SupabaseApi({http.Client? client}) : _client = client ?? http.Client();
 
@@ -117,7 +140,7 @@ class SupabaseApi {
   /// would have both writing the SAME inventory and sales, so a sale on one
   /// cabinet decrements the other's stock and the owner's revenue mixes two
   /// locations irreversibly.
-  Future<String?> claimMachine({
+  Future<ClaimOutcome> claimMachine({
     required String machid,
     required String secret,
     required String deviceId,
@@ -129,19 +152,19 @@ class SupabaseApi {
         'p_device_id': deviceId,
       });
       if (resp.statusCode < 200 || resp.statusCode >= 300) {
-        return _errMessage(resp.body);
+        return ClaimOutcome.failed(_errMessage(resp.body));
       }
       final body = jsonDecode(resp.body);
-      if (body is Map && body['ok'] == true) return null;
+      if (body is Map && body['ok'] == true) return const ClaimOutcome.ok();
       final seen = body is Map ? body['last_seen_at'] as String? : null;
       final when = seen == null
           ? ''
           : ' Последний раз на связи: '
               '${DateTime.parse(seen).toLocal()}.';
-      return 'Этот аппарат уже занят другим планшетом.$when '
-          'Выйдите из аккаунта на нём или отвяжите планшет в админке.';
+      return ClaimOutcome.occupied('Этот аппарат уже занят другим планшетом.$when '
+          'Выйдите из аккаунта на нём или отвяжите планшет в админке.');
     } catch (e) {
-      return 'Сеть: $e';
+      return ClaimOutcome.failed('Сеть: $e');
     }
   }
 
