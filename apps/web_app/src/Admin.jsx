@@ -1582,13 +1582,18 @@ export default function Admin() {
                       >
                         <Pencil size={15} />
                       </button>
-                      <button
-                        onClick={() => setReleaseTarget({ id: m.id, name: m.name || '' })}
-                        title={t('release_tablet')}
-                        className="p-2 rounded-lg bg-white border border-slate-300 text-slate-600 hover:text-amber-600 hover:border-amber-400 transition-all shrink-0"
-                      >
-                        <LinkOff size={15} />
-                      </button>
+                      {/* Vending only: a static-QR micromarket has no tablet,
+                          so there is no claim to release. Same reason its
+                          connection lamp is hidden. */}
+                      {m.kind === 'vending' && (
+                        <button
+                          onClick={() => setReleaseTarget({ id: m.id, name: m.name || '' })}
+                          title={t('release_tablet')}
+                          className="p-2 rounded-lg bg-white border border-slate-300 text-slate-600 hover:text-amber-600 hover:border-amber-400 transition-all shrink-0"
+                        >
+                          <LinkOff size={15} />
+                        </button>
+                      )}
                       <button
                         onClick={() => openMarket(m.id)}
                         className="shrink-0 text-slate-400 hover:text-primary transition-colors"
