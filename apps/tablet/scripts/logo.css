@@ -1,0 +1,100 @@
+/* Theme=Dark Vertical */
+
+/* Auto layout */
+display: flex;
+flex-direction: column;
+justify-content: center;
+align-items: center;
+padding: 0px;
+gap: 16px;
+
+width: 365px;
+height: 250px;
+
+
+/* Inside auto layout */
+flex: none;
+order: 3;
+flex-grow: 0;
+
+
+/* Logo Emblem */
+
+width: 263px;
+height: 170px;
+
+
+/* Inside auto layout */
+flex: none;
+order: 0;
+flex-grow: 0;
+
+
+/* Vector */
+
+position: absolute;
+left: 39.75%;
+right: 39.89%;
+top: 7.18%;
+bottom: 6.78%;
+
+background: #FF9B00;
+transform: matrix(1, 0, 0, -1, 0, 0);
+
+
+/* Vector */
+
+position: absolute;
+left: 75.22%;
+right: 4.41%;
+top: 7.18%;
+bottom: 6.78%;
+
+background: #277BC0;
+transform: matrix(1, 0, 0, -1, 0, 0);
+
+
+/* Vector */
+
+position: absolute;
+left: 35.48%;
+right: 44.02%;
+top: 0%;
+bottom: -9.57%;
+
+background: rgba(254, 177, 57, 0.95);
+transform: matrix(-0.71, -0.71, -0.71, 0.71, 0, 0);
+
+
+/* Vector */
+
+position: absolute;
+left: 0%;
+right: 79.49%;
+top: 0%;
+bottom: -9.57%;
+
+background: rgba(39, 123, 192, 0.95);
+transform: matrix(-0.71, -0.71, -0.71, 0.71, 0, 0);
+
+
+/* MicroMart */
+
+width: 365px;
+height: 64px;
+
+font-family: 'Montserrat';
+font-style: normal;
+font-weight: 700;
+font-size: 64px;
+line-height: 64px;
+/* identical to box height, or 100% */
+letter-spacing: 0.04em;
+
+color: rgba(255, 255, 255, 0.8);
+
+
+/* Inside auto layout */
+flex: none;
+order: 1;
+flex-grow: 0;
