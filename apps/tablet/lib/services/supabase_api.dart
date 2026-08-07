@@ -101,6 +101,34 @@ class SupabaseApi {
     }
   }
 
+  // ---------- heartbeat ----------
+
+  /// Report "this machine is alive" plus whether its control board is
+  /// answering, so the owner panel can tell an off-line kiosk from one that
+  /// is on-line with a dead board — different faults, different call-outs.
+  ///
+  /// Fire-and-forget by design: a failed heartbeat means the machine is
+  /// off-line, which is exactly what the absence of the beat already says.
+  /// Nothing upstream should change behaviour because of it, and it must
+  /// never surface an error to a customer standing at the cabinet.
+  Future<void> ping({
+    required String machid,
+    required String secret,
+    bool? boardOk,
+    String? appVersion,
+  }) async {
+    try {
+      await _rpc('device_ping', {
+        'p_machid': _machidParam(machid),
+        'p_secret': secret.trim(),
+        'p_board_ok': boardOk,
+        'p_app_version': appVersion,
+      });
+    } catch (_) {
+      // Offline / DNS / timeout — nothing to do, the missing beat is the signal.
+    }
+  }
+
   // ---------- machine layout ----------
 
   /// Push the current machine layout JSON to Supabase via the

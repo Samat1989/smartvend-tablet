@@ -308,6 +308,54 @@ function Toast({ toast, onClose }) {
   );
 }
 
+// Connection state of one machine, from its heartbeat.
+//
+// Three states, not two, because "the tablet answers" and "the board answers"
+// are different faults with different call-outs: a machine can be perfectly
+// online while nothing dispenses. One lamp would hide exactly the failure
+// that costs the owner money.
+//
+//   зелёный — на связи, плата отвечает
+//   жёлтый  — на связи, но плата молчит  → выехать к автомату, не к сети
+//   серый   — не видели дольше порога, или ни разу (новый аппарат)
+//
+// `online` is computed server-side (device_status_view, 3-minute threshold);
+// this only renders it.
+function DeviceStatusDot({ status, withLabel = false }) {
+  const { t, i18n } = useTranslation();
+  const seen = status?.last_seen_at ? new Date(status.last_seen_at) : null;
+
+  let tone, label;
+  if (!status) {
+    tone = 'bg-slate-300';
+    label = t('status_never');
+  } else if (!status.online) {
+    tone = 'bg-slate-400';
+    label = t('status_offline');
+  } else if (status.board_ok === false) {
+    tone = 'bg-amber-500';
+    label = t('status_board_down');
+  } else {
+    tone = 'bg-emerald-500';
+    label = t('status_online');
+  }
+
+  const title = seen
+    ? `${label} · ${t('status_last_seen')} ${seen.toLocaleString(i18n.language)}`
+    : label;
+
+  return (
+    <span className="flex items-center gap-1.5 shrink-0" title={title}>
+      <span className={`w-2.5 h-2.5 rounded-full ${tone}`} />
+      {withLabel && (
+        <span className="text-[10px] font-bold uppercase tracking-wider text-slate-500">
+          {label}
+        </span>
+      )}
+    </span>
+  );
+}
+
 function resultLabel(t, item) {
   if (item.result_code != null) {
     const key = RESULT_CODE_I18N[item.result_code];
@@ -918,11 +966,27 @@ export default function Admin() {
 
   async function fetchMarkets() {
     try {
-      const { data, error } = await supabase
-        .from('micromarkets')
-        .select('id, name, layout_json, kind, qr_token');
-      if (error) throw error;
-      setMarkets(data || []);
+      // Two queries, merged here rather than one embedded select: PostgREST
+      // can't infer a relationship to a view, and `online` has to come from
+      // the view — the 3-minute threshold is evaluated in SQL against the
+      // database clock. Computing it here would compare the tablet's beat
+      // to the browser's clock, which on a kiosk network is often minutes
+      // out and would flip machines offline at random.
+      const [marketsRes, statusRes] = await Promise.all([
+        supabase.from('micromarkets').select('id, name, layout_json, kind, qr_token'),
+        supabase.from('device_status_view').select('machid, last_seen_at, board_ok, online'),
+      ]);
+      if (marketsRes.error) throw marketsRes.error;
+      const byId = new Map(
+        (statusRes.data || []).map((s) => [String(s.machid), s]),
+      );
+      setMarkets((marketsRes.data || []).map((m) => ({
+        ...m,
+        // Absent row = the machine has never reported. Left undefined so the
+        // badge can say "never seen" instead of claiming it's offline —
+        // a machine that isn't installed yet isn't a fault.
+        status: byId.get(String(m.id)),
+      })));
       // No auto-select: the Inventory tab opens on the machine list and the
       // operator drills into a specific machine. Sales/Catalog don't need one.
     } catch (err) {
@@ -1412,6 +1476,7 @@ export default function Admin() {
                           <div className="text-[11px] font-bold text-slate-500 uppercase tracking-widest">{t('apparatus_no')}{m.id}</div>
                         </div>
                       </button>
+                      <DeviceStatusDot status={m.status} withLabel />
                       <span className={`text-[9px] font-black uppercase tracking-wider px-2 py-1 rounded-lg shrink-0 ${m.kind === 'micromarket_static' ? 'bg-emerald-100 text-emerald-700' : 'bg-indigo-100 text-indigo-700'}`}>
                         {m.kind === 'micromarket_static' ? t('badge_micromarket') : t('badge_vending')}
                       </span>
@@ -2633,6 +2698,7 @@ function UsersTab({
         <div className="font-bold text-sm text-slate-900 truncate">{m.name || `${t('apparatus_no')}${m.id}`}</div>
         <div className="text-[11px] font-bold text-slate-500">{t('apparatus_no')}{m.id}</div>
       </div>
+      <DeviceStatusDot status={m.heartbeat} />
       <span className={`text-[9px] font-black uppercase tracking-wider px-2 py-1 rounded-lg shrink-0 ${m.kind === 'micromarket_static' ? 'bg-emerald-100 text-emerald-700' : 'bg-indigo-100 text-indigo-700'}`}>
         {m.kind === 'micromarket_static' ? t('badge_micromarket') : t('badge_vending')}
       </span>

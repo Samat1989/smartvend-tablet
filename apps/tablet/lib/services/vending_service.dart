@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/foundation.dart' hide Category;
+import 'package:package_info_plus/package_info_plus.dart';
 
 import '../board/board_client.dart';
 import '../models/cart.dart';
@@ -113,14 +114,45 @@ class VendingService extends ChangeNotifier {
   void _startAutoRefresh() {
     _autoRefreshTimer?.cancel();
     _autoRefreshTimer = Timer.periodic(_autoRefreshInterval, (_) {
+      if (!_storage.isPaired) return;
+      // The heartbeat rides this timer rather than getting one of its own —
+      // the tablet already talks to Supabase every minute. It is sent on
+      // EVERY tick, including the ones the catalog sync skips below: a
+      // machine with a customer standing at it is very much on-line, and
+      // going dark in the owner panel mid-sale would be exactly backwards.
+      _sendPing();
       // Skip cycles that would either disturb a customer mid-purchase or
       // overlap with a fetch that's already in flight. The next tick tries
       // again — silent retries are fine here, this is a background sync.
-      if (!_storage.isPaired) return;
       if (_cart.isNotEmpty) return;
       if (_state == CatalogState.loading) return;
       reload(silent: true);
     });
+    // Don't make the panel wait a full minute to light up after a restart.
+    _sendPing();
+  }
+
+  /// Cached so the heartbeat doesn't hit the platform channel every minute.
+  String? _appVersion;
+
+  Future<void> _sendPing() async {
+    final machid = _storage.machid;
+    final secret = _storage.secret;
+    if (machid == null || secret == null) return;
+    _appVersion ??= await () async {
+      try {
+        final info = await PackageInfo.fromPlatform();
+        return '${info.version}+${info.buildNumber}';
+      } catch (_) {
+        return null;
+      }
+    }();
+    await _api.ping(
+      machid: machid,
+      secret: secret,
+      boardOk: board.isHealthy,
+      appVersion: _appVersion,
+    );
   }
 
   void _stopAutoRefresh() {

@@ -70,6 +70,16 @@ Deno.serve(async (req) => {
         .order("id");
       if (error) throw error;
 
+      // Heartbeat comes from the view, not the table: `online` is evaluated
+      // there against the database clock with a single threshold, so the
+      // fleet list and the owner's own list can never disagree about who is
+      // up. RLS hides other owners' rows from the browser, which is exactly
+      // why this read has to happen here under service_role.
+      const { data: beats } = await supabase
+        .from("device_status_view")
+        .select("machid, last_seen_at, board_ok, online");
+      const beatById = new Map((beats ?? []).map((b) => [b.machid, b]));
+
       // Resolve owner_id → email. listUsers is one call; joining auth.users
       // through PostgREST isn't possible (it's not in the exposed schema).
       const { data: list } = await supabase.auth.admin.listUsers({ page: 1, perPage: 200 });
@@ -79,6 +89,9 @@ Deno.serve(async (req) => {
         markets: (markets ?? []).map((m) => ({
           ...m,
           owner_email: m.owner_id ? emailById.get(m.owner_id) ?? null : null,
+          // Undefined when the machine never reported — the UI says
+          // "never seen" rather than calling a fresh install a fault.
+          heartbeat: beatById.get(m.id) ?? null,
         })),
         owners: (list?.users ?? []).map((u) => ({ id: u.id, email: u.email })),
       });
