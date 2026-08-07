@@ -321,8 +321,15 @@ function Toast({ toast, onClose }) {
 //
 // `online` is computed server-side (device_status_view, 3-minute threshold);
 // this only renders it.
-function DeviceStatusDot({ status, withLabel = false }) {
+function DeviceStatusDot({ status, kind, withLabel = false }) {
   const { t, i18n } = useTranslation();
+
+  // A static-QR micromarket has no tablet — the ESP relay doesn't report yet,
+  // so there is nothing to draw. Showing it as permanently green would be the
+  // same lie as storing `online` in a column: a claim about a device we have
+  // no signal from. The lamp appears on its own once the relay starts beating.
+  if (kind === 'micromarket_static') return null;
+
   const seen = status?.last_seen_at ? new Date(status.last_seen_at) : null;
 
   let tone, label, note;
@@ -544,6 +551,34 @@ export default function Admin() {
       fetchCategories();
     }
   }, [session]);
+
+  // Keep the connection lamps current while a machine list is on screen.
+  // Without this the panel showed the snapshot it loaded with — a tab left
+  // open for an hour reported hour-old state, which is worse than no lamp:
+  // the operator trusts it.
+  //
+  // Only while the relevant tab is open, and only while the page is actually
+  // visible: a phone in a pocket or a background tab has nobody looking at
+  // it, and browsers throttle its timers anyway. Coming back to the tab
+  // refreshes immediately rather than waiting out the interval.
+  useEffect(() => {
+    if (!session) return;
+    const onDevices = activeTab === 'inventory';
+    const onFleet = activeTab === 'users' && isSuperadmin;
+    if (!onDevices && !onFleet) return;
+
+    const refresh = () => {
+      if (document.visibilityState !== 'visible') return;
+      if (onDevices) fetchMarkets();
+      if (onFleet) fetchAdminDevices();
+    };
+    const id = setInterval(refresh, 30000);
+    document.addEventListener('visibilitychange', refresh);
+    return () => {
+      clearInterval(id);
+      document.removeEventListener('visibilitychange', refresh);
+    };
+  }, [session, activeTab, isSuperadmin]);
 
   async function fetchCategories() {
     try {
@@ -1498,7 +1533,7 @@ export default function Admin() {
                     // drop under it and get the full width instead.
                     const meta = (
                       <>
-                        <DeviceStatusDot status={m.status} withLabel />
+                        <DeviceStatusDot status={m.status} kind={m.kind} withLabel />
                         <span className={`text-[9px] font-black uppercase tracking-wider px-2 py-1 rounded-lg shrink-0 ${m.kind === 'micromarket_static' ? 'bg-emerald-100 text-emerald-700' : 'bg-indigo-100 text-indigo-700'}`}>
                           {m.kind === 'micromarket_static' ? t('badge_micromarket') : t('badge_vending')}
                         </span>
@@ -2747,14 +2782,14 @@ function UsersTab({
         {/* Same crowding as the owner list, worse: three action buttons here.
             Status and type move under the name on a phone. */}
         <div className="flex sm:hidden items-center gap-2 mt-1.5 flex-wrap">
-          <DeviceStatusDot status={m.heartbeat} />
+          <DeviceStatusDot status={m.heartbeat} kind={m.kind} />
           <span className={`text-[9px] font-black uppercase tracking-wider px-2 py-1 rounded-lg ${m.kind === 'micromarket_static' ? 'bg-emerald-100 text-emerald-700' : 'bg-indigo-100 text-indigo-700'}`}>
             {m.kind === 'micromarket_static' ? t('badge_micromarket') : t('badge_vending')}
           </span>
         </div>
       </div>
       <div className="hidden sm:flex items-center gap-3 shrink-0">
-        <DeviceStatusDot status={m.heartbeat} />
+        <DeviceStatusDot status={m.heartbeat} kind={m.kind} />
         <span className={`text-[9px] font-black uppercase tracking-wider px-2 py-1 rounded-lg ${m.kind === 'micromarket_static' ? 'bg-emerald-100 text-emerald-700' : 'bg-indigo-100 text-indigo-700'}`}>
           {m.kind === 'micromarket_static' ? t('badge_micromarket') : t('badge_vending')}
         </span>
