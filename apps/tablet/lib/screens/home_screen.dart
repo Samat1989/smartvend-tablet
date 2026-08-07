@@ -508,16 +508,25 @@ class _ShelfSelector extends StatelessWidget {
             behavior: HitTestBehavior.opaque,
             onTap: onCaptionTap,
             child: Padding(
-              // Was EdgeInsets.only(bottom: 6) — widened into a real tap
-              // target now that the caption doubles as the service entry.
-              padding: const EdgeInsets.fromLTRB(6, 8, 6, 6),
-              child: Text(
-                context.watch<Strings>().t('shelves_caption'),
-                style: const TextStyle(
-                  color: AppColors.iosGray,
-                  fontSize: 11,
-                  fontWeight: FontWeight.w500,
-                  letterSpacing: -0.1,
+              // Vertical only. Side padding ate the little width the 60-dp
+              // rail has, and the Kazakh «сөрелер» wrapped onto a second
+              // line; the tap target the service entry needs comes from the
+              // vertical insets instead.
+              padding: const EdgeInsets.only(top: 8, bottom: 6),
+              child: FittedBox(
+                // Any caption stays on one line whatever the language —
+                // it shrinks a little rather than wrapping or clipping.
+                fit: BoxFit.scaleDown,
+                child: Text(
+                  context.watch<Strings>().t('shelves_caption'),
+                  maxLines: 1,
+                  softWrap: false,
+                  style: const TextStyle(
+                    color: AppColors.iosGray,
+                    fontSize: 11,
+                    fontWeight: FontWeight.w500,
+                    letterSpacing: -0.1,
+                  ),
                 ),
               ),
             ),
