@@ -378,6 +378,31 @@ export default function Admin() {
   const { t, i18n } = useTranslation();
   const [markets, setMarkets] = useState([]);
   const [selectedMarketId, setSelectedMarketId] = useState(null);
+
+  // Drilling into a machine used to be pure React state, so on a phone the
+  // back swipe found nothing to pop and left the site altogether — the
+  // operator lost the whole panel instead of returning to the list. Each
+  // drill-in now pushes a history entry, and the swipe (or the browser's
+  // back button) pops it back to the machine list.
+  //
+  // The entry carries a marker so `closeMarket` knows whether there is one
+  // to pop: reaching the detail view any other way (tab switch, reload)
+  // must not fire history.back() and jump off the site.
+  const openMarket = (id) => {
+    window.history.pushState({ mmMarket: id }, '');
+    setSelectedMarketId(id);
+  };
+
+  const closeMarket = () => {
+    if (window.history.state?.mmMarket != null) window.history.back();
+    else setSelectedMarketId(null);
+  };
+
+  useEffect(() => {
+    const onPop = () => setSelectedMarketId(null);
+    window.addEventListener('popstate', onPop);
+    return () => window.removeEventListener('popstate', onPop);
+  }, []);
   const [products, setProducts] = useState([]);
   const [loading, setLoading] = useState(false);
   const [editingProduct, setEditingProduct] = useState(null);
@@ -1380,7 +1405,7 @@ export default function Admin() {
               {t('sales')}
             </button>
             <button
-              onClick={() => { setSelectedMarketId(null); setActiveTab('inventory'); }}
+              onClick={() => { closeMarket(); setActiveTab('inventory'); }}
               className={`flex-1 sm:flex-none px-2.5 sm:px-4 py-2 sm:py-1.5 rounded-lg font-bold transition-all text-xs ${activeTab === 'inventory' ? 'bg-white text-primary shadow-md' : 'text-slate-600 hover:text-slate-900'}`}
             >
               {t('devices')}
@@ -1472,7 +1497,7 @@ export default function Admin() {
                       className="w-full flex items-center gap-3 p-4 rounded-2xl bg-slate-50 border-2 border-slate-200 hover:border-primary hover:bg-white hover:shadow-md transition-all"
                     >
                       <button
-                        onClick={() => setSelectedMarketId(m.id)}
+                        onClick={() => openMarket(m.id)}
                         className="flex items-center gap-3 flex-1 min-w-0 text-left"
                       >
                         <div className="w-11 h-11 rounded-xl bg-indigo-600 text-white flex items-center justify-center shrink-0">
@@ -1495,7 +1520,7 @@ export default function Admin() {
                         <Pencil size={15} />
                       </button>
                       <button
-                        onClick={() => setSelectedMarketId(m.id)}
+                        onClick={() => openMarket(m.id)}
                         className="shrink-0 text-slate-400 hover:text-primary transition-colors"
                       >
                         <ChevronRight size={18} />
@@ -1509,11 +1534,14 @@ export default function Admin() {
               </div>
             ) : (
             <>
+              {/* Was a bare text link and got missed on a phone. Now a real
+                  bordered button — and inline-flex, not flex, or a
+                  block-level button would stretch across the whole card. */}
               <button
-                onClick={() => setSelectedMarketId(null)}
-                className="flex items-center gap-1.5 text-sm font-bold text-slate-500 hover:text-primary transition-colors mb-4"
+                onClick={closeMarket}
+                className="inline-flex w-fit items-center gap-1.5 mb-4 px-3 py-2 rounded-xl bg-slate-100 border-2 border-slate-300 text-sm font-bold text-slate-700 hover:bg-slate-200 hover:border-primary hover:text-primary active:scale-95 transition-all"
               >
-                <ChevronLeft size={16} /> {t('all_machines_back')}
+                <ChevronLeft size={18} /> {t('all_machines_back')}
               </button>
               <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 mb-8">
                 <div>
