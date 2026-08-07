@@ -83,12 +83,22 @@ dev_dependencies:
 # changes:
 #   flutter pub get
 #   dart run flutter_launcher_icons
+#
+# Source is the EMBLEM ONLY (micromart_emblem.png, cropped out of
+# micromart_logo.png) — at launcher size the "MicroMart" wordmark under it
+# rendered as an illegible smudge and stole room from the mark itself.
+# The two square renders differ on purpose:
+#   * micromart_icon.png    — white background, mark at 72 % — legacy icon,
+#                             the launcher only rounds its corners;
+#   * micromart_icon_fg.png — transparent, mark at 58 % — adaptive
+#                             foreground, which Android masks to an arbitrary
+#                             shape and guarantees only the inner ~66 %.
 flutter_launcher_icons:
   android: true
   ios: false
-  image_path: "lib/static/micromart_logo.png"
+  image_path: "lib/static/micromart_icon.png"
   adaptive_icon_background: "#FFFFFF"
-  adaptive_icon_foreground: "lib/static/micromart_logo.png"
+  adaptive_icon_foreground: "lib/static/micromart_icon_fg.png"
   min_sdk_android: 21
 
 # Generates native splash drawables + Android 12 splash API config from
