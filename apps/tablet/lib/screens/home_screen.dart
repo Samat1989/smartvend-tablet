@@ -207,10 +207,12 @@ class _HomeScreenState extends State<HomeScreen> {
     final now = DateTime.now();
     _serviceTaps
       ..add(now)
-      ..removeWhere((t) => now.difference(t) > const Duration(seconds: 3));
-    // 12 taps within the rolling 3-second window — well past anything
-    // a curious customer would do by accident.
-    if (_serviceTaps.length >= 12) {
+      ..removeWhere((t) => now.difference(t) > const Duration(seconds: 5));
+    // 10 taps inside a rolling 5-second window. Was 12-in-3, which needs
+    // four taps a second — hard to hit deliberately, let alone on a
+    // resistive panel. 10-in-5 is still far past anything a curious
+    // customer does by accident.
+    if (_serviceTaps.length >= 10) {
       _serviceTaps.clear();
       Navigator.of(context).push(
         MaterialPageRoute(builder: (_) => const ServicePinScreen()),
@@ -267,6 +269,7 @@ class _HomeScreenState extends State<HomeScreen> {
                 _ShelfSelector(
                   selected: _selectedShelf,
                   onSelect: _scrollToShelf,
+                  onCaptionTap: _onServiceTap,
                   shelfCount: context.watch<VendingService>().layout.isNotEmpty
                       ? context
                           .read<VendingService>()
@@ -284,12 +287,11 @@ class _HomeScreenState extends State<HomeScreen> {
             // badge sitting above it.
             const _MachidCorner(),
             const _LangCorner(),
-            // Invisible 80×80 dp tap-catcher right below the language
-            // icon. The language icon itself only cycles ru/kk/en
-            // (kids tap it and walk away); the hidden service-entry
-            // lives just below so accidental presses on the visible
-            // chip don't count toward unlocking PIN.
-            _ServiceTapZone(onTap: _onServiceTap),
+            // Service entry used to live in an invisible 80×80 box pinned
+            // under the language chip. Being anchored to the top edge, it
+            // landed differently on every screen height — on some tablets
+            // in the dead space it was meant for, on others under the
+            // catalog. It's now the visible "полки" caption instead.
           ],
         ),
       ),
@@ -476,7 +478,13 @@ class _ShelfSelector extends StatelessWidget {
     required this.selected,
     required this.onSelect,
     required this.shelfCount,
+    required this.onCaptionTap,
   });
+
+  /// Hidden service-mode entry. The caption is a fixed, always-visible
+  /// target that sits in the same place on every screen — unlike the old
+  /// invisible box, which drifted with the viewport height.
+  final VoidCallback onCaptionTap;
 
   final int selected;
   final int shelfCount;
@@ -496,15 +504,21 @@ class _ShelfSelector extends StatelessWidget {
         mainAxisAlignment: MainAxisAlignment.center,
         mainAxisSize: MainAxisSize.max,
         children: [
-          const Padding(
-            padding: EdgeInsets.only(bottom: 6),
-            child: Text(
-              'полки',
-              style: TextStyle(
-                color: AppColors.iosGray,
-                fontSize: 11,
-                fontWeight: FontWeight.w500,
-                letterSpacing: -0.1,
+          GestureDetector(
+            behavior: HitTestBehavior.opaque,
+            onTap: onCaptionTap,
+            child: Padding(
+              // Was EdgeInsets.only(bottom: 6) — widened into a real tap
+              // target now that the caption doubles as the service entry.
+              padding: const EdgeInsets.fromLTRB(6, 8, 6, 6),
+              child: Text(
+                context.watch<Strings>().t('shelves_caption'),
+                style: const TextStyle(
+                  color: AppColors.iosGray,
+                  fontSize: 11,
+                  fontWeight: FontWeight.w500,
+                  letterSpacing: -0.1,
+                ),
               ),
             ),
           ),
@@ -787,31 +801,6 @@ class _LangCorner extends StatelessWidget {
             ],
           ),
         ),
-      ),
-    );
-  }
-}
-
-/// Invisible 80×80 dp tap-catcher placed below the language icon.
-/// Counts toward the hidden 12-tap-in-3-seconds service-entry without
-/// interfering with the visible language chip. Sits in the dead space
-/// between the language pill (ends ≈ top: 80) and the rest of the
-/// catalog, so accidental swipes / scroll gestures on the catalog
-/// don't trigger it either.
-class _ServiceTapZone extends StatelessWidget {
-  const _ServiceTapZone({required this.onTap});
-
-  final VoidCallback onTap;
-
-  @override
-  Widget build(BuildContext context) {
-    return Positioned(
-      right: 0,
-      top: 80,
-      child: GestureDetector(
-        behavior: HitTestBehavior.opaque,
-        onTap: onTap,
-        child: const SizedBox(width: 80, height: 80),
       ),
     );
   }

@@ -98,6 +98,8 @@ class Strings extends ChangeNotifier {
     'in_stock': {'ru': 'осталось', 'kk': 'қалды', 'en': 'left'},
     'unmapped_slot': {'ru': 'не назначено', 'kk': 'бекітілмеген', 'en': 'not assigned'},
     'shelf': {'ru': 'Ячейка', 'kk': 'Ұяшық', 'en': 'Shelf'},
+    // Caption over the right-hand shelf rail on the catalog.
+    'shelves_caption': {'ru': 'полки', 'kk': 'сөрелер', 'en': 'shelves'},
     'pcs': {'ru': 'шт', 'kk': 'дана', 'en': 'pcs'},
     'currency': {'ru': '₸', 'kk': '₸', 'en': '₸'},
     // Connection / status
