@@ -66,6 +66,25 @@ class MachineLayout {
 
   String encode() => jsonEncode(toJson());
 
+  /// Stable digest of this layout's own encoding, for the heartbeat's
+  /// cheap "are we in sync?" check.
+  ///
+  /// FNV-1a rather than a crypto hash: no dependency, and the value never
+  /// leaves our own comparison — the server stores whatever the tablet sent
+  /// and compares it to the next thing the tablet sends. It must NOT be
+  /// recomputed server-side: jsonb normalises key order and whitespace, so
+  /// a hash taken there would never match and every ping would cry
+  /// divergence. String.hashCode is unsuitable — Dart makes no promise it
+  /// stays the same across VM versions.
+  String digest() {
+    var h = 0xcbf29ce484222325;
+    for (final unit in utf8.encode(encode())) {
+      h ^= unit;
+      h = (h * 0x100000001b3) & 0xFFFFFFFFFFFFFFFF;
+    }
+    return h.toRadixString(16).padLeft(16, '0');
+  }
+
   static MachineLayout? decode(String? s) {
     if (s == null || s.isEmpty) return null;
     try {

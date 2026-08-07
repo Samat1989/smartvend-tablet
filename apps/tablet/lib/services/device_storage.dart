@@ -40,6 +40,10 @@ class DeviceStorage extends ChangeNotifier {
   static const _kScreensaverSlideSec = 'screensaver_slide_sec';
   static const _kScreensaverWaitVideo = 'screensaver_wait_video_end';
   static const _kMachineLayout = 'machine_layout_v1';
+  // When this tablet last saved a layout. Sent with the heartbeat so the
+  // server can tell which of two tablets paired to the same machid edited
+  // more recently — hashes alone would leave them re-pushing at each other.
+  static const _kLayoutSavedAt = 'machine_layout_saved_at';
   // Operator-saved layout templates (JSON list of {name, layout}) —
   // see CustomLayoutTemplate in models/machine_layout.dart.
   static const _kCustomLayoutTemplates = 'custom_layout_templates_v1';
@@ -221,11 +225,18 @@ class DeviceStorage extends ChangeNotifier {
   Future<void> setMachineLayoutJson(String? json) async {
     if (json == null || json.isEmpty) {
       await _prefs.remove(_kMachineLayout);
+      await _prefs.remove(_kLayoutSavedAt);
     } else {
       await _prefs.setString(_kMachineLayout, json);
+      await _prefs.setString(
+          _kLayoutSavedAt, DateTime.now().toUtc().toIso8601String());
     }
     notifyListeners();
   }
+
+  /// UTC ISO-8601 of the last local layout save, or null on a tablet that
+  /// has never saved one (its layout came from a template default).
+  String? get machineLayoutSavedAt => _prefs.getString(_kLayoutSavedAt);
 
   bool get isPaired {
     final m = machid;

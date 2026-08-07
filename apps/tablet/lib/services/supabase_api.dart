@@ -111,21 +111,32 @@ class SupabaseApi {
   /// off-line, which is exactly what the absence of the beat already says.
   /// Nothing upstream should change behaviour because of it, and it must
   /// never surface an error to a customer standing at the cabinet.
-  Future<void> ping({
+  /// Returns the server's verdict on our layout: 'ok', 'push' (we edited
+  /// more recently than the cloud — re-send it) or 'stale' (someone else
+  /// did — stay quiet). Null when the beat didn't get through.
+  Future<String?> ping({
     required String machid,
     required String secret,
     bool? boardOk,
     String? appVersion,
+    String? layoutHash,
+    String? layoutSavedAt,
   }) async {
     try {
-      await _rpc('device_ping', {
+      final resp = await _rpc('device_ping', {
         'p_machid': _machidParam(machid),
         'p_secret': secret.trim(),
         'p_board_ok': boardOk,
         'p_app_version': appVersion,
+        'p_layout_hash': layoutHash,
+        'p_layout_at': layoutSavedAt,
       });
+      if (resp.statusCode < 200 || resp.statusCode >= 300) return null;
+      final body = jsonDecode(resp.body);
+      return body is Map ? body['layout'] as String? : null;
     } catch (_) {
       // Offline / DNS / timeout — nothing to do, the missing beat is the signal.
+      return null;
     }
   }
 
@@ -137,12 +148,16 @@ class SupabaseApi {
     required String machid,
     required String secret,
     required String layoutJson,
+    String? hash,
   }) async {
     try {
       final resp = await _rpc('set_machine_layout', {
         'p_machid': _machidParam(machid),
         'p_secret': secret,
         'p_layout': jsonDecode(layoutJson),
+        // Hashed over OUR encoding — the server stores it verbatim and never
+        // recomputes it, because jsonb reorders keys and would never match.
+        'p_hash': hash,
       });
       if (resp.statusCode >= 200 && resp.statusCode < 300) return true;
       debugPrint('[pushMachineLayout] HTTP ${resp.statusCode} ${resp.body}');

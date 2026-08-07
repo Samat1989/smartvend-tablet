@@ -105,6 +105,7 @@ class VendingService extends ChangeNotifier {
     final secret = _storage.secret;
     if (machid == null || secret == null) return;
     await _api.pushMachineLayout(
+      hash: MachineLayout.decode(layoutJson)?.digest(),
       machid: machid,
       secret: secret,
       layoutJson: layoutJson,
@@ -147,7 +148,9 @@ class VendingService extends ChangeNotifier {
         return null;
       }
     }();
-    await _api.ping(
+    final verdict = await _api.ping(
+      layoutHash: _layout.isEmpty ? null : _layout.digest(),
+      layoutSavedAt: _storage.machineLayoutSavedAt,
       machid: machid,
       secret: secret,
       // null = "we don't know", and for BarysVend we genuinely don't: that
@@ -159,6 +162,13 @@ class VendingService extends ChangeNotifier {
       boardOk: board.isLyt ? null : board.isHealthy,
       appVersion: _appVersion,
     );
+    // 'push' — the cloud is behind us, most often because a save happened
+    // while the tablet had no network and nothing ever retried it.
+    // 'stale' means another tablet on this machid edited later; we leave it
+    // alone rather than fighting over the row every minute.
+    if (verdict == 'push' && _layout.isNotEmpty) {
+      unawaited(_pushLayoutToCloud(_layout.encode()));
+    }
   }
 
   void _stopAutoRefresh() {
