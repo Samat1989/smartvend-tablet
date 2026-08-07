@@ -719,66 +719,103 @@ class _LayoutEditorScreenState extends State<LayoutEditorScreen> {
         elevation: 0,
         title: Text(s.t('service_layout_editor'),
             style: const TextStyle(fontWeight: FontWeight.bold)),
-        // Labelled buttons, not bare icons: on a kiosk touch screen there
-        // is no hover, so a tooltip never appears and the operator has to
-        // guess what a bookmark or a check mark does. The two "saves" are
-        // easy to mix up, so both say what they save.
-        actions: [
-          Padding(
-            padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 4),
-            child: TextButton.icon(
-              style: TextButton.styleFrom(foregroundColor: Colors.white),
-              icon: const Icon(Icons.grid_view),
-              label: const Text('Взять шаблон'),
-              onPressed: _pickTemplate,
-            ),
-          ),
-          Padding(
-            padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 4),
-            child: TextButton.icon(
-              style: TextButton.styleFrom(foregroundColor: Colors.white),
-              icon: const Icon(Icons.bookmark_add_outlined),
-              label: const Text('Сохранить как шаблон'),
-              onPressed: _saveAsTemplate,
-            ),
-          ),
-          Padding(
-            padding: const EdgeInsets.fromLTRB(4, 8, 12, 8),
-            child: FilledButton.icon(
-              icon: const Icon(Icons.check),
-              label: const Text('Готово'),
-              onPressed: _save,
-            ),
-          ),
-        ],
+        // Actions live in their own strip below (see _Toolbar), not in the
+        // AppBar: three labelled buttons plus the title didn't fit the
+        // tablet's width and the row silently overlapped the back arrow.
+        // A Wrap can't do that — it moves buttons to the next line instead.
       ),
       body: SafeArea(
-        child: Row(
+        child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            _ShelfRail(
-              shelves: _draft.shelves,
-              selectedIndex: _selectedShelf,
-              onSelect: (i) => setState(() => _selectedShelf = i),
-              onAdd: _addShelf,
-              onRename: _renameShelf,
-              onDelete: _deleteShelf,
+            _Toolbar(
+              onPickTemplate: _pickTemplate,
+              onSaveAsTemplate: _saveAsTemplate,
+              onDone: _save,
             ),
-            const VerticalDivider(width: 1, color: Colors.white24),
+            const Divider(height: 1, color: Colors.white24),
             Expanded(
-              child: _SlotsPanel(
-                shelf: _selectedShelf >= 0 &&
-                        _selectedShelf < _draft.shelves.length
-                    ? _draft.shelves[_selectedShelf]
-                    : null,
-                isLyt: context.watch<BoardClient>().isLyt,
-                onAddSlot: _addSlot,
-                onEditSlot: _editSlot,
-                onDeleteSlot: _deleteSlot,
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  _ShelfRail(
+                    shelves: _draft.shelves,
+                    selectedIndex: _selectedShelf,
+                    onSelect: (i) => setState(() => _selectedShelf = i),
+                    onAdd: _addShelf,
+                    onRename: _renameShelf,
+                    onDelete: _deleteShelf,
+                  ),
+                  const VerticalDivider(width: 1, color: Colors.white24),
+                  Expanded(
+                    child: _SlotsPanel(
+                      shelf: _selectedShelf >= 0 &&
+                              _selectedShelf < _draft.shelves.length
+                          ? _draft.shelves[_selectedShelf]
+                          : null,
+                      isLyt: context.watch<BoardClient>().isLyt,
+                      onAddSlot: _addSlot,
+                      onEditSlot: _editSlot,
+                      onDeleteSlot: _deleteSlot,
+                    ),
+                  ),
+                ],
               ),
             ),
           ],
         ),
+      ),
+    );
+  }
+}
+
+/// Action strip under the AppBar. Labelled buttons, not bare icons: on a
+/// kiosk touch screen there is no hover, so a tooltip never appears and the
+/// operator has to guess what a bookmark or a check mark does. The two
+/// "saves" are easy to mix up, so both say what they save.
+///
+/// A [Wrap] rather than a Row — on a narrow tablet the buttons move to a
+/// second line instead of overflowing (which, in the AppBar, silently drew
+/// them over the back arrow).
+class _Toolbar extends StatelessWidget {
+  const _Toolbar({
+    required this.onPickTemplate,
+    required this.onSaveAsTemplate,
+    required this.onDone,
+  });
+
+  final VoidCallback onPickTemplate;
+  final VoidCallback onSaveAsTemplate;
+  final VoidCallback onDone;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(12, 4, 12, 10),
+      child: Wrap(
+        spacing: 8,
+        runSpacing: 8,
+        alignment: WrapAlignment.end,
+        crossAxisAlignment: WrapCrossAlignment.center,
+        children: [
+          TextButton.icon(
+            style: TextButton.styleFrom(foregroundColor: Colors.white),
+            icon: const Icon(Icons.grid_view),
+            label: const Text('Выбрать шаблон'),
+            onPressed: onPickTemplate,
+          ),
+          TextButton.icon(
+            style: TextButton.styleFrom(foregroundColor: Colors.white),
+            icon: const Icon(Icons.bookmark_add_outlined),
+            label: const Text('Сохранить как шаблон'),
+            onPressed: onSaveAsTemplate,
+          ),
+          FilledButton.icon(
+            icon: const Icon(Icons.check),
+            label: const Text('Готово'),
+            onPressed: onDone,
+          ),
+        ],
       ),
     );
   }
@@ -803,8 +840,13 @@ class _ShelfRail extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    // Was a hard 180 dp, which on a narrow tablet left the slot grid too
+    // thin to fit even one card. A quarter of the screen, clamped, keeps
+    // both panes usable at any width.
+    final railWidth =
+        (MediaQuery.sizeOf(context).width * 0.25).clamp(132.0, 200.0);
     return SizedBox(
-      width: 180,
+      width: railWidth,
       child: Column(
         children: [
           Expanded(
@@ -961,36 +1003,54 @@ class _SlotsPanel extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          Row(
-            children: [
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      shelf!.label,
-                      style: const TextStyle(
-                        color: Colors.white,
-                        fontSize: 18,
-                        fontWeight: FontWeight.w800,
-                      ),
+          // Side by side while there's room; below the title once the panel
+          // gets narrow, so the shelf name and the hint never get squeezed
+          // to a couple of characters by a fixed-width button.
+          LayoutBuilder(
+            builder: (context, c) {
+              final title = Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    shelf!.label,
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 18,
+                      fontWeight: FontWeight.w800,
                     ),
-                    const SizedBox(height: 2),
-                    Text(
-                      'Ячеек: ${slots.length} · нажмите на ячейку, '
-                      'чтобы изменить подпись и моторы',
-                      style: const TextStyle(
-                          color: Colors.white54, fontSize: 12),
-                    ),
-                  ],
-                ),
-              ),
-              FilledButton.icon(
+                  ),
+                  const SizedBox(height: 2),
+                  Text(
+                    'Ячеек: ${slots.length} · нажмите на ячейку, '
+                    'чтобы изменить подпись и моторы',
+                    style: const TextStyle(
+                        color: Colors.white54, fontSize: 12),
+                  ),
+                ],
+              );
+              final addButton = FilledButton.icon(
                 icon: const Icon(Icons.add),
                 label: const Text('Добавить ячейку'),
                 onPressed: onAddSlot,
-              ),
-            ],
+              );
+              if (c.maxWidth < 460) {
+                return Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    title,
+                    const SizedBox(height: 10),
+                    addButton,
+                  ],
+                );
+              }
+              return Row(
+                children: [
+                  Expanded(child: title),
+                  const SizedBox(width: 12),
+                  addButton,
+                ],
+              );
+            },
           ),
           const SizedBox(height: 12),
           Expanded(
@@ -1000,8 +1060,12 @@ class _SlotsPanel extends StatelessWidget {
                         style: TextStyle(color: Colors.white54)))
                 : GridView.builder(
                     gridDelegate:
-                        const SliverGridDelegateWithFixedCrossAxisCount(
-                      crossAxisCount: 3,
+                        const SliverGridDelegateWithMaxCrossAxisExtent(
+                      // Card size drives the column count instead of a fixed
+                      // 3: on a narrow panel three cards left the label and
+                      // the edit/delete buttons no room and they collided.
+                      // Wide screens simply get more columns.
+                      maxCrossAxisExtent: 260,
                       mainAxisSpacing: 10,
                       crossAxisSpacing: 10,
                       childAspectRatio: 1.6,
