@@ -1,5 +1,5 @@
 import 'package:flutter_test/flutter_test.dart';
-import 'package:m102_tester/models/motor_layout.dart';
+import 'package:micromart/models/motor_layout.dart';
 
 void main() {
   test('Motor layout: shelf label ↔ motor id round-trip', () {
