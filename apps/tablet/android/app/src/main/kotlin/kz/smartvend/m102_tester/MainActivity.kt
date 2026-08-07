@@ -146,6 +146,26 @@ class MainActivity : FlutterActivity() {
         kioskChannel!!
             .setMethodCallHandler { call, result ->
                 when (call.method) {
+                    // Stable per-device identifier for the machine claim.
+                    // ANDROID_ID is scoped to (device, signing key, user):
+                    // it survives an app reinstall — so a technician
+                    // re-flashing the APK on the same tablet keeps the
+                    // claim — and only changes on a factory reset. No
+                    // permission needed, unlike Build.getSerial() or IMEI.
+                    // Dart falls back to a generated UUID if this returns
+                    // null, which some ROMs do.
+                    "androidId" -> {
+                        try {
+                            result.success(
+                                Settings.Secure.getString(
+                                    contentResolver,
+                                    Settings.Secure.ANDROID_ID,
+                                ),
+                            )
+                        } catch (t: Throwable) {
+                            result.success(null)
+                        }
+                    }
                     "exitToAndroid" -> {
                         suppressLockOnce = true
                         try { stopLockTask() } catch (_: Throwable) {}

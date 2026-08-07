@@ -45,7 +45,24 @@ class _PairingScreenState extends State<PairingScreen> {
       });
       return;
     }
-    await context.read<DeviceStorage>().savePairing(machid: machid, secret: secret);
+    // Secret checks out — now take the machine for this tablet. Done before
+    // savePairing so a refusal leaves the tablet unpaired instead of half
+    // set up on a cabinet that belongs to someone else's tablet.
+    final storage = context.read<DeviceStorage>();
+    final claimErr = await _api.claimMachine(
+      machid: machid,
+      secret: secret,
+      deviceId: await storage.deviceId(),
+    );
+    if (!mounted) return;
+    if (claimErr != null) {
+      setState(() {
+        _busy = false;
+        _error = claimErr;
+      });
+      return;
+    }
+    await storage.savePairing(machid: machid, secret: secret);
     // main.dart watches DeviceStorage and will swap to HomeScreen automatically.
   }
 

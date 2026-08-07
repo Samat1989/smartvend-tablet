@@ -6,6 +6,7 @@ import '../board/board_client.dart';
 import '../services/device_storage.dart';
 import '../services/kiosk_bridge.dart';
 import '../services/strings.dart';
+import '../services/supabase_api.dart';
 import 'board_diag_screen.dart';
 import 'climate_screen.dart';
 import 'inventory_edit_screen.dart';
@@ -271,7 +272,20 @@ class ServiceMenuScreen extends StatelessWidget {
       ),
     );
     if (ok == true && context.mounted) {
-      await context.read<DeviceStorage>().clearPairing();
+      // Give the machine up before wiping the credentials — afterwards we
+      // no longer have the secret to prove we were the holder, and the
+      // owner would have to unbind from the panel to free it.
+      final storage = context.read<DeviceStorage>();
+      final machid = storage.machid;
+      final secret = storage.secret;
+      if (machid != null && secret != null) {
+        await SupabaseApi().releaseMachine(
+          machid: machid,
+          secret: secret,
+          deviceId: await storage.deviceId(),
+        );
+      }
+      await storage.clearPairing();
       if (context.mounted) {
         Navigator.of(context).popUntil((r) => r.isFirst);
       }

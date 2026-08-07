@@ -25,6 +25,18 @@ class InstallStatus {
 class KioskBridge {
   static const _channel = MethodChannel('kz.smartvend/kiosk');
 
+  /// ANDROID_ID of this tablet, or null when the ROM withholds it.
+  /// Used as the identity behind the machine claim — see
+  /// [DeviceStorage.deviceId] for how the fallback works.
+  static Future<String?> androidId() async {
+    try {
+      final v = await _channel.invokeMethod<String>('androidId');
+      return (v == null || v.isEmpty) ? null : v;
+    } catch (_) {
+      return null;
+    }
+  }
+
   /// Lazily installs a handler on the channel that listens for callbacks
   /// the native side pushes back to us (currently only `usbPermissionResult`
   /// from [MainActivity.usbPermissionReceiver]). Calling this multiple

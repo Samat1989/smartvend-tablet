@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { supabase } from './supabaseClient';
-import { Image, Upload, Download, Plus, Minus, Save, Trash2, X, Loader2, Pencil, Receipt, Calendar, ShoppingBag, History, Languages, CheckCircle2, XCircle, AlertTriangle, ChevronRight, ChevronLeft, ChevronDown, Package, QrCode, KeyRound } from 'lucide-react';
+import { Image, Upload, Download, Plus, Minus, Save, Trash2, X, Loader2, Pencil, Receipt, Calendar, ShoppingBag, History, Languages, CheckCircle2, XCircle, AlertTriangle, ChevronRight, ChevronLeft, ChevronDown, Package, QrCode, KeyRound, Unlink as LinkOff } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import './i18n';
 import Cropper from 'react-easy-crop';
@@ -492,6 +492,7 @@ export default function Admin() {
 
   // Rename, available to the owner of the machine (plain RLS-scoped UPDATE).
   const [renamingMarket, setRenamingMarket] = useState(null); // {id,name}
+  const [releaseTarget, setReleaseTarget] = useState(null);   // {id,name}
 
 
   async function openCatalogPicker() {
@@ -783,6 +784,22 @@ export default function Admin() {
       }
       showToast(`${t('device_delete_error')}: ${err.message}`, 'error');
       setDeleteTarget(null);
+    }
+  }
+
+  // Frees a machine whose tablet can't sign itself out — smashed, lost, or
+  // already wiped. The only path when the tablet is gone: without it the
+  // machid stays claimed forever and no replacement can pair.
+  async function releaseTablet(m) {
+    try {
+      const { error } = await supabase.rpc('admin_release_machine', { p_machid: m.id });
+      if (error) throw error;
+      await fetchMarkets();
+      showToast(t('tablet_released'));
+    } catch (err) {
+      showToast(`${t('tablet_release_error')}: ${err.message}`, 'error');
+    } finally {
+      setReleaseTarget(null);
     }
   }
 
@@ -1564,6 +1581,13 @@ export default function Admin() {
                         className="p-2 rounded-lg bg-white border border-slate-300 text-slate-600 hover:text-primary hover:border-primary transition-all shrink-0"
                       >
                         <Pencil size={15} />
+                      </button>
+                      <button
+                        onClick={() => setReleaseTarget({ id: m.id, name: m.name || '' })}
+                        title={t('release_tablet')}
+                        className="p-2 rounded-lg bg-white border border-slate-300 text-slate-600 hover:text-amber-600 hover:border-amber-400 transition-all shrink-0"
+                      >
+                        <LinkOff size={15} />
                       </button>
                       <button
                         onClick={() => openMarket(m.id)}
@@ -2393,6 +2417,38 @@ export default function Admin() {
                 className="flex-1 py-3 px-4 bg-primary text-white rounded-xl font-black shadow-lg shadow-primary/20 flex items-center justify-center gap-2 active:scale-95 transition-all disabled:opacity-60"
               >
                 {deviceSaving ? <Loader2 className="animate-spin" size={18} /> : t('add')}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Unbind the tablet. Explicit confirmation because the machine keeps
+          working until its next heartbeat, and the operator standing at it
+          will see the app drop to the pairing screen without warning. */}
+      {releaseTarget && (
+        <div className="fixed inset-0 z-[110] bg-black/50 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-white rounded-3xl p-8 w-full max-w-sm shadow-2xl text-center">
+            <div className="w-16 h-16 bg-amber-100 text-amber-600 rounded-full flex items-center justify-center mx-auto mb-4">
+              <LinkOff size={30} />
+            </div>
+            <h3 className="text-xl font-black mb-2 text-slate-900">{t('release_tablet_title')}</h3>
+            <p className="text-sm text-slate-600 mb-2">
+              {releaseTarget.name || `${t('apparatus_no')}${releaseTarget.id}`}
+            </p>
+            <p className="text-xs text-slate-500 mb-6">{t('release_tablet_hint')}</p>
+            <div className="flex gap-3">
+              <button
+                onClick={() => setReleaseTarget(null)}
+                className="flex-1 py-3 px-4 bg-slate-200 rounded-xl font-bold text-slate-700 hover:bg-slate-300 transition-all"
+              >
+                {t('cancel')}
+              </button>
+              <button
+                onClick={() => releaseTablet(releaseTarget)}
+                className="flex-1 py-3 px-4 bg-amber-500 text-white rounded-xl font-bold hover:bg-amber-600 shadow-lg shadow-amber-200 transition-all active:scale-95"
+              >
+                {t('release_tablet')}
               </button>
             </div>
           </div>

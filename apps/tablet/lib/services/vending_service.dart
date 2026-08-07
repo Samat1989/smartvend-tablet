@@ -151,6 +151,7 @@ class VendingService extends ChangeNotifier {
     final verdict = await _api.ping(
       layoutHash: _layout.isEmpty ? null : _layout.digest(),
       layoutSavedAt: _storage.machineLayoutSavedAt,
+      deviceId: await _storage.deviceId(),
       machid: machid,
       secret: secret,
       // null = "we don't know", and for BarysVend we genuinely don't: that
@@ -162,11 +163,22 @@ class VendingService extends ChangeNotifier {
       boardOk: board.isLyt ? null : board.isHealthy,
       appVersion: _appVersion,
     );
+    if (verdict == null) return;
+
+    // The machine was handed to another tablet — the operator signed in on a
+    // replacement, or the owner unbound us from the panel. Stop dead rather
+    // than keep selling: from here on this cabinet's inventory and sales
+    // belong to the other device, and anything we wrote would corrupt them.
+    if (verdict['claim'] == 'lost') {
+      await _storage.clearPairing();
+      return;
+    }
+
     // 'push' — the cloud is behind us, most often because a save happened
     // while the tablet had no network and nothing ever retried it.
     // 'stale' means another tablet on this machid edited later; we leave it
     // alone rather than fighting over the row every minute.
-    if (verdict == 'push' && _layout.isNotEmpty) {
+    if (verdict['layout'] == 'push' && _layout.isNotEmpty) {
       unawaited(_pushLayoutToCloud(_layout.encode()));
     }
   }

@@ -101,6 +101,60 @@ class SupabaseApi {
     }
   }
 
+  // ---------- machine claim ----------
+
+  /// Take this machine for [deviceId]. Returns null on success, or a
+  /// ready-to-show reason when another tablet already holds it.
+  ///
+  /// Guards against the same machid running on two cabinets at once — which
+  /// would have both writing the SAME inventory and sales, so a sale on one
+  /// cabinet decrements the other's stock and the owner's revenue mixes two
+  /// locations irreversibly.
+  Future<String?> claimMachine({
+    required String machid,
+    required String secret,
+    required String deviceId,
+  }) async {
+    try {
+      final resp = await _rpc('claim_machine', {
+        'p_machid': _machidParam(machid),
+        'p_secret': secret.trim(),
+        'p_device_id': deviceId,
+      });
+      if (resp.statusCode < 200 || resp.statusCode >= 300) {
+        return _errMessage(resp.body);
+      }
+      final body = jsonDecode(resp.body);
+      if (body is Map && body['ok'] == true) return null;
+      final seen = body is Map ? body['last_seen_at'] as String? : null;
+      final when = seen == null
+          ? ''
+          : ' Последний раз на связи: '
+              '${DateTime.parse(seen).toLocal()}.';
+      return 'Этот аппарат уже занят другим планшетом.$when '
+          'Выйдите из аккаунта на нём или отвяжите планшет в админке.';
+    } catch (e) {
+      return 'Сеть: $e';
+    }
+  }
+
+  /// Give the machine up so another tablet can take it. Best-effort: the
+  /// operator is signing out either way, and the owner panel can always
+  /// unbind if this call didn't get through.
+  Future<void> releaseMachine({
+    required String machid,
+    required String secret,
+    required String deviceId,
+  }) async {
+    try {
+      await _rpc('release_machine', {
+        'p_machid': _machidParam(machid),
+        'p_secret': secret.trim(),
+        'p_device_id': deviceId,
+      });
+    } catch (_) {}
+  }
+
   // ---------- heartbeat ----------
 
   /// Report "this machine is alive" plus whether its control board is
@@ -111,16 +165,17 @@ class SupabaseApi {
   /// off-line, which is exactly what the absence of the beat already says.
   /// Nothing upstream should change behaviour because of it, and it must
   /// never surface an error to a customer standing at the cabinet.
-  /// Returns the server's verdict on our layout: 'ok', 'push' (we edited
-  /// more recently than the cloud — re-send it) or 'stale' (someone else
-  /// did — stay quiet). Null when the beat didn't get through.
-  Future<String?> ping({
+  /// Returns the server's verdict: `{claim, layout}`. `claim` is 'lost' when
+  /// another tablet holds this machine — the caller must stop working.
+  /// `layout` is 'ok' / 'push' / 'stale'. Null when the beat didn't land.
+  Future<Map<String, dynamic>?> ping({
     required String machid,
     required String secret,
     bool? boardOk,
     String? appVersion,
     String? layoutHash,
     String? layoutSavedAt,
+    String? deviceId,
   }) async {
     try {
       final resp = await _rpc('device_ping', {
@@ -130,10 +185,10 @@ class SupabaseApi {
         'p_app_version': appVersion,
         'p_layout_hash': layoutHash,
         'p_layout_at': layoutSavedAt,
+        'p_device_id': deviceId,
       });
       if (resp.statusCode < 200 || resp.statusCode >= 300) return null;
-      final body = jsonDecode(resp.body);
-      return body is Map ? body['layout'] as String? : null;
+      return jsonDecode(resp.body) as Map<String, dynamic>?;
     } catch (_) {
       // Offline / DNS / timeout — nothing to do, the missing beat is the signal.
       return null;

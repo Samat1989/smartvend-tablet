@@ -1,6 +1,10 @@
+import 'dart:math';
+
 import 'package:flutter/foundation.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+
+import 'kiosk_bridge.dart';
 
 /// Device-level persistent settings: machid, SmartVend secret (appkey),
 /// service-mode PIN, language. Listeners are notified when pairing state
@@ -44,6 +48,7 @@ class DeviceStorage extends ChangeNotifier {
   // server can tell which of two tablets paired to the same machid edited
   // more recently — hashes alone would leave them re-pushing at each other.
   static const _kLayoutSavedAt = 'machine_layout_saved_at';
+  static const _kDeviceId = 'device_id';
   // Operator-saved layout templates (JSON list of {name, layout}) —
   // see CustomLayoutTemplate in models/machine_layout.dart.
   static const _kCustomLayoutTemplates = 'custom_layout_templates_v1';
@@ -237,6 +242,30 @@ class DeviceStorage extends ChangeNotifier {
   /// UTC ISO-8601 of the last local layout save, or null on a tablet that
   /// has never saved one (its layout came from a template default).
   String? get machineLayoutSavedAt => _prefs.getString(_kLayoutSavedAt);
+
+  /// Identity this tablet claims a machine with. ANDROID_ID when the ROM
+  /// gives one — it survives an app reinstall, so re-flashing the APK on the
+  /// same tablet doesn't look like a different device and doesn't need the
+  /// owner to unbind. Otherwise a UUID generated once and kept here, which
+  /// only loses the claim if the app's data is wiped.
+  ///
+  /// Resolved once and cached: the claim must not change under us mid-session.
+  String? _deviceId;
+
+  Future<String> deviceId() async {
+    if (_deviceId != null) return _deviceId!;
+    final stored = _prefs.getString(_kDeviceId);
+    if (stored != null && stored.isNotEmpty) {
+      _deviceId = stored;
+      return stored;
+    }
+    final android = await KioskBridge.androidId();
+    final id = android ?? 'gen-${DateTime.now().microsecondsSinceEpoch}-'
+        '${Random().nextInt(0x7fffffff).toRadixString(16)}';
+    await _prefs.setString(_kDeviceId, id);
+    _deviceId = id;
+    return id;
+  }
 
   bool get isPaired {
     final m = machid;
