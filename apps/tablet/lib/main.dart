@@ -8,6 +8,7 @@ import 'screens/home_screen.dart';
 import 'screens/pairing_screen.dart';
 import 'services/climate_controller.dart';
 import 'services/device_storage.dart';
+import 'services/supabase_api.dart';
 import 'services/idle_service.dart';
 import 'services/media_service.dart';
 import 'services/strings.dart';
@@ -30,6 +31,10 @@ Future<void> main() async {
   );
   final storage = DeviceStorage();
   await storage.init();
+  // Resolve once and hand it to the API layer: every machine-scoped RPC ships
+  // it as x-device-id so _assert_machine can refuse writes from a tablet that
+  // no longer holds this machine — without a parameter on eight signatures.
+  SupabaseApi.deviceId = await storage.deviceId();
   runApp(VendingApp(storage: storage));
 }
 

@@ -38,10 +38,17 @@ class SupabaseApi {
 
   final http.Client _client;
 
+  /// Identity this tablet holds its machine with, set once at startup from
+  /// [DeviceStorage.deviceId]. Sent as a header rather than an RPC parameter
+  /// so the server-side check lives in one place (_assert_machine) instead of
+  /// in every write function's signature.
+  static String? deviceId;
+
   Map<String, String> get _headers => {
         'apikey': SupabaseConfig.anonKey,
         'Authorization': 'Bearer ${SupabaseConfig.anonKey}',
         'Content-Type': 'application/json',
+        'x-device-id': ?deviceId,
       };
 
   Uri _rest(String path, [Map<String, String>? query]) =>
