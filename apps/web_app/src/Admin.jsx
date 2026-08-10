@@ -535,13 +535,25 @@ export default function Admin() {
   };
 
   useEffect(() => {
-    supabase.auth.getSession().then(({ data: { session } }) => {
-      setSession(session);
-    });
+    // Both sources below hand us a structurally identical session object with a
+    // fresh identity: getSession() resolves once, and onAuthStateChange fires
+    // for INITIAL_SESSION right after it, on every token refresh (~hourly), and
+    // whenever the tab regains focus. Storing a new object each time re-renders
+    // the panel and re-runs all six effects keyed on `session` — which is why
+    // the edge functions saw every request twice, milliseconds apart.
+    //
+    // Keep the previous object while the token is unchanged, so only a real auth
+    // change propagates. Compared by access_token rather than user id: nothing
+    // here reads the token out of state today, but parking a stale one would be
+    // a trap for whoever does next.
+    const keepIfSame = (s) =>
+      setSession(prev => (prev?.access_token === s?.access_token ? prev : s));
 
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
-      setSession(session);
-    });
+    supabase.auth.getSession().then(({ data: { session } }) => keepIfSame(session));
+
+    const { data: { subscription } } = supabase.auth.onAuthStateChange(
+      (_event, session) => keepIfSame(session),
+    );
 
     return () => subscription.unsubscribe();
   }, []);
