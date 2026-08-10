@@ -476,8 +476,9 @@ export default function Admin() {
   const [userDeleteTarget, setUserDeleteTarget] = useState(null); // {id,email}
 
   // "Add device" modal — the superadmin types the machine's SmartVend Internal
-  // ID; device-claim resolves secret + name upstream and writes micromarkets.
-  const [addingDevice, setAddingDevice] = useState(null); // {machid,kind}
+  // ID, and optionally its Secret; device-claim resolves whatever wasn't typed
+  // (secret when left blank, always the name) upstream and writes micromarkets.
+  const [addingDevice, setAddingDevice] = useState(null); // {machid,secret,kind}
   const [deviceSaving, setDeviceSaving] = useState(false);
 
   // Fleet view for the superadmin. RLS hides other owners' machines from the
@@ -848,19 +849,23 @@ export default function Admin() {
   const DEVICE_CLAIM_ERRORS = {
     bad_machid: 'device_err_bad_machid',
     machine_not_found: 'device_err_not_found',
+    secret_mismatch: 'device_err_secret_mismatch',
   };
 
   async function claimDevice() {
     const machid = String(addingDevice?.machid ?? '').trim();
+    const secret = String(addingDevice?.secret ?? '').trim();
     if (!/^\d+$/.test(machid)) return showToast(t('device_err_bad_machid'), 'error');
 
     setDeviceSaving(true);
     try {
-      // Internal ID only — device-claim resolves the secret and the name from
-      // the SmartVend list server-side.
+      // Secret is optional: omitted, device-claim resolves it from the
+      // SmartVend list server-side; typed, it's sent and wins. The name always
+      // comes from the list.
       const data = await invokeAdminFn('device-claim', {
         body: {
           machid: Number(machid),
+          ...(secret ? { secret } : {}),
           kind: addingDevice.kind || 'vending',
         },
       });
@@ -1509,7 +1514,7 @@ export default function Admin() {
               users={users}
               loading={usersLoading}
               onCreate={() => setNewUser({ email: '', password: '', full_name: '' })}
-              onAddDevice={() => setAddingDevice({ machid: '', kind: 'vending' })}
+              onAddDevice={() => setAddingDevice({ machid: '', secret: '', kind: 'vending' })}
               onChangePassword={(u) => setPwdTarget({ id: u.id, email: u.email, password: '' })}
               onDeleteUser={(u) => setUserDeleteTarget({ id: u.id, email: u.email })}
               currentUserId={session?.user?.id}
@@ -2380,6 +2385,18 @@ export default function Admin() {
                   className="w-full mt-1 p-3 border-2 border-slate-300 focus:border-primary focus:outline-none rounded-xl font-bold bg-white text-slate-900 placeholder-slate-300"
                 />
                 <p className="text-[11px] text-slate-400 mt-1 ml-1">{t('device_id_hint')}</p>
+              </div>
+              <div>
+                <label className="text-xs font-bold text-slate-500 ml-1">{t('device_secret')}</label>
+                <input
+                  value={addingDevice.secret}
+                  onChange={e => setAddingDevice({ ...addingDevice, secret: e.target.value })}
+                  autoComplete="off"
+                  spellCheck={false}
+                  onKeyDown={e => { if (e.key === 'Enter' && !deviceSaving) claimDevice(); }}
+                  className="w-full mt-1 p-3 border-2 border-slate-300 focus:border-primary focus:outline-none rounded-xl font-mono text-sm bg-white text-slate-900"
+                />
+                <p className="text-[11px] text-slate-400 mt-1 ml-1">{t('device_secret_hint')}</p>
               </div>
               <div>
                 <label className="text-xs font-bold text-slate-500 ml-1">{t('device_kind')}</label>

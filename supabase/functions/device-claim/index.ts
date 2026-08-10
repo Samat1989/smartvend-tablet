@@ -3,15 +3,22 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 // Device registration, called from the web admin
 // (apps/web_app → /admin, "Устройства" tab → «Добавить устройство»).
 //
-//   POST { machid, kind? } → creates the micromarkets row
+//   POST { machid, secret?, kind? } → creates the micromarkets row
 //
-// The operator types ONE thing: the machine's Internal ID. Secret and name are
-// resolved here from the SmartVend list (cached in public.smartvend_machines,
-// same source device-provision uses) — the secret is the payment-signing key
-// and has no business travelling through a browser at all, and the name is
-// already on the machine's partner page, so retyping it was busywork that only
-// produced typos. `kind` stays a choice because the upstream list doesn't carry
-// the machine type and it can't be guessed.
+// `secret` is OPTIONAL. Left out, it is resolved here from the SmartVend list
+// (cached in public.smartvend_machines, same source device-provision uses) —
+// that's the normal path, and it keeps the payment-signing key out of the
+// browser entirely. Supplied, it wins: that's the escape hatch for a machine
+// the upstream list doesn't carry (in-house rigs, a machine enrolled in
+// SmartVend but not published yet), which otherwise can't be registered at all.
+//
+// A supplied secret is still cross-checked when the machine IS in the list: a
+// mismatch there is almost always a typo, and enrolling a key that can't sign
+// payments fails silently later, at the first customer. `force: true` skips
+// even that comparison.
+//
+// The name always comes from the SmartVend list; `kind` stays a choice because
+// the upstream list doesn't carry the machine type and it can't be guessed.
 //
 // SUPERADMIN ONLY. Owners must not enrol machines themselves — they get one
 // handed to them by the platform admin (who can then reassign it with
@@ -99,25 +106,22 @@ Deno.serve(async (req) => {
     const body = await req.json().catch(() => ({}));
     const machid = parseInt(String(body.machid ?? "").trim());
     const kind = String(body.kind ?? "vending").trim();
-    // Escape hatch for machines the SmartVend list doesn't carry (in-house test
-    // rigs): there is no secret to look up, so it has to be supplied. Not
-    // reachable from the admin UI — curl only, deliberately.
+    const typedSecret = String(body.secret ?? "").trim();
+    // Skip the cross-check against the list entirely. Not reachable from the
+    // admin UI — curl only, for when SmartVend's own record is the wrong one.
     const force = body.force === true;
-    const forcedSecret = force ? String(body.secret ?? "").trim() : "";
 
     if (!machid || machid < 0) return json({ error: "bad_machid" }, 400);
     if (!KINDS.includes(kind)) return json({ error: "bad_kind" }, 400);
-    if (force && !forcedSecret) return json({ error: "secret_required" }, 400);
+    if (force && !typedSecret) return json({ error: "secret_required" }, 400);
 
-    // ── resolve the machine (and its secret) from the SmartVend list ────────
+    // ── look the machine up in the SmartVend list ───────────────────────────
     //
     // Go to the source rather than trusting the cache. Enrolment is rare and
-    // human-triggered, so one upstream fetch is cheap — and it's the only thing
-    // standing between a rotated secret and a machine enrolled with a key that
-    // can't sign payments. That used to be caught by the operator typing the
-    // current secret off the partner page (a mismatch forced a refresh); with
-    // nothing typed, a stale cache would go unnoticed until the first customer.
-    // The refresh also updates the cache device-provision reads.
+    // human-triggered, so one upstream fetch is cheap — and with nothing typed
+    // it is the only thing standing between a rotated secret and a machine
+    // enrolled with a key that can't sign payments. The refresh also updates
+    // the cache device-provision reads.
     let upstream = null;
     if (!force) {
       try {
@@ -128,13 +132,27 @@ Deno.serve(async (req) => {
           .from("smartvend_machines").select("machid, secret, name").eq("machid", machid).maybeSingle();
         upstream = cached ?? null;
       }
-      if (!upstream) return json({ error: "machine_not_found" }, 404);
     }
 
-    const secret = force ? forcedSecret : String(upstream.secret ?? "").trim();
-    // A cached row with an empty secret can't sign payments — treat it as if
-    // the machine weren't there rather than enrolling a dud.
-    if (!secret) return json({ error: "machine_not_found" }, 404);
+    // ── settle on the secret ────────────────────────────────────────────────
+    let secret;
+    if (typedSecret) {
+      // Typed by hand wins — that's the whole point of the field. But if the
+      // machine is in the list, disagreeing with it means a typo far more often
+      // than it means SmartVend is wrong, so say so instead of enrolling a key
+      // that will fail at the first payment.
+      const listed = String(upstream?.secret ?? "").trim();
+      if (listed && listed !== typedSecret) {
+        return json({ error: "secret_mismatch" }, 403);
+      }
+      secret = typedSecret;
+    } else {
+      // Nothing typed: the list is the only source. No row there, or a row
+      // without a usable key, and there is nothing to enrol.
+      if (!upstream) return json({ error: "machine_not_found" }, 404);
+      secret = String(upstream.secret ?? "").trim();
+      if (!secret) return json({ error: "machine_not_found" }, 404);
+    }
 
     // ── claim or create the micromarkets row ────────────────────────────────
     const { data: existing } = await supabase
