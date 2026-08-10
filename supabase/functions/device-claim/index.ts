@@ -3,7 +3,15 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 // Device registration, called from the web admin
 // (apps/web_app → /admin, "Устройства" tab → «Добавить устройство»).
 //
-//   POST { machid, secret, name?, kind? } → creates the micromarkets row
+//   POST { machid, kind? } → creates the micromarkets row
+//
+// The operator types ONE thing: the machine's Internal ID. Secret and name are
+// resolved here from the SmartVend list (cached in public.smartvend_machines,
+// same source device-provision uses) — the secret is the payment-signing key
+// and has no business travelling through a browser at all, and the name is
+// already on the machine's partner page, so retyping it was busywork that only
+// produced typos. `kind` stays a choice because the upstream list doesn't carry
+// the machine type and it can't be guessed.
 //
 // SUPERADMIN ONLY. Owners must not enrol machines themselves — they get one
 // handed to them by the platform admin (who can then reassign it with
@@ -14,17 +22,11 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 // (plus that owner's email) even for the superadmin — reassigning is
 // device-admin's `transfer`, which names both accounts and asks first.
 //
-// The Internal ID and Secret come off the machine's SmartVend partner page; we
-// verify the pair against the upstream SmartVend machine list (cached in
-// public.smartvend_machines, same source device-provision uses) and only then
-// insert `micromarkets` with owner_id = the caller.
-//
 // Why an edge function and not a direct insert from the browser: `secret` is
 // the payment-signing key for the LV gateway and is meant to be backend-only
-// (audit finding F1, docs/security-audit-2026-06.md). Sending it through a
-// service_role function keeps the write path and the verification server-side,
-// and lets us tell "wrong secret" apart from "already registered elsewhere"
-// instead of surfacing a raw primary-key violation.
+// (audit finding F1, docs/security-audit-2026-06.md). Resolving it here means
+// it is never sent to a client on the way in either — the browser only ever
+// learns whether the Internal ID exists.
 //
 // verify_jwt is false in config.toml (the gateway can't tell the publishable
 // key from a user JWT); the caller's session token is validated here.
@@ -96,38 +98,47 @@ Deno.serve(async (req) => {
   try {
     const body = await req.json().catch(() => ({}));
     const machid = parseInt(String(body.machid ?? "").trim());
-    const secret = String(body.secret ?? "").trim();
-    const name = String(body.name ?? "").trim();
     const kind = String(body.kind ?? "vending").trim();
-    // Escape hatch for machines the SmartVend list doesn't carry (in-house
-    // test rigs). Off by default — the pair check is the point of the flow.
+    // Escape hatch for machines the SmartVend list doesn't carry (in-house test
+    // rigs): there is no secret to look up, so it has to be supplied. Not
+    // reachable from the admin UI — curl only, deliberately.
     const force = body.force === true;
+    const forcedSecret = force ? String(body.secret ?? "").trim() : "";
 
     if (!machid || machid < 0) return json({ error: "bad_machid" }, 400);
-    if (!secret) return json({ error: "secret_required" }, 400);
     if (!KINDS.includes(kind)) return json({ error: "bad_kind" }, 400);
+    if (force && !forcedSecret) return json({ error: "secret_required" }, 400);
 
-    // ── verify (machid, secret) against the SmartVend list ──────────────────
+    // ── resolve the machine (and its secret) from the SmartVend list ────────
+    //
+    // Go to the source rather than trusting the cache. Enrolment is rare and
+    // human-triggered, so one upstream fetch is cheap — and it's the only thing
+    // standing between a rotated secret and a machine enrolled with a key that
+    // can't sign payments. That used to be caught by the operator typing the
+    // current secret off the partner page (a mismatch forced a refresh); with
+    // nothing typed, a stale cache would go unnoticed until the first customer.
+    // The refresh also updates the cache device-provision reads.
     let upstream = null;
     if (!force) {
-      const { data: cached } = await supabase
-        .from("smartvend_machines").select("machid, secret, name").eq("machid", machid).maybeSingle();
-      upstream = cached ?? null;
-
-      // Cache miss, or a secret that no longer matches (SmartVend rotated it):
-      // pull the list once more before rejecting.
-      if (!upstream || upstream.secret.trim() !== secret) {
+      try {
         upstream = await refreshCache(supabase, machid);
+      } catch (_) {
+        // Upstream unreachable — fall back to whatever we cached earlier.
+        const { data: cached } = await supabase
+          .from("smartvend_machines").select("machid, secret, name").eq("machid", machid).maybeSingle();
+        upstream = cached ?? null;
       }
       if (!upstream) return json({ error: "machine_not_found" }, 404);
-      if (String(upstream.secret ?? "").trim() !== secret) {
-        return json({ error: "secret_mismatch" }, 403);
-      }
     }
+
+    const secret = force ? forcedSecret : String(upstream.secret ?? "").trim();
+    // A cached row with an empty secret can't sign payments — treat it as if
+    // the machine weren't there rather than enrolling a dud.
+    if (!secret) return json({ error: "machine_not_found" }, 404);
 
     // ── claim or create the micromarkets row ────────────────────────────────
     const { data: existing } = await supabase
-      .from("micromarkets").select("id, owner_id").eq("id", machid).maybeSingle();
+      .from("micromarkets").select("id, owner_id, name").eq("id", machid).maybeSingle();
 
     // A machine that already has an owner is never re-enrolled here, not even
     // by the superadmin: moving one between accounts is device-admin's
@@ -142,15 +153,19 @@ Deno.serve(async (req) => {
       }, 409);
     }
 
-    const label = name || upstream?.name || `Аппарат ${machid}`;
+    // Name comes off the machine's SmartVend page ("Description"). The operator
+    // renames it later from the devices list if they want something else.
+    const label = String(upstream?.name ?? "").trim() || `Аппарат ${machid}`;
     let row, err;
     if (existing) {
-      // Owner-less row: adopt it, refreshing secret and label. Never rewrite
-      // `kind` on an existing machine — that would repoint a live tablet/relay
-      // at the wrong flow.
+      // Owner-less row: adopt it, refreshing the secret. Keep whatever name it
+      // already carries — someone typed it for a reason, and the upstream
+      // "Description" is usually the vaguer of the two. Never rewrite `kind` on
+      // an existing machine — that would repoint a live tablet/relay at the
+      // wrong flow.
       ({ data: row, error: err } = await supabase
         .from("micromarkets")
-        .update({ owner_id: ownerId, secret, name: label })
+        .update({ owner_id: ownerId, secret, name: existing.name || label })
         .eq("id", machid)
         .select("id, name, kind, qr_token, owner_id")
         .single());

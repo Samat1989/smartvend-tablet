@@ -475,9 +475,9 @@ export default function Admin() {
   const [pwdTarget, setPwdTarget] = useState(null);      // {id,email,password}
   const [userDeleteTarget, setUserDeleteTarget] = useState(null); // {id,email}
 
-  // "Add device" modal — the owner registers a machine by typing its SmartVend
-  // Internal ID + Secret; device-claim verifies the pair and writes micromarkets.
-  const [addingDevice, setAddingDevice] = useState(null); // {machid,secret,name,kind}
+  // "Add device" modal — the superadmin types the machine's SmartVend Internal
+  // ID; device-claim resolves secret + name upstream and writes micromarkets.
+  const [addingDevice, setAddingDevice] = useState(null); // {machid,kind}
   const [deviceSaving, setDeviceSaving] = useState(false);
 
   // Fleet view for the superadmin. RLS hides other owners' machines from the
@@ -832,26 +832,23 @@ export default function Admin() {
 
   // Machine-readable codes from supabase/functions/device-claim/index.ts →
   // operator-facing text. Anything else falls through to the raw message.
+  // (`secret_required` only fires on the function's curl-only `force` path.)
   const DEVICE_CLAIM_ERRORS = {
     bad_machid: 'device_err_bad_machid',
-    secret_required: 'device_err_secret_required',
     machine_not_found: 'device_err_not_found',
-    secret_mismatch: 'device_err_secret_mismatch',
   };
 
   async function claimDevice() {
     const machid = String(addingDevice?.machid ?? '').trim();
-    const secret = String(addingDevice?.secret ?? '').trim();
     if (!/^\d+$/.test(machid)) return showToast(t('device_err_bad_machid'), 'error');
-    if (!secret) return showToast(t('device_err_secret_required'), 'error');
 
     setDeviceSaving(true);
     try {
+      // Internal ID only — device-claim resolves the secret and the name from
+      // the SmartVend list server-side.
       const data = await invokeAdminFn('device-claim', {
         body: {
           machid: Number(machid),
-          secret,
-          name: (addingDevice.name || '').trim(),
           kind: addingDevice.kind || 'vending',
         },
       });
@@ -1500,7 +1497,7 @@ export default function Admin() {
               users={users}
               loading={usersLoading}
               onCreate={() => setNewUser({ email: '', password: '', full_name: '' })}
-              onAddDevice={() => setAddingDevice({ machid: '', secret: '', name: '', kind: 'vending' })}
+              onAddDevice={() => setAddingDevice({ machid: '', kind: 'vending' })}
               onChangePassword={(u) => setPwdTarget({ id: u.id, email: u.email, password: '' })}
               onDeleteUser={(u) => setUserDeleteTarget({ id: u.id, email: u.email })}
               currentUserId={session?.user?.id}
@@ -2338,9 +2335,10 @@ export default function Admin() {
         </div>
       )}
 
-      {/* Add device — Internal ID + Secret are copied off the machine's page in
-          the SmartVend partner cabinet; device-claim checks the pair against
-          the SmartVend list before it writes anything. */}
+      {/* Add device — the operator types the Internal ID off the machine's page
+          in the SmartVend partner cabinet and nothing else; device-claim looks
+          the machine up in the SmartVend list and takes the secret and the name
+          from there. The secret never touches the browser. */}
       {addingDevice && (
         <div className="fixed inset-0 z-[110] bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4">
           <div className="bg-white rounded-3xl w-full max-w-md shadow-2xl border-2 border-slate-300 max-h-[90vh] overflow-y-auto">
@@ -2366,28 +2364,10 @@ export default function Admin() {
                   inputMode="numeric"
                   autoFocus
                   placeholder="3001000"
+                  onKeyDown={e => { if (e.key === 'Enter' && !deviceSaving) claimDevice(); }}
                   className="w-full mt-1 p-3 border-2 border-slate-300 focus:border-primary focus:outline-none rounded-xl font-bold bg-white text-slate-900 placeholder-slate-300"
                 />
-              </div>
-              <div>
-                <label className="text-xs font-bold text-slate-500 ml-1">{t('device_secret')}</label>
-                <input
-                  value={addingDevice.secret}
-                  onChange={e => setAddingDevice({ ...addingDevice, secret: e.target.value })}
-                  autoComplete="off"
-                  spellCheck={false}
-                  className="w-full mt-1 p-3 border-2 border-slate-300 focus:border-primary focus:outline-none rounded-xl font-mono text-sm bg-white text-slate-900"
-                />
-                <p className="text-[11px] text-slate-400 mt-1 ml-1">{t('device_secret_hint')}</p>
-              </div>
-              <div>
-                <label className="text-xs font-bold text-slate-500 ml-1">{t('device_name')}</label>
-                <input
-                  value={addingDevice.name}
-                  onChange={e => setAddingDevice({ ...addingDevice, name: e.target.value })}
-                  placeholder={t('device_name_placeholder')}
-                  className="w-full mt-1 p-3 border-2 border-slate-300 focus:border-primary focus:outline-none rounded-xl font-bold bg-white text-slate-900 placeholder-slate-300"
-                />
+                <p className="text-[11px] text-slate-400 mt-1 ml-1">{t('device_id_hint')}</p>
               </div>
               <div>
                 <label className="text-xs font-bold text-slate-500 ml-1">{t('device_kind')}</label>

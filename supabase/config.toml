@@ -40,8 +40,9 @@ enabled = true
 verify_jwt = false
 entrypoint = "./functions/admin-create-user/index.ts"
 
-# Superadmin-only: register a machine by Internal ID + Secret, verified against
-# the SmartVend list before writing micromarkets.
+# Superadmin-only: register a machine by Internal ID alone — the secret and the
+# name are resolved from the SmartVend list server-side, so neither is ever
+# typed into (or returned to) the browser.
 [functions.device-claim]
 enabled = true
 verify_jwt = false
