@@ -1,0 +1,1523 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SmartVend — эмулятор устройства (provisioning + оплата)</title>
+<style>
+  :root{
+    --bg:#0d1117; --bg2:#141b24; --card:#161d27; --line:#242e3b; --line2:#2f3b4b;
+    --fg:#e6edf3; --dim:#8b98a8; --dim2:#5f6c7c;
+    --acc:#4c9aff; --ok:#3fb950; --warn:#d29922; --err:#f85149; --info:#a371f7;
+    --mono:ui-monospace,"SF Mono",Menlo,Consolas,"Liberation Mono",monospace;
+  }
+  *{box-sizing:border-box}
+  body{
+    margin:0; background:var(--bg); color:var(--fg);
+    font:14px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Arial,sans-serif;
+  }
+  a{color:var(--acc)}
+  header{
+    display:flex; align-items:center; gap:14px; flex-wrap:wrap;
+    padding:12px 18px; background:var(--bg2); border-bottom:1px solid var(--line);
+    position:sticky; top:0; z-index:20;
+  }
+  header h1{font-size:15px; margin:0; font-weight:600; letter-spacing:.2px}
+  header h1 small{color:var(--dim); font-weight:400; margin-left:8px}
+  .spacer{flex:1}
+  .seg{display:flex; border:1px solid var(--line2); border-radius:7px; overflow:hidden}
+  .seg button{
+    background:transparent; border:0; color:var(--dim); padding:6px 14px;
+    font:inherit; font-size:13px; cursor:pointer;
+  }
+  .seg button.on{background:var(--acc); color:#04121f; font-weight:600}
+  .pill{
+    font:11px/1 var(--mono); padding:5px 9px; border-radius:20px;
+    border:1px solid var(--line2); color:var(--dim);
+  }
+  .pill.ok{color:var(--ok); border-color:#1c4429; background:#0f2a17}
+  .pill.err{color:var(--err); border-color:#5a2020; background:#2a1313}
+
+  main{
+    display:grid; gap:14px; padding:14px 18px 40px;
+    grid-template-columns:minmax(300px,360px) minmax(320px,1fr) minmax(360px,1.15fr);
+    align-items:start;
+  }
+  @media(max-width:1300px){ main{grid-template-columns:minmax(300px,340px) 1fr} }
+  @media(max-width:900px){ main{grid-template-columns:1fr} }
+  .col{display:flex; flex-direction:column; gap:14px; min-width:0}
+
+  .card{background:var(--card); border:1px solid var(--line); border-radius:10px; overflow:hidden}
+  .card>h2{
+    margin:0; padding:9px 13px; font-size:11px; font-weight:600;
+    text-transform:uppercase; letter-spacing:.9px; color:var(--dim);
+    background:var(--bg2); border-bottom:1px solid var(--line);
+    display:flex; align-items:center; gap:8px;
+  }
+  .card>h2 .tag{
+    margin-left:auto; font:10px/1 var(--mono); letter-spacing:0; text-transform:none;
+    color:var(--dim2); padding:3px 7px; border:1px solid var(--line2); border-radius:5px;
+  }
+  .body{padding:13px}
+  .body.tight{padding:10px}
+
+  /* ---- machine screen ---- */
+  .screen{
+    background:#05080c; border-radius:8px; border:1px solid #1d2836;
+    min-height:390px; padding:18px; display:flex; flex-direction:column;
+    align-items:center; justify-content:center; text-align:center; gap:12px;
+  }
+  .screen .kicker{font:11px/1 var(--mono); letter-spacing:1.6px; color:var(--dim2); text-transform:uppercase}
+  .screen .big{font-size:27px; font-weight:650; letter-spacing:.3px; line-height:1.2}
+  .screen .code{
+    font:700 30px/1.1 var(--mono); letter-spacing:4px; color:#fff;
+    background:#0c1420; border:1px solid #23364d; border-radius:8px; padding:11px 16px;
+  }
+  .screen .sub{color:var(--dim); font-size:13px; max-width:270px}
+  .screen .qr{background:#fff; padding:9px; border-radius:8px; line-height:0}
+  .screen .qr svg{display:block; width:170px; height:170px}
+  .screen .payload{
+    font:10px/1.4 var(--mono); color:var(--dim2); word-break:break-all;
+    max-width:280px; user-select:all;
+  }
+  .screen .price{font:700 40px/1 var(--mono); color:#fff}
+  .screen .countdown{font:12px/1 var(--mono); color:var(--warn)}
+  .screen .countdown.late{color:var(--err)}
+  .screen .badge{
+    font:600 12px/1 var(--mono); padding:6px 11px; border-radius:20px; letter-spacing:.5px;
+  }
+  .b-ok{background:#0f2a17; color:var(--ok); border:1px solid #1c4429}
+  .b-err{background:#2a1313; color:var(--err); border:1px solid #5a2020}
+  .b-warn{background:#2a2110; color:var(--warn); border:1px solid #4d3c14}
+  .b-info{background:#111c2e; color:var(--acc); border:1px solid #22406b}
+  .glyph{font-size:52px; line-height:1}
+  .spin{
+    width:26px; height:26px; border:3px solid #1e2a3a; border-top-color:var(--acc);
+    border-radius:50%; animation:sp 900ms linear infinite;
+  }
+  @keyframes sp{to{transform:rotate(360deg)}}
+
+  /* ---- forms ---- */
+  label.f{display:block; margin-bottom:9px}
+  label.f > span{display:block; font-size:11px; color:var(--dim); margin-bottom:4px; letter-spacing:.3px}
+  input[type=text],input[type=number],select{
+    width:100%; background:#0c121b; border:1px solid var(--line2); color:var(--fg);
+    border-radius:6px; padding:7px 9px; font:13px/1.3 var(--mono);
+  }
+  input:focus,select:focus{outline:none; border-color:var(--acc)}
+  input:disabled{opacity:.45; cursor:not-allowed}
+  .row{display:flex; gap:9px}
+  .row > *{flex:1; min-width:0}
+  button.btn{
+    background:#1d2836; border:1px solid var(--line2); color:var(--fg);
+    padding:8px 13px; border-radius:6px; font:13px/1.2 inherit; cursor:pointer;
+    display:inline-flex; align-items:center; justify-content:center; gap:7px; white-space:nowrap;
+  }
+  button.btn:hover:not(:disabled){background:#26364a; border-color:#3d5063}
+  button.btn:disabled{opacity:.36; cursor:not-allowed}
+  button.btn.primary{background:var(--acc); border-color:var(--acc); color:#04121f; font-weight:600}
+  button.btn.primary:hover:not(:disabled){background:#68adff}
+  button.btn.good{background:#12341d; border-color:#1c4429; color:var(--ok)}
+  button.btn.bad{background:#2a1313; border-color:#5a2020; color:var(--err)}
+  button.btn.wide{width:100%}
+  .btns{display:flex; gap:8px; flex-wrap:wrap}
+  .hr{height:1px; background:var(--line); margin:13px -13px}
+  .sect{font-size:11px; color:var(--dim2); text-transform:uppercase; letter-spacing:.9px; margin:0 0 9px}
+  .chk{display:flex; align-items:flex-start; gap:8px; margin-bottom:7px; cursor:pointer; font-size:12.5px}
+  .chk input{margin:2px 0 0; accent-color:var(--acc); flex:none}
+  .chk span small{display:block; color:var(--dim2); font-size:11px; line-height:1.35}
+  .note{
+    font-size:12px; color:var(--dim); background:#111a26; border:1px solid var(--line);
+    border-left:2px solid var(--warn); border-radius:5px; padding:8px 10px; margin-top:10px;
+  }
+  .note b{color:var(--warn)}
+  .note.info{border-left-color:var(--acc)} .note.info b{color:var(--acc)}
+
+  /* ---- log ---- */
+  .logwrap{max-height:min(66vh,720px); overflow:auto; padding:0}
+  .log{font:11.5px/1.55 var(--mono)}
+  .entry{border-bottom:1px solid #1b232e; padding:7px 11px}
+  .entry:last-child{border-bottom:0}
+  .eh{display:flex; gap:8px; align-items:baseline; cursor:pointer}
+  .eh .t{color:var(--dim2); flex:none}
+  .eh .m{font-weight:700; flex:none; min-width:38px}
+  .eh .u{color:var(--fg); word-break:break-all; flex:1; min-width:0}
+  .eh .ms{color:var(--dim2); flex:none}
+  .eh .st{font-weight:700; flex:none; padding:1px 6px; border-radius:4px}
+  .s2{color:var(--ok); background:#0f2a17} .s4{color:var(--warn); background:#2a2110}
+  .s5{color:var(--err); background:#2a1313} .sx{color:var(--err); background:#2a1313}
+  .ebody{margin-top:5px; white-space:pre-wrap; word-break:break-word; color:var(--dim)}
+  .ebody .k{color:var(--dim2)}
+  .ebody .out{color:#7fb3ea} .ebody .in{color:#9dd6a8}
+  .ev{padding:5px 11px; border-bottom:1px solid #1b232e; color:var(--info); font:11.5px/1.5 var(--mono)}
+  .ev.warn{color:var(--warn)} .ev.err{color:var(--err)} .ev.ok{color:var(--ok)}
+  .empty{padding:24px; text-align:center; color:var(--dim2); font-size:12px}
+
+  /* ---- checklist ---- */
+  .cl{list-style:none; margin:0; padding:0}
+  .cl li{display:flex; gap:9px; align-items:flex-start; padding:5px 0; font-size:12.5px; color:var(--dim)}
+  .cl li .box{
+    flex:none; width:15px; height:15px; border-radius:4px; border:1px solid var(--line2);
+    margin-top:2px; display:flex; align-items:center; justify-content:center;
+    font:700 10px/1 var(--mono); color:transparent;
+  }
+  .cl li.done{color:var(--fg)}
+  .cl li.done .box{background:var(--ok); border-color:var(--ok); color:#04121f}
+  .kv{display:grid; grid-template-columns:auto 1fr; gap:4px 11px; font:11.5px/1.6 var(--mono)}
+  .kv dt{color:var(--dim2)}
+  .kv dd{margin:0; word-break:break-all; user-select:all}
+</style>
+</head>
+<body>
+
+<header>
+  <h1>SmartVend · эмулятор устройства <small>provisioning + оплата</small></h1>
+  <div class="seg" id="modeSeg">
+    <button data-mode="mock" class="on">Эмуляция</button>
+    <button data-mode="live">Живой стенд</button>
+  </div>
+  <input type="text" id="baseUrl" style="width:250px" value="/api/v1" title="Префикс API">
+  <span class="spacer"></span>
+  <span class="pill" id="netPill">режим: эмуляция</span>
+</header>
+
+<main>
+  <!-- ======================= COLUMN 1 ======================= -->
+  <div class="col">
+    <div class="card">
+      <h2>Экран автомата <span class="tag" id="phaseTag">idle</span></h2>
+      <div class="body"><div class="screen" id="screen"></div></div>
+    </div>
+
+    <div class="card">
+      <h2>Учётные данные · НВ-память</h2>
+      <div class="body">
+        <dl class="kv" id="credView"></dl>
+        <div class="hr"></div>
+        <p class="sect">Ввести вручную</p>
+        <div class="row">
+          <label class="f" style="flex:0 0 92px"><span>device_id</span><input type="text" id="manId" placeholder="2"></label>
+          <label class="f"><span>device_secret</span><input type="text" id="manSecret" placeholder="HmmCTDzp..."></label>
+        </div>
+        <div class="btns">
+          <button class="btn" id="btnSaveCred">Записать в НВ</button>
+          <button class="btn bad" id="btnWipe">Стереть НВ</button>
+        </div>
+        <div class="note info">Учётка хранится <b>отдельно</b> для эмуляции и живого стенда — переключение режима не смешивает их.</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ======================= COLUMN 2 ======================= -->
+  <div class="col">
+    <div class="card">
+      <h2>Фаза 1 · Provisioning <span class="tag">enroll</span></h2>
+      <div class="body">
+        <div class="row">
+          <label class="f"><span>manufacturer</span><input type="text" id="manuf" value="Acme Vending"></label>
+          <label class="f"><span>serial</span><input type="text" id="serial" value="SN-4471-A"></label>
+        </div>
+        <div class="btns">
+          <button class="btn primary" id="btnEnroll">Начать enrollment</button>
+          <button class="btn" id="btnEnrollStop" disabled>Стоп</button>
+        </div>
+        <div class="hr"></div>
+        <p class="sect">Действия оператора <span style="text-transform:none;letter-spacing:0">(только эмуляция)</span></p>
+        <div class="btns">
+          <button class="btn good" id="btnClaim" disabled>Оператор привязал аппарат</button>
+        </div>
+        <label class="chk" style="margin-top:11px">
+          <input type="checkbox" id="optReenroll" checked>
+          <span>Авто-переоткрытие на 410<small>Истёк код → сразу новый enrollment, как требует протокол</small></span>
+        </label>
+        <div class="note">
+          <b>Живой стенд:</b> открывайте страницу через <code>python paygate_proxy.py</code> —
+          у paygate нет CORS, напрямую из браузера запрос не уйдёт. На stage сейчас
+          <code>POST /device/enroll</code> отвечает <code>422 panel_base_url unset</code>,
+          поэтому оплату проверяйте с учёткой, введённой вручную слева.
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>Фаза 2 · Оплата <span class="tag">orders</span></h2>
+      <div class="body">
+        <div class="row">
+          <label class="f" style="flex:0 0 96px"><span>price ₸</span><input type="number" id="price" value="150" min="1" step="1"></label>
+          <label class="f" style="flex:0 0 76px"><span>slot</span><input type="text" id="slot" value="A1"></label>
+          <label class="f"><span>product_name</span><input type="text" id="pname" value="Cola"></label>
+        </div>
+        <label class="f">
+          <span>vm_order_id <span style="color:var(--dim2)">— пусто = не отправлять</span></span>
+          <div class="row">
+            <input type="text" id="vmOrderId" value="vm-0001">
+            <button class="btn" id="btnNewVm" style="flex:0 0 auto" title="Следующий номер продажи">+1</button>
+          </div>
+        </label>
+        <div class="btns">
+          <button class="btn primary" id="btnOrder">Создать заказ</button>
+          <button class="btn" id="btnRetry" disabled title="Повтор с тем же vm_order_id — должен вернуть 200 и тот же QR">Ретрай</button>
+          <button class="btn" id="btnOrderStop" disabled>Стоп</button>
+        </div>
+
+        <div class="hr"></div>
+        <p class="sect">Действия клиента <span style="text-transform:none;letter-spacing:0">(только эмуляция)</span></p>
+        <div class="btns">
+          <button class="btn good" id="btnPay" disabled>Клиент оплатил</button>
+          <button class="btn" id="btnPayStale" disabled title="Оплата по уже закрытому QR — должна уйти в авто-возврат">Оплата по старому QR</button>
+        </div>
+
+        <div class="hr"></div>
+        <p class="sect">Поведение прошивки</p>
+        <label class="chk">
+          <input type="checkbox" id="optAutoConfirm" checked>
+          <span>Авто-confirm при <code>paid</code><small>Окно возврата короткое — прошивка обязана подтверждать сразу</small></span>
+        </label>
+        <label class="f" style="margin:8px 0 0 24px">
+          <span>задержка confirm, сек — проверка окна возврата</span>
+          <div class="row">
+            <input type="range" id="confirmDelay" min="0" max="90" value="0" step="1" style="padding:0">
+            <input type="text" id="confirmDelayView" value="0 с" readonly style="flex:0 0 62px; text-align:center">
+          </div>
+        </label>
+        <label class="chk" style="margin-top:10px">
+          <input type="checkbox" id="optAutoVend" checked>
+          <span>Авто-отчёт о выдаче после confirm</span>
+        </label>
+        <div class="btns" style="margin-top:8px">
+          <button class="btn good" id="btnVendOk" disabled>Товар выдан</button>
+          <button class="btn bad" id="btnVendFail" disabled>Сбой выдачи</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="card" id="faultCard">
+      <h2>Инжекция отказов <span class="tag">только эмуляция</span></h2>
+      <div class="body">
+        <label class="chk"><input type="checkbox" id="f429"><span>429 на опросе enrollment<small>Прошивка обязана ждать <code>Retry-After</code></small></span></label>
+        <label class="chk"><input type="checkbox" id="f503"><span>503 при создании заказа<small>Полный откат: заказа нет, повтор безопасен</small></span></label>
+        <label class="chk"><input type="checkbox" id="f401"><span>401 на следующем вызове с учёткой<small>Прошивка обязана остановиться, а не ретраить</small></span></label>
+        <label class="chk"><input type="checkbox" id="f403"><span>403 — аппарат заблокирован оператором</span></label>
+        <div class="hr"></div>
+        <div class="row">
+          <label class="f"><span>TTL enrollment, с</span><input type="number" id="ttlEnroll" value="120" min="5"></label>
+          <label class="f"><span>TTL заказа, с</span><input type="number" id="ttlOrder" value="90" min="5"></label>
+          <label class="f"><span>окно возврата, с</span><input type="number" id="ttlRefund" value="60" min="3"></label>
+        </div>
+        <div class="btns"><button class="btn bad wide" id="btnResetMock">Сбросить состояние эмулятора</button></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ======================= COLUMN 3 ======================= -->
+  <div class="col">
+    <div class="card">
+      <h2>Протокол HTTP
+        <span class="spacer"></span>
+        <button class="btn" id="btnCopyLog" style="padding:3px 9px; font-size:11px">Копировать</button>
+        <button class="btn" id="btnClearLog" style="padding:3px 9px; font-size:11px">Очистить</button>
+      </h2>
+      <div class="body tight logwrap"><div class="log" id="log"><div class="empty">Пока пусто</div></div></div>
+    </div>
+
+    <div class="card">
+      <h2>Чек-лист интеграции</h2>
+      <div class="body">
+        <ul class="cl" id="checklist"></ul>
+        <button class="btn wide" id="btnResetCl" style="margin-top:10px; font-size:12px">Сбросить чек-лист</button>
+      </div>
+    </div>
+  </div>
+</main>
+
+<script>
+/* ============================================================
+   QR-кодер (model 2, byte mode, самодостаточный, без CDN)
+   ============================================================ */
+const QR = (() => {
+  const ECB = [
+    [-1,7,10,15,20,26,18,20,24,30,18,20,24,26,30,22,24,28,30,28,28,28,28,30,30,26,28,30,30,30,30,30,30,30,30,30,30,30,30,30,30],
+    [-1,10,16,26,18,24,16,18,22,22,26,30,22,22,24,24,28,28,26,26,26,26,28,28,28,28,28,28,28,28,28,28,28,28,28,28,28,28,28,28,28],
+    [-1,13,22,18,26,18,24,18,22,20,24,28,26,24,20,30,24,28,28,26,30,28,30,30,30,30,28,30,30,30,30,30,30,30,30,30,30,30,30,30,30],
+    [-1,17,28,22,16,22,28,26,26,24,28,24,28,22,24,24,30,28,28,26,28,30,24,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30],
+  ];
+  const NB = [
+    [-1,1,1,1,1,1,2,2,2,2,4,4,4,4,4,6,6,6,6,7,8,8,9,9,10,12,12,12,13,14,15,16,17,18,19,19,20,21,22,24,25],
+    [-1,1,1,1,2,2,4,4,4,5,5,5,8,9,9,10,10,11,13,14,16,17,17,18,20,21,23,25,26,28,29,31,33,35,37,38,40,43,45,47,49],
+    [-1,1,1,2,2,4,4,6,6,8,8,8,10,12,16,12,17,16,18,21,20,23,23,25,27,29,34,34,35,38,40,43,45,48,51,53,56,59,62,65,68],
+    [-1,1,1,2,4,4,4,5,6,8,8,11,11,16,16,18,16,19,21,25,25,25,34,30,32,35,37,40,42,45,48,51,54,57,60,63,66,70,74,77,81],
+  ];
+  const FMT = [1,0,3,2];               // L, M, Q, H
+  const P1=3, P2=3, P3=40, P4=10;
+
+  const rawModules = v => {
+    let r = (16*v + 128)*v + 64;
+    if (v >= 2){
+      const n = Math.floor(v/7) + 2;
+      r -= (25*n - 10)*n - 55;
+      if (v >= 7) r -= 36;
+    }
+    return r;
+  };
+  const dataCodewords = (v,e) => Math.floor(rawModules(v)/8) - ECB[e][v]*NB[e][v];
+
+  const gmul = (x,y) => {                       // умножение в GF(256), poly 0x11D
+    let z = 0;
+    for (let i = 7; i >= 0; i--){
+      z = (z << 1) ^ ((z >>> 7) * 0x11D);
+      z ^= ((y >>> i) & 1) * x;
+    }
+    return z & 0xFF;
+  };
+  const rsDivisor = deg => {
+    const r = new Uint8Array(deg); r[deg-1] = 1;
+    let root = 1;
+    for (let i = 0; i < deg; i++){
+      for (let j = 0; j < deg; j++){
+        r[j] = gmul(r[j], root);
+        if (j+1 < deg) r[j] ^= r[j+1];
+      }
+      root = gmul(root, 2);
+    }
+    return r;
+  };
+  const rsRemainder = (data, div) => {
+    const r = new Uint8Array(div.length);
+    for (const b of data){
+      const f = b ^ r[0];
+      r.copyWithin(0,1); r[r.length-1] = 0;
+      for (let i = 0; i < r.length; i++) r[i] ^= gmul(div[i], f);
+    }
+    return r;
+  };
+  const alignPositions = v => {
+    if (v === 1) return [];
+    const n = Math.floor(v/7) + 2, size = v*4 + 17;
+    const step = (v === 32) ? 26 : Math.ceil((v*4 + 4)/(n*2 - 2))*2;
+    const out = [6];
+    for (let pos = size - 7; out.length < n; pos -= step) out.splice(1, 0, pos);
+    return out;
+  };
+  const bit = (x,i) => ((x >>> i) & 1) !== 0;
+
+  function encode(text, eccName){
+    const ecl = {L:0,M:1,Q:2,H:3}[eccName || 'M'];
+    const bytes = new TextEncoder().encode(text);
+
+    let ver = 0;
+    for (let v = 1; v <= 40; v++){
+      const cc = v <= 9 ? 8 : 16;
+      if (dataCodewords(v, ecl)*8 >= 4 + cc + bytes.length*8){ ver = v; break; }
+    }
+    if (!ver) throw new Error('QR: строка не помещается даже в версию 40');
+
+    // --- битовый поток ---
+    const bits = [];
+    const push = (val, len) => { for (let i = len-1; i >= 0; i--) bits.push((val >>> i) & 1); };
+    push(4, 4);                                   // режим: байты
+    push(bytes.length, ver <= 9 ? 8 : 16);
+    for (const b of bytes) push(b, 8);
+    const cap = dataCodewords(ver, ecl)*8;
+    push(0, Math.min(4, cap - bits.length));
+    push(0, (8 - bits.length % 8) % 8);
+    for (let pad = 0xEC; bits.length < cap; pad ^= 0xEC ^ 0x11) push(pad, 8);
+
+    const dat = [];
+    for (let i = 0; i < bits.length; i += 8){
+      let b = 0;
+      for (let j = 0; j < 8; j++) b = (b << 1) | bits[i+j];
+      dat.push(b);
+    }
+
+    // --- ECC + чередование блоков ---
+    const nBlocks = NB[ecl][ver], eccLen = ECB[ecl][ver];
+    const rawCw = Math.floor(rawModules(ver)/8);
+    const shortCount = nBlocks - rawCw % nBlocks;
+    const shortLen = Math.floor(rawCw / nBlocks);
+    const div = rsDivisor(eccLen);
+    const blocks = [];
+    for (let i = 0, k = 0; i < nBlocks; i++){
+      const len = shortLen - eccLen + (i < shortCount ? 0 : 1);
+      const d = dat.slice(k, k + len); k += len;
+      const blk = d.slice();
+      if (i < shortCount) blk.push(0);            // выравнивающий 0, пропускается при чередовании
+      blocks.push(blk.concat(Array.from(rsRemainder(d, div))));
+    }
+    const cw = [];
+    for (let i = 0; i < blocks[0].length; i++)
+      blocks.forEach((b, j) => { if (i !== shortLen - eccLen || j >= shortCount) cw.push(b[i]); });
+
+    // --- матрица ---
+    const size = ver*4 + 17;
+    const mod = Array.from({length:size}, () => new Array(size).fill(false));
+    const fn  = Array.from({length:size}, () => new Array(size).fill(false));
+    const set = (x,y,v) => { mod[y][x] = v; fn[y][x] = true; };
+
+    for (let i = 0; i < size; i++){ set(6, i, i % 2 === 0); set(i, 6, i % 2 === 0); }
+    const finder = (cx,cy) => {
+      for (let dy = -4; dy <= 4; dy++) for (let dx = -4; dx <= 4; dx++){
+        const d = Math.max(Math.abs(dx), Math.abs(dy)), x = cx+dx, y = cy+dy;
+        if (x >= 0 && x < size && y >= 0 && y < size) set(x, y, d !== 2 && d !== 4);
+      }
+    };
+    finder(3,3); finder(size-4,3); finder(3,size-4);
+    const ap = alignPositions(ver);
+    for (let i = 0; i < ap.length; i++) for (let j = 0; j < ap.length; j++){
+      if ((i===0&&j===0) || (i===0&&j===ap.length-1) || (i===ap.length-1&&j===0)) continue;
+      for (let dy = -2; dy <= 2; dy++) for (let dx = -2; dx <= 2; dx++)
+        set(ap[i]+dx, ap[j]+dy, Math.max(Math.abs(dx), Math.abs(dy)) !== 1);
+    }
+    const drawFormat = mask => {
+      const d = FMT[ecl] << 3 | mask;
+      let rem = d;
+      for (let i = 0; i < 10; i++) rem = (rem << 1) ^ ((rem >>> 9) * 0x537);
+      const b = ((d << 10) | rem) ^ 0x5412;
+      for (let i = 0; i <= 5; i++) set(8, i, bit(b,i));
+      set(8,7,bit(b,6)); set(8,8,bit(b,7)); set(7,8,bit(b,8));
+      for (let i = 9; i < 15; i++) set(14-i, 8, bit(b,i));
+      for (let i = 0; i < 8; i++) set(size-1-i, 8, bit(b,i));
+      for (let i = 8; i < 15; i++) set(8, size-15+i, bit(b,i));
+      set(8, size-8, true);
+    };
+    drawFormat(0);
+    if (ver >= 7){
+      let rem = ver;
+      for (let i = 0; i < 12; i++) rem = (rem << 1) ^ ((rem >>> 11) * 0x1F25);
+      const b = ver << 12 | rem;
+      for (let i = 0; i < 18; i++){
+        const v = bit(b,i), a = size-11 + i%3, c = Math.floor(i/3);
+        set(a,c,v); set(c,a,v);
+      }
+    }
+
+    // --- данные зигзагом ---
+    let idx = 0;
+    for (let right = size-1; right >= 1; right -= 2){
+      if (right === 6) right = 5;
+      for (let vert = 0; vert < size; vert++){
+        for (let j = 0; j < 2; j++){
+          const x = right - j;
+          const up = ((right + 1) & 2) === 0;
+          const y = up ? size-1-vert : vert;
+          if (!fn[y][x] && idx < cw.length*8){
+            mod[y][x] = bit(cw[idx >>> 3], 7 - (idx & 7));
+            idx++;
+          }
+        }
+      }
+    }
+
+    // --- маска: перебор всех восьми, выбор по штрафу ---
+    const maskFns = [
+      (x,y)=>(x+y)%2===0, (x,y)=>y%2===0, (x,y)=>x%3===0, (x,y)=>(x+y)%3===0,
+      (x,y)=>(Math.floor(x/3)+Math.floor(y/2))%2===0,
+      (x,y)=>(x*y)%2 + (x*y)%3 === 0,
+      (x,y)=>((x*y)%2 + (x*y)%3)%2===0,
+      (x,y)=>((x+y)%2 + (x*y)%3)%2===0,
+    ];
+    const applyMask = m => {
+      for (let y = 0; y < size; y++) for (let x = 0; x < size; x++)
+        if (!fn[y][x] && maskFns[m](x,y)) mod[y][x] = !mod[y][x];
+    };
+    const addHist = (run, h) => { if (h[0] === 0) run += size; h.pop(); h.unshift(run); };
+    const countPat = h => {
+      const n = h[1];
+      const core = n > 0 && h[2] === n && h[3] === n*3 && h[4] === n && h[5] === n;
+      return (core && h[0] >= n*4 && h[6] >= n ? 1 : 0) + (core && h[6] >= n*4 && h[0] >= n ? 1 : 0);
+    };
+    const penalty = () => {
+      let r = 0;
+      for (let y = 0; y < size; y++){
+        let col = false, run = 0, h = [0,0,0,0,0,0,0];
+        for (let x = 0; x < size; x++){
+          if (mod[y][x] === col){ run++; if (run === 5) r += P1; else if (run > 5) r++; }
+          else { addHist(run, h); if (!col) r += countPat(h)*P3; col = mod[y][x]; run = 1; }
+        }
+        if (col) { addHist(run, h); run = 0; }
+        addHist(run + size, h); r += countPat(h)*P3;
+      }
+      for (let x = 0; x < size; x++){
+        let col = false, run = 0, h = [0,0,0,0,0,0,0];
+        for (let y = 0; y < size; y++){
+          if (mod[y][x] === col){ run++; if (run === 5) r += P1; else if (run > 5) r++; }
+          else { addHist(run, h); if (!col) r += countPat(h)*P3; col = mod[y][x]; run = 1; }
+        }
+        if (col) { addHist(run, h); run = 0; }
+        addHist(run + size, h); r += countPat(h)*P3;
+      }
+      for (let y = 0; y < size-1; y++) for (let x = 0; x < size-1; x++){
+        const c = mod[y][x];
+        if (c === mod[y][x+1] && c === mod[y+1][x] && c === mod[y+1][x+1]) r += P2;
+      }
+      let dark = 0;
+      for (const row of mod) for (const c of row) if (c) dark++;
+      const total = size*size;
+      r += (Math.ceil(Math.abs(dark*20 - total*10)/total) - 1)*P4;
+      return r;
+    };
+
+    let best = -1, bestScore = Infinity;
+    for (let m = 0; m < 8; m++){
+      applyMask(m); drawFormat(m);
+      const s = penalty();
+      if (s < bestScore){ bestScore = s; best = m; }
+      applyMask(m);                                 // XOR обратим — снимаем маску
+    }
+    applyMask(best); drawFormat(best);
+    return { size, modules: mod };
+  }
+
+  function svg(text, opts){
+    const o = opts || {};
+    const { size, modules } = encode(text, o.ecc || 'M');
+    const q = o.quiet == null ? 3 : o.quiet;
+    const dim = size + q*2;
+    let d = '';
+    for (let y = 0; y < size; y++){
+      let x = 0;
+      while (x < size){
+        if (!modules[y][x]){ x++; continue; }
+        let w = 0;
+        while (x + w < size && modules[y][x+w]) w++;          // склеиваем горизонтальные серии
+        d += `M${x+q} ${y+q}h${w}v1h-${w}z`;
+        x += w;
+      }
+    }
+    return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${dim} ${dim}" shape-rendering="crispEdges">`
+         + `<rect width="${dim}" height="${dim}" fill="#fff"/><path d="${d}" fill="#000"/></svg>`;
+  }
+  return { svg, encode };
+})();
+
+/* ============================================================
+   Утилиты
+   ============================================================ */
+const $ = id => document.getElementById(id);
+const now = () => Date.now();
+const iso = ms => new Date(ms).toISOString().replace(/\.\d{3}Z$/, 'Z');
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+const rnd = (n, alpha) => {
+  const A = alpha || 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+  let s = '';
+  const buf = new Uint8Array(n);
+  crypto.getRandomValues(buf);
+  for (let i = 0; i < n; i++) s += A[buf[i] % A.length];
+  return s;
+};
+const secs = ms => Math.max(0, Math.ceil(ms/1000));
+const esc = s => String(s).replace(/[&<>]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
+
+/* ============================================================
+   Мок-бэкенд: реализует ровно тот контракт, что описан
+   в docs/DEVICE_INTEGRATION.md, включая побочные эффекты
+   ============================================================ */
+const Mock = {
+  enrollSeq: 0, deviceSeq: 1, orderSeq: 0,
+  enrollments: new Map(),   // id -> запись
+  devices: new Map(),       // id -> {secret, status, openOrderId}
+  orders: new Map(),        // id -> запись
+  lastPollAt: new Map(),
+
+  cfg(){
+    return {
+      ttlEnroll: +$('ttlEnroll').value || 120,
+      ttlOrder:  +$('ttlOrder').value  || 90,
+      ttlRefund: +$('ttlRefund').value || 60,
+    };
+  },
+  reset(){
+    this.enrollSeq = 0; this.deviceSeq = 1; this.orderSeq = 0;
+    this.enrollments.clear(); this.devices.clear(); this.orders.clear(); this.lastPollAt.clear();
+  },
+
+  /* фоновые таймеры бэкенда: истечение заказов и авто-возврат по окну подтверждения */
+  tick(){
+    const t = now(), c = this.cfg();
+    for (const o of this.orders.values()){
+      if (o.status === 'created' && t > o.expiresAt){
+        o.status = 'expired';
+        Bus.event('warn', `mock: заказ ${o.id} истёк (никто не оплатил)`);
+        if (Dev.order && Dev.order.id === o.id) Dev.onOrderDead('expired');
+      }
+      if (o.status === 'paid' && !o.confirmedAt && t > o.paidAt + c.ttlRefund*1000){
+        o.status = 'refunded'; o.refundReason = 'нет confirm в окне возврата';
+        Bus.event('err', `mock: заказ ${o.id} — АВТО-ВОЗВРАТ, confirm не пришёл за ${c.ttlRefund} с`);
+        if (Dev.order && Dev.order.id === o.id) Dev.onOrderDead('refunded');
+      }
+    }
+  },
+
+  /* --- имитация оплаты клиентом --- */
+  payOrder(id){
+    const o = this.orders.get(id);
+    if (!o) return;
+    if (o.status === 'created'){
+      o.status = 'paid'; o.paidAt = now();
+      Bus.event('ok', `mock: клиент оплатил заказ ${o.id} (${o.amount} ₸)`);
+    } else {
+      // Оплата по QR, который уже не действителен: деньги списаны и тут же возвращены.
+      o.strayPaid = true;
+      Bus.event('err', `mock: оплата по закрытому заказу ${o.id} (${o.status}) → списание и авто-возврат. Выдавать НЕЛЬЗЯ`);
+    }
+  },
+
+  auth(hdr){
+    const m = /^Bearer\s+([^:]+):(.+)$/.exec(hdr || '');
+    if (!m) return null;
+    return { id: m[1], secret: m[2] };
+  },
+
+  /* --- маршрутизация: возвращает {status, body, headers} --- */
+  async handle(method, path, body, headers){
+    this.tick();
+    const c = this.cfg();
+    const H = {};
+
+    // ---------- POST /device/enroll ----------
+    if (method === 'POST' && path === '/device/enroll'){
+      const id = 'enr_' + rnd(10, 'abcdefghijklmnopqrstuvwxyz0123456789');
+      const rec = {
+        id,
+        secret: rnd(32, 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789'),
+        code: rnd(4) + '-' + rnd(4),
+        expiresAt: now() + c.ttlEnroll*1000,
+        claimed: false,
+        manufacturer: (body && body.manufacturer) || null,
+        serial: (body && body.serial) || null,
+      };
+      rec.claimUrl = `https://panel.smartvend.kz/tenant/devices/claim?code=${rec.code}`;
+      this.enrollments.set(id, rec);
+      return { status: 201, headers: H, body: {
+        enrollment_id: rec.id,
+        enrollment_secret: rec.secret,
+        code: rec.code,
+        claim_url: rec.claimUrl,
+        expires_at: iso(rec.expiresAt),
+        poll_interval_seconds: 3,
+      }};
+    }
+
+    // ---------- GET /device/enroll/{id} ----------
+    let m = /^\/device\/enroll\/([^/]+)$/.exec(path);
+    if (method === 'GET' && m){
+      const rec = this.enrollments.get(m[1]);
+      const cred = this.auth(headers.Authorization);
+      if (!rec) return { status: 404, headers: H, body: { detail: 'unknown enrollment' } };
+      if (!cred || cred.id !== rec.id || cred.secret !== rec.secret)
+        return { status: 401, headers: H, body: { detail: 'invalid enrollment credentials' } };
+
+      if ($('f429').checked){
+        H['Retry-After'] = '5';
+        return { status: 429, headers: H, body: { detail: 'too many requests' } };
+      }
+      // Реальный сервер режет слишком частый опрос — эмулируем то же самое.
+      const last = this.lastPollAt.get(rec.id) || 0;
+      if (now() - last < 900){
+        H['Retry-After'] = '3';
+        return { status: 429, headers: H, body: { detail: 'polling too fast' } };
+      }
+      this.lastPollAt.set(rec.id, now());
+
+      if (!rec.claimed && now() > rec.expiresAt)
+        return { status: 410, headers: H, body: { detail: 'enrollment expired' } };
+      if (!rec.claimed)
+        return { status: 202, headers: H, body: { status: 'pending' } };
+
+      return { status: 200, headers: H, body: {
+        status: 'claimed',
+        device_id: rec.deviceId,
+        device_secret: rec.deviceSecret,
+        bearer: `${rec.deviceId}:${rec.deviceSecret}`,
+      }};
+    }
+
+    /* всё, что ниже, требует учётки устройства */
+    const cred = this.auth(headers.Authorization);
+    const dev = cred && this.devices.get(String(cred.id));
+    if ($('f401').checked){
+      $('f401').checked = false; syncFaultUi();
+      return { status: 401, headers: H, body: { detail: 'invalid device credentials' } };
+    }
+    if (!dev || dev.secret !== cred.secret)
+      return { status: 401, headers: H, body: { detail: 'invalid device credentials' } };
+    if ($('f403').checked || dev.status !== 'active')
+      return { status: 403, headers: H, body: { detail: 'device suspended' } };
+
+    // ---------- POST /device/orders ----------
+    if (method === 'POST' && path === '/device/orders'){
+      if ($('f503').checked){
+        H['Retry-After'] = '5';
+        return { status: 503, headers: H, body: { detail: 'payment provider unavailable' } };
+      }
+      if (!body || typeof body.price !== 'number' || body.price <= 0 || body.price % 1 !== 0)
+        return { status: 422, headers: H, body: { detail: 'price must be a positive integer amount of tenge' } };
+
+      const open = dev.openOrderId ? this.orders.get(dev.openOrderId) : null;
+      const alive = open && open.status === 'created' && now() <= open.expiresAt;
+      if (alive){
+        const sameByVm  = body.vm_order_id && open.vmOrderId === body.vm_order_id;
+        const sameByReq = !body.vm_order_id && !open.vmOrderId
+                          && open.amount === body.price && open.slot === (body.slot || null);
+        if (sameByVm || sameByReq){
+          // Идемпотентный повтор: тот же заказ, тот же QR, 200.
+          return { status: 200, headers: H, body: this.orderView(open) };
+        }
+        open.status = 'superseded';
+        Bus.event('warn', `mock: заказ ${open.id} вытеснен новым vm_order_id — его QR больше не действителен`);
+      }
+
+      const id = ++this.orderSeq;
+      const o = {
+        id,
+        account: `order-${id}`,
+        deviceId: dev.id,
+        amount: body.price,
+        slot: body.slot || null,
+        productName: body.product_name || null,
+        vmOrderId: body.vm_order_id || null,
+        status: 'created',
+        createdAt: now(),
+        expiresAt: now() + c.ttlOrder*1000,
+        qrPayload: `https://kaspi.kz/pay/Smartvend?service_id=4680&7363=order-${id}`,
+      };
+      this.orders.set(id, o);
+      dev.openOrderId = id;
+      return { status: 201, headers: H, body: this.orderView(o) };
+    }
+
+    // ---------- GET /device/orders/{id}/status ----------
+    m = /^\/device\/orders\/(\d+)\/status$/.exec(path);
+    if (method === 'GET' && m){
+      const o = this.orders.get(+m[1]);
+      if (!o || o.deviceId !== dev.id) return { status: 404, headers: H, body: { detail: 'unknown order' } };
+      return { status: 200, headers: H, body: this.orderView(o) };
+    }
+
+    // ---------- POST /device/orders/{id}/confirm ----------
+    m = /^\/device\/orders\/(\d+)\/confirm$/.exec(path);
+    if (method === 'POST' && m){
+      const o = this.orders.get(+m[1]);
+      if (!o || o.deviceId !== dev.id) return { status: 404, headers: H, body: { detail: 'unknown order' } };
+      if (o.status === 'confirmed') return { status: 200, headers: H, body: this.orderView(o) };
+      if (o.status !== 'paid')
+        return { status: 409, headers: H, body: { detail: `cannot confirm order in status ${o.status}`, order_status: o.status } };
+      o.status = 'confirmed'; o.confirmedAt = now();
+      if (body && typeof body.vend_status === 'boolean') o.vendStatus = body.vend_status;
+      if (dev.openOrderId === o.id) dev.openOrderId = null;
+      return { status: 200, headers: H, body: this.orderView(o) };
+    }
+
+    // ---------- POST /device/orders/{id}/vend ----------
+    m = /^\/device\/orders\/(\d+)\/vend$/.exec(path);
+    if (method === 'POST' && m){
+      const o = this.orders.get(+m[1]);
+      if (!o || o.deviceId !== dev.id) return { status: 404, headers: H, body: { detail: 'unknown order' } };
+      if (!body || typeof body.vend_status !== 'boolean')
+        return { status: 422, headers: H, body: { detail: 'vend_status must be boolean' } };
+      o.vendStatus = body.vend_status;
+      if (!body.vend_status){
+        o.status = 'refunded'; o.refundReason = 'сбой выдачи (политика оператора)';
+        Bus.event('warn', `mock: заказ ${o.id} — возврат из-за сбоя выдачи`);
+      }
+      return { status: 200, headers: H, body: this.orderView(o) };
+    }
+
+    return { status: 404, headers: H, body: { detail: 'not found' } };
+  },
+
+  orderView(o){
+    return {
+      id: o.id, account: o.account, status: o.status,
+      amount: o.amount, currency: 'KZT',
+      qr_payload: o.qrPayload, expires_at: iso(o.expiresAt),
+      ...(o.vendStatus != null ? { vend_status: o.vendStatus } : {}),
+      ...(o.refundReason ? { refund_reason: o.refundReason } : {}),
+    };
+  },
+
+  /* оператор в панели забирает аппарат себе */
+  claim(enrollmentId){
+    const rec = this.enrollments.get(enrollmentId);
+    if (!rec || rec.claimed) return false;
+    if (now() > rec.expiresAt){
+      Bus.event('err', 'mock: привязка невозможна — код уже истёк');
+      return false;
+    }
+    const id = String(++this.deviceSeq);
+    const secret = rnd(40, 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789');
+    this.devices.set(id, { id, secret, status: 'active', openOrderId: null });
+    rec.claimed = true; rec.deviceId = id; rec.deviceSecret = secret;
+    Bus.event('ok', `mock: оператор привязал аппарат по коду ${rec.code} → device_id=${id}`);
+    return true;
+  },
+};
+
+/* ============================================================
+   Транспорт: один и тот же клиентский код для мока и живого стенда
+   ============================================================ */
+const Net = {
+  mode: 'mock',
+  base(){ return $('baseUrl').value.replace(/\/+$/, ''); },
+
+  async call(method, path, opts){
+    const o = opts || {};
+    const url = this.base() + path;
+    const headers = { 'Content-Type': 'application/json' };
+    if (o.auth) headers.Authorization = 'Bearer ' + o.auth;
+    const t0 = performance.now();
+
+    let res;
+    try {
+      if (this.mode === 'mock'){
+        await sleep(60 + Math.random()*90);                 // правдоподобная сетевая задержка
+        const r = await Mock.handle(method, path, o.body || null, headers);
+        res = { status: r.status, body: r.body, headers: r.headers || {} };
+      } else {
+        const raw = await fetch(url, {
+          method,
+          headers,
+          body: o.body ? JSON.stringify(o.body) : undefined,
+          cache: 'no-store',
+        });
+        const txt = await raw.text();
+        let parsed = null;
+        try { parsed = txt ? JSON.parse(txt) : null; } catch { parsed = { _raw: txt }; }
+        const hs = {};
+        raw.headers.forEach((v, k) => { hs[k] = v; });
+        res = { status: raw.status, body: parsed, headers: hs };
+      }
+    } catch (e){
+      const ms = Math.round(performance.now() - t0);
+      Bus.http({ method, url, status: 0, ms, req: o.body, res: { error: String(e && e.message || e) } });
+      Bus.event('err', Net.mode === 'live'
+        ? 'Сеть недоступна. В живом режиме страницу нужно открывать через paygate_proxy.py — у paygate нет CORS.'
+        : 'Сбой транспорта: ' + e);
+      return { status: 0, body: null, headers: {}, netError: true };
+    }
+
+    const ms = Math.round(performance.now() - t0);
+    Bus.http({ method, url, status: res.status, ms, req: o.body, res: res.body, headers: res.headers });
+    return res;
+  },
+
+  retryAfter(res){
+    const h = res.headers || {};
+    const v = h['Retry-After'] || h['retry-after'];
+    const n = parseInt(v, 10);
+    return Number.isFinite(n) && n > 0 ? n : null;
+  },
+};
+
+/* ============================================================
+   Журнал, события, чек-лист
+   ============================================================ */
+const CHECKS = [
+  ['nvram',    'Учётка записана в НВ-память до всего остального'],
+  ['bothqr',   'На экране показаны и код, и QR'],
+  ['re410',    'На 410 открыт новый enrollment с новым кодом'],
+  ['confirm',  'confirm вызван сразу по paid — окно возврата короткое'],
+  ['qrraw',    'qr_payload отрисован как есть, не разбирается'],
+  ['retry',    'Retry-After соблюдён на 429 / 503'],
+  ['stop401',  '401 и 403 останавливают цикл, а не ретраятся'],
+  ['idem',     'Ретрай с тем же vm_order_id вернул 200 и тот же QR'],
+  ['supersede','После 201 старый QR снят с экрана'],
+  ['vend',     'Результат выдачи отправлен честно'],
+];
+const Bus = {
+  entries: [],
+  done: new Set(JSON.parse(localStorage.getItem('sv_emu_checks') || '[]')),
+
+  http(e){
+    this.entries.push({ kind:'http', ...e, at: now() });
+    this.render();
+  },
+  event(level, text){
+    this.entries.push({ kind:'ev', level, text, at: now() });
+    this.render();
+  },
+  tick(key){
+    if (this.done.has(key)) return;
+    this.done.add(key);
+    localStorage.setItem('sv_emu_checks', JSON.stringify([...this.done]));
+    this.renderChecks();
+  },
+  clear(){ this.entries = []; this.render(); },
+
+  render(){
+    const el = $('log');
+    if (!this.entries.length){ el.innerHTML = '<div class="empty">Пока пусто</div>'; return; }
+    const parts = [];
+    for (const e of this.entries.slice(-400)){
+      const t = new Date(e.at).toTimeString().slice(0,8);
+      if (e.kind === 'ev'){
+        parts.push(`<div class="ev ${e.level}">${t}  ${esc(e.text)}</div>`);
+        continue;
+      }
+      const cls = e.status === 0 ? 'sx' : 's' + String(e.status)[0];
+      const label = e.status === 0 ? 'ERR' : e.status;
+      const short = e.url.replace(/^https?:\/\/[^/]+/, '');
+      let bd = '';
+      if (e.req)  bd += `<div class="out">→ ${esc(JSON.stringify(e.req))}</div>`;
+      if (e.res != null) bd += `<div class="in">← ${esc(JSON.stringify(e.res))}</div>`;
+      const ra = e.headers && (e.headers['Retry-After'] || e.headers['retry-after']);
+      if (ra) bd += `<div class="k">Retry-After: ${esc(ra)}</div>`;
+      parts.push(
+        `<div class="entry"><div class="eh">`+
+        `<span class="t">${t}</span><span class="m">${e.method}</span>`+
+        `<span class="u">${esc(short)}</span>`+
+        `<span class="ms">${e.ms} мс</span><span class="st ${cls}">${label}</span></div>`+
+        (bd ? `<div class="ebody">${bd}</div>` : '') + `</div>`
+      );
+    }
+    el.innerHTML = parts.join('');
+    const wrap = el.parentElement;
+    wrap.scrollTop = wrap.scrollHeight;
+  },
+
+  renderChecks(){
+    $('checklist').innerHTML = CHECKS.map(([k, txt]) =>
+      `<li class="${this.done.has(k) ? 'done' : ''}"><span class="box">✓</span><span>${esc(txt)}</span></li>`
+    ).join('');
+  },
+
+  asText(){
+    return this.entries.map(e => {
+      const t = new Date(e.at).toISOString();
+      if (e.kind === 'ev') return `${t}  [${e.level}] ${e.text}`;
+      let s = `${t}  ${e.method} ${e.url} -> ${e.status || 'ERR'} (${e.ms} ms)`;
+      if (e.req) s += `\n   req: ${JSON.stringify(e.req)}`;
+      if (e.res != null) s += `\n   res: ${JSON.stringify(e.res)}`;
+      return s;
+    }).join('\n');
+  },
+};
+
+/* ============================================================
+   Прошивка: конечный автомат устройства
+   ============================================================ */
+const Dev = {
+  phase: 'idle',          // idle | enrolling | claimed | ordering | awaiting | paid | vending | dead
+  enrollment: null,
+  cred: null,
+  order: null,
+  enrollTimer: null,
+  orderTimer: null,
+  message: null,
+  confirmAt: null,
+
+  /* ---------- НВ-память ---------- */
+  nvKey(){ return 'sv_emu_nvram_' + Net.mode; },
+  loadCred(){
+    try { this.cred = JSON.parse(localStorage.getItem(this.nvKey()) || 'null'); }
+    catch { this.cred = null; }
+    this.renderCred();
+  },
+  saveCred(id, secret){
+    this.cred = { deviceId: String(id), deviceSecret: String(secret), at: iso(now()) };
+    localStorage.setItem(this.nvKey(), JSON.stringify(this.cred));
+    Bus.tick('nvram');
+    Bus.event('ok', `НВ-память: записана учётка device_id=${id}`);
+    this.renderCred();
+  },
+  wipeCred(){
+    localStorage.removeItem(this.nvKey());
+    this.cred = null;
+    Bus.event('warn', 'НВ-память стёрта. В реальной жизни так делать нельзя без явной отвязки оператором');
+    this.renderCred();
+  },
+  bearer(){ return this.cred ? `${this.cred.deviceId}:${this.cred.deviceSecret}` : null; },
+
+  /* ---------- Фаза 1 ---------- */
+  async startEnrollment(){
+    this.stopEnrollment();
+    this.set('enrolling', { message: null });
+    const res = await Net.call('POST', '/device/enroll', {
+      body: {
+        manufacturer: $('manuf').value || undefined,
+        serial: $('serial').value || undefined,
+      },
+    });
+    if (res.netError) { this.set('dead', { message: 'Нет связи с сервером' }); return; }
+
+    if (res.status === 429){
+      const ra = Net.retryAfter(res) || 5;
+      Bus.tick('retry');
+      Bus.event('warn', `429 на открытии enrollment — ждём ${ra} с по Retry-After`);
+      this.enrollTimer = setTimeout(() => this.startEnrollment(), ra*1000);
+      return;
+    }
+    if (res.status !== 200 && res.status !== 201){
+      const d = res.body && (res.body.detail || res.body.message);
+      this.set('dead', { message: `Enrollment недоступен: ${res.status}${d ? ' — ' + d : ''}` });
+      Bus.event('err', `Открыть enrollment не удалось: HTTP ${res.status}${d ? ' — ' + d : ''}`);
+      return;
+    }
+
+    const b = res.body;
+    this.enrollment = {
+      id: b.enrollment_id,
+      secret: b.enrollment_secret,
+      code: b.code,
+      claimUrl: b.claim_url,
+      expiresAt: Date.parse(b.expires_at),
+      interval: (b.poll_interval_seconds || 3)*1000,
+    };
+    Bus.tick('bothqr');                      // на экране рисуются и код, и QR
+    Bus.event('info', `Enrollment открыт: код ${b.code}, годен до ${b.expires_at}`);
+    this.render();
+    this.enrollTimer = setTimeout(() => this.pollEnrollment(), this.enrollment.interval);
+  },
+
+  async pollEnrollment(){
+    if (this.phase !== 'enrolling' || !this.enrollment) return;
+    const e = this.enrollment;
+    const res = await Net.call('GET', `/device/enroll/${encodeURIComponent(e.id)}`, {
+      auth: `${e.id}:${e.secret}`,
+    });
+    if (this.phase !== 'enrolling') return;
+
+    if (res.netError){
+      this.enrollTimer = setTimeout(() => this.pollEnrollment(), 3000);
+      return;
+    }
+    switch (res.status){
+      case 202:
+        this.enrollTimer = setTimeout(() => this.pollEnrollment(), e.interval);
+        return;
+
+      case 200: {
+        const b = res.body || {};
+        // Сначала запись в НВ — и только потом всё остальное.
+        this.saveCred(b.device_id, b.device_secret);
+        this.enrollment = null;
+        this.set('claimed', { message: null });
+        Bus.event('ok', 'Аппарат привязан, режим enrollment закрыт. Можно принимать оплату');
+        return;
+      }
+      case 410:
+        Bus.event('warn', '410 — срок кода истёк');
+        this.enrollment = null;
+        if ($('optReenroll').checked){
+          Bus.tick('re410');
+          Bus.event('info', 'Открываем новый enrollment с новым кодом');
+          this.startEnrollment();
+        } else {
+          this.set('dead', { message: 'Код истёк. Нужен новый enrollment' });
+        }
+        return;
+
+      case 429: {
+        const ra = Net.retryAfter(res) || 3;
+        Bus.tick('retry');
+        Bus.event('warn', `429 на опросе — пауза ${ra} с по Retry-After`);
+        this.enrollTimer = setTimeout(() => this.pollEnrollment(), ra*1000);
+        return;
+      }
+      case 401:
+        Bus.tick('stop401');
+        Bus.event('err', '401 на опросе enrollment — это баг в заголовке. Цикл остановлен');
+        this.set('dead', { message: '401: неверные данные enrollment' });
+        return;
+
+      default:
+        Bus.event('err', `Неожиданный статус на опросе enrollment: ${res.status}. Останов`);
+        this.set('dead', { message: `Неожиданный статус ${res.status}` });
+        return;
+    }
+  },
+
+  stopEnrollment(){
+    clearTimeout(this.enrollTimer); this.enrollTimer = null;
+  },
+
+  /* ---------- Фаза 2 ---------- */
+  async createOrder(reuseVm){
+    if (!this.cred){
+      Bus.event('err', 'Учётки нет — сначала привяжите аппарат или введите device_id/secret вручную');
+      return;
+    }
+    this.stopOrder();
+    const vm = $('vmOrderId').value.trim();
+    const body = { price: parseInt($('price').value, 10) };
+    if ($('slot').value.trim())  body.slot = $('slot').value.trim();
+    if ($('pname').value.trim()) body.product_name = $('pname').value.trim();
+    if (vm) body.vm_order_id = vm;
+
+    const prevPayload = this.order && this.order.qrPayload;
+    this.set('ordering', { message: null });
+
+    const res = await Net.call('POST', '/device/orders', { body, auth: this.bearer() });
+    if (res.netError){ this.set('dead', { message: 'Нет связи с сервером' }); return; }
+
+    if (res.status === 503){
+      const ra = Net.retryAfter(res) || 5;
+      Bus.tick('retry');
+      Bus.event('warn', `503 — провайдер недоступен. Заказ НЕ создан, откат полный. Повтор через ${ra} с`);
+      this.set('dead', { message: `Платёжный шлюз недоступен. Повтор через ${ra} с` });
+      this.orderTimer = setTimeout(() => this.createOrder(reuseVm), ra*1000);
+      return;
+    }
+    if (res.status === 429){
+      const ra = Net.retryAfter(res) || 5;
+      Bus.tick('retry');
+      this.orderTimer = setTimeout(() => this.createOrder(reuseVm), ra*1000);
+      return;
+    }
+    if (res.status === 401 || res.status === 403){
+      Bus.tick('stop401');
+      Bus.event('err', `${res.status} — останов без ретрая. ${res.status === 403 ? 'Аппарат заблокирован оператором' : 'Учётка неверна'}`);
+      this.set('dead', { message: res.status === 403 ? 'Аппарат заблокирован. Обратитесь к оператору' : 'Учётные данные отвергнуты' });
+      return;
+    }
+    if (res.status !== 200 && res.status !== 201){
+      const d = res.body && (res.body.detail || res.body.message);
+      Bus.event('err', `Создать заказ не удалось: ${res.status}${d ? ' — ' + d : ''}`);
+      this.set('dead', { message: `Ошибка ${res.status}${d ? ': ' + d : ''}` });
+      return;
+    }
+
+    const b = res.body;
+    if (res.status === 200 && prevPayload && b.qr_payload === prevPayload){
+      Bus.tick('idem');
+      Bus.event('ok', '200 + тот же qr_payload — идемпотентный повтор отработал верно');
+    }
+    if (res.status === 201 && prevPayload && b.qr_payload !== prevPayload){
+      Bus.tick('supersede');
+      Bus.event('warn', '201 — прежний QR снят с экрана: его заказ уже не станет paid');
+    }
+
+    this.order = {
+      id: b.id, account: b.account, amount: b.amount, currency: b.currency || 'KZT',
+      qrPayload: b.qr_payload, expiresAt: Date.parse(b.expires_at), status: b.status,
+      productName: body.product_name || $('pname').value, slot: body.slot || null,
+    };
+    Bus.tick('qrraw');                        // рисуем payload как непрозрачную строку
+    this.set('awaiting', { message: null });
+    Bus.event('info', `Заказ ${b.id} (${res.status}) на ${b.amount} ₸, QR на экране`);
+    this.orderTimer = setTimeout(() => this.pollOrder(), 2000);
+  },
+
+  async pollOrder(){
+    if (!this.order || !['awaiting','paid','vending'].includes(this.phase)) return;
+    const id = this.order.id;
+    const res = await Net.call('GET', `/device/orders/${id}/status`, { auth: this.bearer() });
+    if (!this.order || this.order.id !== id) return;
+
+    if (res.netError){ this.orderTimer = setTimeout(() => this.pollOrder(), 3000); return; }
+    if (res.status === 401 || res.status === 403){
+      Bus.tick('stop401');
+      Bus.event('err', `${res.status} на опросе заказа — останов`);
+      this.set('dead', { message: `Доступ отклонён (${res.status})` });
+      return;
+    }
+    if (res.status === 429){
+      const ra = Net.retryAfter(res) || 3;
+      Bus.tick('retry');
+      this.orderTimer = setTimeout(() => this.pollOrder(), ra*1000);
+      return;
+    }
+    if (res.status !== 200){
+      this.orderTimer = setTimeout(() => this.pollOrder(), 3000);
+      return;
+    }
+
+    const st = res.body && res.body.status;
+    const was = this.order.status;
+    this.order.status = st;
+
+    if (st === 'paid' && was !== 'paid'){
+      Bus.event('ok', `Заказ ${id}: ОПЛАЧЕН. QR убран с экрана`);
+      this.set('paid', { message: null });
+      if ($('optAutoConfirm').checked){
+        const d = +$('confirmDelay').value;
+        if (d > 0) Bus.event('warn', `Умышленная задержка confirm на ${d} с — проверяем окно возврата`);
+        this.confirmAt = now() + d*1000;
+        this.orderTimer = setTimeout(() => this.confirmOrder(), d*1000);
+        return;
+      }
+      Bus.event('warn', 'Авто-confirm выключен — подтвердите вручную, иначе будет возврат');
+    }
+    if (st === 'expired' || st === 'refunded' || st === 'superseded'){
+      this.onOrderDead(st);
+      return;
+    }
+    if (st === 'confirmed' && this.phase !== 'vending') this.set('vending', {});
+
+    this.orderTimer = setTimeout(() => this.pollOrder(), 2000);
+  },
+
+  async confirmOrder(){
+    if (!this.order) return;
+    this.confirmAt = null;
+    const id = this.order.id;
+    const res = await Net.call('POST', `/device/orders/${id}/confirm`, {
+      body: {}, auth: this.bearer(),
+    });
+    if (res.netError){ this.orderTimer = setTimeout(() => this.confirmOrder(), 2000); return; }
+
+    if (res.status === 200){
+      Bus.tick('confirm');
+      this.order.status = 'confirmed';
+      Bus.event('ok', `Заказ ${id}: confirm принят — деньги остаются у оператора`);
+      this.set('vending', { message: null });
+      if ($('optAutoVend').checked) setTimeout(() => this.reportVend(true), 900);
+      else this.orderTimer = setTimeout(() => this.pollOrder(), 2000);
+      return;
+    }
+    if (res.status === 409){
+      const d = res.body && (res.body.detail || res.body.order_status);
+      Bus.event('err', `409 на confirm: ${d || 'состояние заказа изменилось'}. Не ретраим вслепую, читаем тело`);
+      this.onOrderDead('refunded');
+      return;
+    }
+    Bus.event('err', `confirm не прошёл: HTTP ${res.status}`);
+    this.set('dead', { message: `confirm не прошёл (${res.status})` });
+  },
+
+  async reportVend(ok){
+    if (!this.order) return;
+    const id = this.order.id;
+    const res = await Net.call('POST', `/device/orders/${id}/vend`, {
+      body: { vend_status: !!ok }, auth: this.bearer(),
+    });
+    if (res.status === 200){
+      Bus.tick('vend');
+      Bus.event(ok ? 'ok' : 'warn', `Заказ ${id}: выдача ${ok ? 'успешна' : 'НЕ удалась — сообщено честно'}`);
+      this.set(ok ? 'done' : 'dead', {
+        message: ok ? null : 'Товар не выдан. Возврат — по политике оператора',
+      });
+      this.stopOrder();
+      if (ok) setTimeout(() => { if (this.phase === 'done'){ this.order = null; this.set('claimed', {}); } }, 4000);
+    } else {
+      Bus.event('err', `Отчёт о выдаче не принят: HTTP ${res.status}`);
+    }
+  },
+
+  onOrderDead(status){
+    this.stopOrder();
+    const txt = {
+      expired:    'Никто не оплатил вовремя',
+      refunded:   'Возврат. Выдавать нельзя',
+      superseded: 'QR вытеснен новым заказом',
+    }[status] || status;
+    Bus.event('err', `Заказ ${this.order ? this.order.id : '?'}: ${status} — ${txt}`);
+    this.set('dead', { message: txt });
+  },
+
+  stopOrder(){ clearTimeout(this.orderTimer); this.orderTimer = null; this.confirmAt = null; },
+
+  set(phase, extra){
+    this.phase = phase;
+    if (extra && 'message' in extra) this.message = extra.message;
+    this.render();
+  },
+
+  /* ---------- отрисовка ---------- */
+  renderCred(){
+    const c = this.cred;
+    $('credView').innerHTML = c
+      ? `<dt>device_id</dt><dd>${esc(c.deviceId)}</dd>`
+      + `<dt>secret</dt><dd>${esc(c.deviceSecret)}</dd>`
+      + `<dt>записана</dt><dd>${esc(c.at || '—')}</dd>`
+      : `<dt>состояние</dt><dd style="color:var(--warn)">пусто — аппарат не привязан</dd>`;
+  },
+
+  render(){
+    $('phaseTag').textContent = this.phase;
+    const s = $('screen');
+    const t = now();
+    let html = '';
+
+    if (this.phase === 'idle'){
+      html = `<div class="glyph">🥤</div><div class="big">Готов к работе</div>
+              <div class="sub">Аппарат ${this.cred ? 'привязан — выберите товар и создайте заказ' : 'не привязан. Начните enrollment'}</div>`;
+    }
+    else if (this.phase === 'enrolling'){
+      if (!this.enrollment){
+        html = `<div class="spin"></div><div class="sub">Открываем enrollment…</div>`;
+      } else {
+        const left = secs(this.enrollment.expiresAt - t);
+        html = `<div class="kicker">Привязка аппарата</div>
+          <div class="qr">${QR.svg(this.enrollment.claimUrl, {ecc:'M'})}</div>
+          <div class="code">${esc(this.enrollment.code)}</div>
+          <div class="sub">Отсканируйте QR или введите код в панели оператора</div>
+          <div class="countdown ${left < 20 ? 'late' : ''}">код действует ещё ${left} с</div>`;
+      }
+    }
+    else if (this.phase === 'claimed'){
+      html = `<div class="glyph">✅</div><div class="big">Аппарат привязан</div>
+              <div class="badge b-ok">device_id ${esc(this.cred ? this.cred.deviceId : '?')}</div>
+              <div class="sub">Учётка в НВ-памяти. Можно принимать оплату</div>`;
+    }
+    else if (this.phase === 'ordering'){
+      html = `<div class="spin"></div><div class="sub">Формируем платёж…</div>`;
+    }
+    else if (this.phase === 'awaiting' && this.order){
+      const left = secs(this.order.expiresAt - t);
+      html = `<div class="kicker">${esc(this.order.productName || 'Оплата')}${this.order.slot ? ' · ' + esc(this.order.slot) : ''}</div>
+        <div class="price">${this.order.amount} ₸</div>
+        <div class="qr">${QR.svg(this.order.qrPayload, {ecc:'M'})}</div>
+        <div class="sub">Отсканируйте QR в приложении Kaspi</div>
+        <div class="payload">${esc(this.order.qrPayload)}</div>
+        <div class="countdown ${left < 20 ? 'late' : ''}">QR действует ещё ${left} с</div>`;
+    }
+    else if (this.phase === 'paid'){
+      const waiting = this.confirmAt ? secs(this.confirmAt - t) : 0;
+      html = `<div class="glyph">💚</div><div class="big">Оплачено</div>
+        <div class="badge b-ok">${this.order ? this.order.amount : ''} ₸ получены</div>
+        ${waiting ? `<div class="countdown late">confirm через ${waiting} с — окно возврата тикает</div>`
+                  : `<div class="sub">Подтверждаем получение…</div>`}`;
+    }
+    else if (this.phase === 'vending'){
+      html = `<div class="glyph">📦</div><div class="big">Выдача товара</div>
+              <div class="sub">Подтверждение принято, деньги остаются у оператора</div>`;
+    }
+    else if (this.phase === 'done'){
+      html = `<div class="glyph">🎉</div><div class="big">Спасибо!</div>
+              <div class="badge b-ok">продажа завершена</div>`;
+    }
+    else if (this.phase === 'dead'){
+      html = `<div class="glyph">⚠️</div><div class="big">Не удалось</div>
+              <div class="badge b-err">${esc(this.message || 'ошибка')}</div>
+              <div class="sub">Смотрите протокол справа</div>`;
+    }
+    s.innerHTML = html;
+    syncButtons();
+  },
+};
+
+/* ============================================================
+   Привязка UI
+   ============================================================ */
+function syncButtons(){
+  const mock = Net.mode === 'mock';
+  const enrolling = Dev.phase === 'enrolling';
+  $('btnEnroll').disabled     = enrolling;
+  $('btnEnrollStop').disabled = !enrolling;
+  $('btnClaim').disabled      = !(mock && enrolling && Dev.enrollment);
+
+  const hasCred = !!Dev.cred;
+  const busy = ['ordering','awaiting','paid','vending'].includes(Dev.phase);
+  $('btnOrder').disabled     = !hasCred || Dev.phase === 'ordering';
+  $('btnRetry').disabled     = !hasCred || Dev.phase !== 'awaiting';
+  $('btnOrderStop').disabled = !busy;
+  $('btnPay').disabled       = !(mock && Dev.phase === 'awaiting' && Dev.order);
+  $('btnPayStale').disabled  = !(mock && Mock.orders.size > 0);
+  const canVend = hasCred && Dev.order && ['vending','paid'].includes(Dev.phase);
+  $('btnVendOk').disabled   = !canVend;
+  $('btnVendFail').disabled = !canVend;
+}
+function syncFaultUi(){
+  const mock = Net.mode === 'mock';
+  $('faultCard').style.opacity = mock ? '1' : '.45';
+  $('faultCard').querySelectorAll('input,button').forEach(el => { el.disabled = !mock; });
+}
+function setMode(mode){
+  if (mode === Net.mode) return;
+  Dev.stopEnrollment(); Dev.stopOrder();
+  Net.mode = mode;
+  Dev.enrollment = null; Dev.order = null;
+  document.querySelectorAll('#modeSeg button').forEach(b => b.classList.toggle('on', b.dataset.mode === mode));
+  $('netPill').textContent = mode === 'mock' ? 'режим: эмуляция' : 'режим: живой стенд';
+  $('netPill').className = 'pill ' + (mode === 'mock' ? '' : 'ok');
+  $('baseUrl').value = mode === 'mock' ? '/api/v1' : '/api/v1';
+  Dev.loadCred();
+  Dev.set(Dev.cred ? 'claimed' : 'idle', { message: null });
+  syncFaultUi();
+  Bus.event('info', mode === 'mock'
+    ? 'Эмуляция: весь бэкенд внутри страницы, сеть не используется'
+    : 'Живой стенд: запросы уходят на реальный paygate через прокси. Оплата настоящая');
+}
+
+document.querySelectorAll('#modeSeg button').forEach(b =>
+  b.addEventListener('click', () => setMode(b.dataset.mode)));
+
+$('btnEnroll').addEventListener('click', () => Dev.startEnrollment());
+$('btnEnrollStop').addEventListener('click', () => {
+  Dev.stopEnrollment(); Dev.enrollment = null;
+  Dev.set(Dev.cred ? 'claimed' : 'idle', { message: null });
+  Bus.event('warn', 'Enrollment остановлен вручную');
+});
+$('btnClaim').addEventListener('click', () => {
+  if (Dev.enrollment) Mock.claim(Dev.enrollment.id);
+});
+
+$('btnSaveCred').addEventListener('click', () => {
+  const id = $('manId').value.trim(), sec = $('manSecret').value.trim();
+  if (!id || !sec){ Bus.event('err', 'Нужны и device_id, и device_secret'); return; }
+  Dev.saveCred(id, sec);
+  if (Net.mode === 'mock' && !Mock.devices.has(id))
+    Mock.devices.set(id, { id, secret: sec, status: 'active', openOrderId: null });
+  Dev.set('claimed', { message: null });
+});
+$('btnWipe').addEventListener('click', () => {
+  Dev.stopOrder(); Dev.order = null;
+  Dev.wipeCred(); Dev.set('idle', { message: null });
+});
+
+$('btnOrder').addEventListener('click', () => Dev.createOrder(false));
+$('btnRetry').addEventListener('click', () => {
+  Bus.event('info', 'Повтор создания заказа с тем же vm_order_id — ждём 200 и прежний QR');
+  Dev.createOrder(true);
+});
+$('btnOrderStop').addEventListener('click', () => {
+  Dev.stopOrder(); Dev.order = null;
+  Dev.set('claimed', { message: null });
+  Bus.event('warn', 'Цикл оплаты остановлен вручную');
+});
+$('btnNewVm').addEventListener('click', () => {
+  const m = /^(.*?)(\d+)$/.exec($('vmOrderId').value.trim());
+  $('vmOrderId').value = m
+    ? m[1] + String(+m[2] + 1).padStart(m[2].length, '0')
+    : 'vm-' + String(now()).slice(-6);
+});
+$('btnPay').addEventListener('click', () => { if (Dev.order) Mock.payOrder(Dev.order.id); });
+$('btnPayStale').addEventListener('click', () => {
+  const dead = [...Mock.orders.values()].filter(o => o.status !== 'created');
+  const target = dead[dead.length - 1] || [...Mock.orders.values()][0];
+  if (target) Mock.payOrder(target.id);
+  else Bus.event('warn', 'Нет ни одного закрытого заказа — сначала создайте новый заказ поверх открытого');
+});
+$('btnVendOk').addEventListener('click', () => Dev.reportVend(true));
+$('btnVendFail').addEventListener('click', () => Dev.reportVend(false));
+
+$('confirmDelay').addEventListener('input', e => { $('confirmDelayView').value = e.target.value + ' с'; });
+$('btnResetMock').addEventListener('click', () => {
+  Dev.stopEnrollment(); Dev.stopOrder();
+  Mock.reset();
+  Dev.enrollment = null; Dev.order = null;
+  Bus.event('warn', 'Состояние эмулятора сброшено (учётка в НВ-памяти сохранена)');
+  Dev.set(Dev.cred ? 'claimed' : 'idle', { message: null });
+});
+$('btnClearLog').addEventListener('click', () => Bus.clear());
+$('btnCopyLog').addEventListener('click', async () => {
+  try { await navigator.clipboard.writeText(Bus.asText()); Bus.event('ok', 'Протокол скопирован'); }
+  catch { Bus.event('err', 'Буфер обмена недоступен'); }
+});
+$('btnResetCl').addEventListener('click', () => {
+  Bus.done.clear(); localStorage.removeItem('sv_emu_checks'); Bus.renderChecks();
+});
+document.querySelectorAll('#faultCard input[type=checkbox]').forEach(el =>
+  el.addEventListener('change', () => {
+    // берём только заголовок пункта, без пояснения в <small>
+    const span = el.parentElement.querySelector('span');
+    const title = span ? (span.firstChild.textContent || '').trim() : '';
+    Bus.event('warn', `Инжекция отказа ${el.checked ? 'включена' : 'выключена'}: ${title}`);
+  }));
+
+/* тикер: обратные отсчёты на экране и фоновые таймеры мока */
+setInterval(() => {
+  if (Net.mode === 'mock') Mock.tick();
+  if (['enrolling','awaiting','paid'].includes(Dev.phase)) Dev.render();
+}, 1000);
+
+/* старт */
+Bus.renderChecks();
+Bus.render();
+syncFaultUi();
+Dev.loadCred();
+Dev.set(Dev.cred ? 'claimed' : 'idle', {});
+Bus.event('info', 'Эмулятор загружен. Режим «Эмуляция» работает офлайн, сеть не нужна');
+</script>
+</body>
+</html>
