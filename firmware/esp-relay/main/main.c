@@ -719,9 +719,15 @@ static int  g_pend_opensec    = DEFAULT_OPEN_SECONDS;
 
 static void gsm_provision_task(void *pv) {
     xEventGroupClearBits(s_wifi_eg, WIFI_CONNECTED_BIT);
-    // Bring the modem up with the radio quiet (like the cloudcore firmware): the
-    // wait-page is already delivered, so we can drop the SoftAP now. This also
-    // rules out any Wi-Fi/modem contention during PPP negotiation.
+    // Let the "settings accepted" page actually land and be read before the AP
+    // goes away. Handing the response to lwIP is not the same as it reaching the
+    // phone, so tearing WiFi down right away could kill the reply mid-flight —
+    // which is why the captive window just vanished with no message. The phone
+    // will still close that window once the AP is gone; a few seconds is enough
+    // to see what happened, and it is nothing next to the 30-60 s modem bring-up.
+    vTaskDelay(pdMS_TO_TICKS(5000));
+    // Bring the modem up with the radio quiet (like the cloudcore firmware).
+    // This also rules out any Wi-Fi/modem contention during PPP negotiation.
     esp_wifi_stop();
     if (!gsm_start() || !net_wait_ip(60000)) {
         ESP_LOGE(TAG, "[Setup/GSM] modem/IP failed — rebooting to portal");
@@ -947,15 +953,21 @@ static const char PAGE_HEAD[] =
     ".net{display:flex;align-items:center;gap:12px;padding:12px 14px;border:1px solid #334155;border-radius:10px;background:#1e293b;cursor:pointer}"
     ".net input{display:none}"
     ".net:has(:checked){border-color:#F14635;background:#3a2020}"
+    // Baseline selection feedback: :has() is recent (Chrome 105 / Safari 15.4),
+    // and with the radio itself hidden an older phone would show nothing at all.
+    ".net input:checked~.nm{color:#F14635;font-weight:600}"
     ".net .nm{flex:1;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;font-size:15px}"
-    ".bars{display:flex;align-items:flex-end;gap:2px;height:16px}"
-    ".bars i{width:4px;border-radius:1px;background:#475569}"
-    ".bars i.on{background:#22c55e}"
-    ".bars i:nth-child(1){height:6px}.bars i:nth-child(2){height:10px}"
-    ".bars i:nth-child(3){height:13px}.bars i:nth-child(4){height:16px}"
+    // Signal strength as block characters instead of four positioned <i> bars:
+    // same read at a glance, one element per row instead of five.
+    ".net i{font-style:normal;letter-spacing:1px;color:#22c55e}"
     "button{width:100%;margin-top:22px;padding:14px;border:none;border-radius:10px;background:#F14635;color:#fff;font-size:16px;font-weight:600}"
+    "button[disabled]{background:#6b2b23;color:#cbd5e1}"
+    ".sp{display:inline-block;width:15px;height:15px;margin-right:9px;vertical-align:-3px;"
+    "border:2px solid rgba(255,255,255,.35);border-top-color:#fff;border-radius:50%;animation:spin .8s linear infinite}"
+    "@keyframes spin{to{transform:rotate(360deg)}}"
+    "#hint{margin:14px 0 0;font-size:13px;line-height:1.45;color:#94a3b8;text-align:center}"
     "</style></head><body><h2>SmartVend — настройка</h2>"
-    "<form method=POST action=/save>"
+    "<form id=f method=POST action=/save>"
     "<span class=lbl>Способ связи</span><div id=modes>"
     "<label class=net><input type=radio name=netmode value=wifi onclick=selMode()><span class=nm>WiFi</span></label>"
     "<label class=net><input type=radio name=netmode value=gsm checked onclick=selMode()><span class=nm>GSM (SIM / LTE)</span></label>"
@@ -977,45 +989,97 @@ static const char PAGE_TAIL_MID[] =
     "<span class=lbl>Время включения реле, сек</span>"
     "<input name=opensec type=number min=1 max=600 inputmode=numeric value='";
 static const char PAGE_TAIL_B[] =
-    "'><button type=submit>Сохранить и подключить</button></form>"
+    "'><button id=sb type=submit>Сохранить и подключить</button>"
+    "<p id=hint hidden></p></form>"
     "<script>function selMode(){var g=document.querySelector('input[name=netmode]:checked').value=='gsm';"
     "document.getElementById('wifiblk').style.display=g?'none':'';"
     "document.getElementById('gsmblk').style.display=g?'':'none';"
     "document.querySelectorAll('#nets input').forEach(function(x){x.required=!g});}"
-    "selMode();</script>"
-    "</body></html>";
+    "selMode();"
+    // Local feedback the moment the form is submitted — it needs no network, so
+    // it shows up even though the board is about to get busy. Without it the
+    // operator stares at an unchanged form: the WiFi path holds the request for
+    // 20-40 s while it joins and looks the machine up, and the GSM path takes the
+    // SoftAP down. Flipping the button from inside the submit handler can cancel
+    // the submission in some browsers, hence the setTimeout.
+    "document.getElementById('f').addEventListener('submit',function(){setTimeout(function(){"
+    "var b=document.getElementById('sb'),h=document.getElementById('hint');"
+    "b.disabled=true;b.innerHTML='<span class=sp></span>Сохраняем…';"
+    "h.textContent=document.querySelector('input[name=netmode]:checked').value=='gsm'"
+    "?'Аппарат применяет настройки и поднимает модем — 30-60 секунд, затем перезагрузится сам.'"
+    ":'Подключаемся к WiFi и записываем настройки, это может занять до минуты.';"
+    "h.hidden=false},0)});"
+    "</script></body></html>";
+
+// ---- cached network list ----
+// The scan is by far the most expensive thing the portal does: it blocks for
+// seconds and makes the SoftAP hop channels, which is what stalls (and sometimes
+// drops) the phone. The captive flow hits "/" several times — the OS probe, the
+// sheet itself, every "Назад" — so the rendered rows are cached and only
+// re-scanned once the list is stale. Freed never: the portal ends in a reboot.
+#define SCAN_MAX_APS 16
+#define SCAN_TTL_MS  60000
+
+static char       *s_scan_rows = NULL;   // pre-rendered <label> rows, or NULL
+static TickType_t  s_scan_at   = 0;
+
+static void scan_refresh(void) {
+    TickType_t now = xTaskGetTickCount();
+    if (s_scan_rows && (now - s_scan_at) < pdMS_TO_TICKS(SCAN_TTL_MS)) return;
+
+    // Default dwell (120 ms per channel) is left alone on purpose: at ~14
+    // channels that is under two seconds, and trimming it only risks missing a
+    // network on a quiet channel. The saving comes from not scanning at all.
+    wifi_scan_config_t sc = { .show_hidden = false };
+    if (esp_wifi_scan_start(&sc, true) != ESP_OK) return;   // keep the old list
+
+    uint16_t n = 0;
+    esp_wifi_scan_get_ap_num(&n);
+    if (n > SCAN_MAX_APS) n = SCAN_MAX_APS;
+    wifi_ap_record_t recs[SCAN_MAX_APS];
+    uint16_t got = n;
+    if (got == 0 || esp_wifi_scan_get_ap_records(&got, recs) != ESP_OK) return;
+
+    size_t cap = (size_t)got * 192 + 1;
+    char *buf = malloc(cap);
+    if (!buf) { ESP_LOGW(TAG, "[Setup] no heap for the network list"); return; }
+
+    size_t len = 0;
+    for (uint16_t i = 0; i < got; i++) {
+        const char *ssid = (const char *)recs[i].ssid;
+        if (ssid[0] == 0) continue;
+        // A quote or angle bracket in an SSID would break out of the attribute
+        // and mangle the rest of the page; such names are vanishingly rare.
+        if (strpbrk(ssid, "\"<")) { ESP_LOGW(TAG, "[Setup] skipping SSID with markup chars"); continue; }
+        bool dup = false;                      // mesh/repeater APs repeat the name
+        for (uint16_t j = 0; j < i && !dup; j++)
+            dup = strcmp((const char *)recs[j].ssid, ssid) == 0;
+        if (dup) continue;
+
+        int r = recs[i].rssi;
+        const char *bars = r >= -55 ? "▂▄▆█" : r >= -65 ? "▂▄▆" : r >= -72 ? "▂▄" : "▂";
+        int w = snprintf(buf + len, cap - len,
+                         "<label class=net><input type=radio name=ssid value=\"%s\" required>"
+                         "<span class=nm>%s</span><i>%s</i></label>",
+                         ssid, ssid, bars);
+        if (w < 0 || (size_t)w >= cap - len) break;   // out of room
+        len += w;
+    }
+    buf[len] = 0;
+    free(s_scan_rows);
+    s_scan_rows = buf;
+    s_scan_at = now;
+    ESP_LOGI(TAG, "[Setup] network list rebuilt: %u AP(s), %u B", got, (unsigned)len);
+}
 
 static esp_err_t root_get_handler(httpd_req_t *req) {
     httpd_resp_set_type(req, "text/html; charset=utf-8");
     httpd_resp_sendstr_chunk(req, PAGE_HEAD);
 
-    // Scan nearby networks (returned strongest-first) and render each as a
-    // selectable row with 4 signal bars filled by RSSI.
-    wifi_scan_config_t sc = { .show_hidden = false };
-    if (esp_wifi_scan_start(&sc, true) == ESP_OK) {
-        uint16_t n = 0;
-        esp_wifi_scan_get_ap_num(&n);
-        if (n > 20) n = 20;
-        wifi_ap_record_t recs[20];
-        uint16_t got = n;
-        if (esp_wifi_scan_get_ap_records(&got, recs) == ESP_OK) {
-            for (uint16_t i = 0; i < got; i++) {
-                if (recs[i].ssid[0] == 0) continue;
-                int r = recs[i].rssi;
-                int lvl = r >= -55 ? 4 : r >= -65 ? 3 : r >= -72 ? 2 : 1;
-                char row[320];
-                snprintf(row, sizeof(row),
-                    "<label class=net><input type=radio name=ssid value=\"%s\" required>"
-                    "<span class=nm>%s</span><span class=bars>"
-                    "<i class=\"%s\"></i><i class=\"%s\"></i><i class=\"%s\"></i><i class=\"%s\"></i>"
-                    "</span></label>",
-                    (char*)recs[i].ssid, (char*)recs[i].ssid,
-                    lvl >= 1 ? "on" : "", lvl >= 2 ? "on" : "",
-                    lvl >= 3 ? "on" : "", lvl >= 4 ? "on" : "");
-                httpd_resp_sendstr_chunk(req, row);
-            }
-        }
-    }
+    // One chunk for the whole list rather than one per network: fewer TCP
+    // writes, less chunk framing, and nothing to rebuild on a repeat load.
+    scan_refresh();
+    if (s_scan_rows && s_scan_rows[0]) httpd_resp_sendstr_chunk(req, s_scan_rows);
 
     httpd_resp_sendstr_chunk(req, PAGE_TAIL_A);
     // Prefill the saved machine id. Skip when empty (fresh flash): a zero-length
@@ -1099,7 +1163,10 @@ static bool form_field(const char *body, const char *name, char *out, size_t out
 }
 
 static esp_err_t send_msg(httpd_req_t *req, const char *title, const char *body) {
-    char page[512];
+    // 1 KB, not 512 B: the 255-byte template plus a Russian message runs well
+    // past 512 (Cyrillic is 2 bytes per character in UTF-8), and snprintf was
+    // silently cutting the GSM page off mid-sentence, closing tags and all.
+    char page[1024];
     snprintf(page, sizeof(page),
         "<!DOCTYPE html><html><head><meta name=viewport content='width=device-width,initial-scale=1'>"
         "<style>body{font-family:sans-serif;background:#1f2937;color:#fff;padding:24px;text-align:center}"
@@ -1145,9 +1212,11 @@ static esp_err_t save_post_handler(httpd_req_t *req) {
         strncpy(g_pend_machid, machid, sizeof(g_pend_machid) - 1);
         g_pend_opensec = osv;
         ESP_LOGI(TAG, "[Setup] GSM machid=%s", machid);
-        send_msg(req, "Подключение по GSM…",
-                 "Модем поднимается, это ~30-60 секунд, затем аппарат перезагрузится сам. "
-                 "Если через минуту снова откроется эта настройка — проверьте SIM / APN / антенну.");
+        send_msg(req, "Настройки приняты",
+                 "Аппарат применяет их и подключается по GSM — это 30-60 секунд, "
+                 "затем он перезагрузится сам.<br><br>"
+                 "Это окно сейчас закроется: аппарат отключает свою точку доступа, так и должно быть. "
+                 "Если через минуту настройка откроется снова — проверьте SIM / антенну.");
         xTaskCreate(gsm_provision_task, "gsmprov", 8192, NULL, 5, NULL);
         return ESP_OK;
     }
@@ -1206,10 +1275,18 @@ static void start_setup_portal(void) {
     ap.ap.max_connection = 2;
     ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_AP, &ap));
     ESP_ERROR_CHECK(esp_wifi_start());
+    // No modem sleep while the portal is up: the default power save adds latency
+    // to every packet and makes the page feel sluggish. Setup always ends in a
+    // reboot, so this never carries over into normal operation.
+    esp_wifi_set_ps(WIFI_PS_NONE);
     ESP_LOGI(TAG, "[Setup] AP '%s' up — connect and open http://192.168.4.1", ap.ap.ssid);
 
     httpd_config_t hcfg = HTTPD_DEFAULT_CONFIG();
     hcfg.stack_size = 12288;           // TLS client runs inside the POST handler
+    // Phones drop connections without a FIN whenever the AP changes channel, so
+    // dead sockets linger. Recycle the oldest instead of refusing new ones once
+    // the pool of 7 fills up — otherwise the page eventually stops loading.
+    hcfg.lru_purge_enable = true;
     httpd_handle_t server = NULL;
     if (httpd_start(&server, &hcfg) == ESP_OK) {
         httpd_uri_t root = { .uri = "/", .method = HTTP_GET, .handler = root_get_handler };
