@@ -360,38 +360,6 @@ class SupabaseApi {
     }
   }
 
-  /// Insert a draft `products` row from the tablet's manual-entry path
-  /// (operator typed a name but didn't pick from the catalog), via the
-  /// `create_draft_product` RPC. The new row is attributed to the machine's
-  /// owner for later admin review. Returns the new product id, or null.
-  Future<String?> createDraftProduct({
-    required String machid,
-    required String secret,
-    required String name,
-    String? imageUrl,
-    String? emoji,
-    String? categoryId,
-  }) async {
-    try {
-      final resp = await _rpc('create_draft_product', {
-        'p_machid': _machidParam(machid),
-        'p_secret': secret,
-        'p_name': name,
-        'p_image_url': (imageUrl != null && imageUrl.isNotEmpty) ? imageUrl : null,
-        'p_emoji': (emoji != null && emoji.isNotEmpty) ? emoji : null,
-        'p_category_id': categoryId,
-      });
-      if (resp.statusCode < 200 || resp.statusCode >= 300) {
-        debugPrint('[createDraftProduct] HTTP ${resp.statusCode} ${resp.body}');
-        return null;
-      }
-      return jsonDecode(resp.body) as String?;
-    } catch (e) {
-      debugPrint('[createDraftProduct] exception: $e');
-      return null;
-    }
-  }
-
   static int? _asInt(Object? v) {
     if (v == null) return null;
     if (v is int) return v;
@@ -570,30 +538,6 @@ class SupabaseApi {
     }
   }
 
-  /// PATCH only the wiring columns of an inventory row via the
-  /// `update_inventory_wiring` RPC (null = leave as is).
-  Future<bool> updateInventoryWiring({
-    required String machid,
-    required String secret,
-    required String inventoryId,
-    int? motorType,
-    int? curtainMode,
-  }) async {
-    if (motorType == null && curtainMode == null) return true;
-    try {
-      final resp = await _rpc('update_inventory_wiring', {
-        'p_machid': _machidParam(machid),
-        'p_secret': secret,
-        'p_inventory_id': inventoryId,
-        'p_motor_type': motorType,
-        'p_curtain_mode': curtainMode,
-      });
-      return resp.statusCode >= 200 && resp.statusCode < 300;
-    } catch (_) {
-      return false;
-    }
-  }
-
   /// Bulk curtain_mode update across [inventoryIds] via the
   /// `bulk_update_curtain` RPC. Returns the number of rows updated.
   Future<int> bulkUpdateCurtain({
@@ -609,29 +553,6 @@ class SupabaseApi {
         'p_secret': secret,
         'p_inventory_ids': inventoryIds,
         'p_curtain_mode': curtainMode,
-      });
-      if (resp.statusCode < 200 || resp.statusCode >= 300) return 0;
-      return (jsonDecode(resp.body) as num?)?.toInt() ?? 0;
-    } catch (_) {
-      return 0;
-    }
-  }
-
-  /// Bulk price update across [inventoryIds] via the `bulk_update_price` RPC.
-  /// Returns the number of rows updated.
-  Future<int> bulkUpdatePrice({
-    required String machid,
-    required String secret,
-    required List<String> inventoryIds,
-    required int priceTenge,
-  }) async {
-    if (inventoryIds.isEmpty) return 0;
-    try {
-      final resp = await _rpc('bulk_update_price', {
-        'p_machid': _machidParam(machid),
-        'p_secret': secret,
-        'p_inventory_ids': inventoryIds,
-        'p_price': priceTenge,
       });
       if (resp.statusCode < 200 || resp.statusCode >= 300) return 0;
       return (jsonDecode(resp.body) as num?)?.toInt() ?? 0;

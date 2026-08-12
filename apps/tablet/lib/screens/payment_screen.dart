@@ -448,7 +448,7 @@ class _QrBody extends StatelessWidget {
   }
 }
 
-/// Centred Kaspi logo overlay rendered from `lib/static/Group2.png`.
+/// Centred Kaspi logo overlay rendered from `lib/static/logo_kaspi.png`.
 /// Wrapped in a white circle so the overlay reads as a sticker on
 /// top of the QR — H-level error correction (QrErrorCorrectLevel.H)
 /// masks out enough modules under the overlay that the code still

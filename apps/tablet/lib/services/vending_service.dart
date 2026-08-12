@@ -360,11 +360,6 @@ class VendingService extends ChangeNotifier {
     notifyListeners();
   }
 
-  void removeAll(int motorId) {
-    _cart.removeWhere((i) => i.product.motorId == motorId);
-    notifyListeners();
-  }
-
   void clearCart() {
     _cart.clear();
     notifyListeners();

@@ -1,5 +1,3 @@
-import 'motor_layout.dart';
-
 /// A product slot — one cell on the cabinet.
 class Product {
   /// Supabase inventory row UUID (null for placeholder/un-mapped slots).
@@ -65,22 +63,4 @@ class Product {
 
   bool get inStock => stock > 0;
   bool get isMapped => id != null;
-}
-
-/// Build a placeholder catalog covering all 36 physical slots.
-/// Used when the device is not paired or the DB has no rows for the slot —
-/// the UI shows them greyed-out / "не назначено".
-List<Product> placeholderCatalog() {
-  final motors = MotorLayout.allMotors().toList();
-  return [
-    for (final m in motors)
-      Product(
-        motorId: m,
-        shelfLabel: MotorLayout.motorToLabel(m),
-        name: 'Слот ${MotorLayout.motorToLabel(m)}',
-        priceTenge: 0,
-        stock: 0,
-        emoji: '📦',
-      ),
-  ];
 }
