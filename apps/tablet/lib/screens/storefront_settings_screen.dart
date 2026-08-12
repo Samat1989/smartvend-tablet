@@ -43,6 +43,14 @@ class StorefrontSettingsScreen extends StatelessWidget {
       }
     }
 
+    // Slot-backed products only, exactly as the catalog picks them.
+    // Slicing the head off svc.catalog instead, as this screen used to,
+    // let through products that no slot claims — ProductCard suppresses
+    // the slot number for those rather than guess one, so the cards came
+    // out bare however the switch was set, and the preview contradicted
+    // the toggle sitting directly above it.
+    final previewProducts = svc.shelvedCatalog;
+
     return Scaffold(
       backgroundColor: Colors.grey.shade900,
       appBar: AppBar(
@@ -131,7 +139,7 @@ class StorefrontSettingsScreen extends StatelessWidget {
             // ─── Live preview, full width ───
             Expanded(
               child: _Preview(
-                products: svc.catalog,
+                products: previewProducts,
                 // Real first shelf of this machine, so the header in the
                 // preview carries the same numbering the catalog will.
                 shelf: svc.layout.shelves.isEmpty

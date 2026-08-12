@@ -246,6 +246,38 @@ class VendingService extends ChangeNotifier {
   List<CartItem> get cartItems => List.unmodifiable(_cart);
   String? get paymentId => _paymentId;
 
+  /// The catalog in storefront order: the layout walked shelf by shelf,
+  /// one product per slot, taken by the slot's anchor motor. Products no
+  /// slot claims are absent — precisely the ones the catalog itself never
+  /// renders.
+  ///
+  /// Anything previewing the storefront must go through this rather than
+  /// slicing [catalog] directly. A product with no slot behind it draws
+  /// without a slot number (ProductCard suppresses it rather than guess),
+  /// so a preview fed from the raw catalog shows bare cards while the real
+  /// catalog numbers every one of them.
+  List<Product> get shelvedCatalog => shelveCatalog(catalog, _layout);
+
+  /// Pure form of [shelvedCatalog]. Split out so it can be tested without
+  /// standing up a service, which wants a board, storage and the network.
+  static List<Product> shelveCatalog(
+    List<Product> catalog,
+    MachineLayout layout,
+  ) {
+    // No layout configured — the home screen falls back to the factory
+    // grid and shows the catalog as-is, so mirror that.
+    if (layout.isEmpty) return List.unmodifiable(catalog);
+    final byMotor = {for (final p in catalog) p.motorId: p};
+    final out = <Product>[];
+    for (final shelf in layout.shelves) {
+      for (final slot in shelf.slots) {
+        final p = byMotor[slot.primaryMotorId];
+        if (p != null) out.add(p);
+      }
+    }
+    return List.unmodifiable(out);
+  }
+
   int get cartCount => _cart.fold(0, (sum, i) => sum + i.quantity);
   int get cartTotalTenge => _cart.fold(0, (sum, i) => sum + i.totalTenge);
   bool get cartIsEmpty => _cart.isEmpty;
