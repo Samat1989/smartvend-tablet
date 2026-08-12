@@ -2,6 +2,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:micromart/models/machine_layout.dart';
 import 'package:micromart/models/motor_layout.dart';
 import 'package:micromart/models/product.dart';
+import 'package:micromart/screens/support_screen.dart';
 import 'package:micromart/services/vending_service.dart';
 
 Product _p(int motorId, String name) => Product(
@@ -70,6 +71,33 @@ void main() {
       final shelved =
           VendingService.shelveCatalog(catalog, MachineLayout.empty());
       expect(shelved.map((p) => p.name), ['A', 'orphan']);
+    });
+  });
+
+  group('whatsappDigits', () {
+    test('strips the punctuation operators actually type', () {
+      expect(whatsappDigits('+7 (700) 123-45-67'), '77001234567');
+      expect(whatsappDigits('+7 700 123 45 67'), '77001234567');
+    });
+
+    test('rewrites the KZ/RU trunk prefix 8 to the country code 7', () {
+      // Dialled as 8 700… inside the country, but wa.me wants the country
+      // code. Left alone this produces a link that goes nowhere.
+      expect(whatsappDigits('8 700 123 45 67'), '77001234567');
+      expect(whatsappDigits('87001234567'), '77001234567');
+    });
+
+    test('leaves other numbers alone', () {
+      // Not 11 digits, so the trunk-prefix rule must not fire — guessing
+      // further would corrupt numbers we do not recognise.
+      expect(whatsappDigits('8 800 555'), '8800555');
+      expect(whatsappDigits('+44 20 7946 0958'), '442079460958');
+    });
+
+    test('returns null when there is nothing dialable', () {
+      expect(whatsappDigits(null), isNull);
+      expect(whatsappDigits(''), isNull);
+      expect(whatsappDigits('—'), isNull);
     });
   });
 }

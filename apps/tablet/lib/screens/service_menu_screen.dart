@@ -13,6 +13,7 @@ import 'inventory_edit_screen.dart';
 import 'layout_editor_screen.dart';
 import 'screensaver_media_screen.dart';
 import 'storefront_settings_screen.dart';
+import 'support_settings_screen.dart';
 import 'tester_screen.dart';
 import 'update_screen.dart';
 
@@ -105,6 +106,15 @@ class ServiceMenuScreen extends StatelessWidget {
                       onTap: () => Navigator.of(context).push(
                         MaterialPageRoute(
                             builder: (_) => const ScreensaverMediaScreen()),
+                      ),
+                    ),
+                    _Tile(
+                      icon: Icons.support_agent,
+                      label: s.t('service_support'),
+                      color: Colors.green.shade700,
+                      onTap: () => Navigator.of(context).push(
+                        MaterialPageRoute(
+                            builder: (_) => const SupportSettingsScreen()),
                       ),
                     ),
                     // Sensor mode picker moved into the inventory screen.

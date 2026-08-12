@@ -8,6 +8,7 @@ import '../services/strings.dart';
 import '../services/vending_service.dart';
 import '../theme.dart';
 import '../widgets/close_circle_button.dart';
+import '../widgets/support_corner.dart';
 import '../widgets/action_pill.dart';
 import '../widgets/product_thumb.dart';
 import 'payment_screen.dart';
@@ -98,6 +99,9 @@ class _CartScreenState extends State<CartScreen> {
                     },
                   ),
                 ),
+                // Top-LEFT here, unlike the catalog: the close button owns
+                // the right corner on every post-cart screen.
+                const Positioned(top: 16, left: 16, child: SupportCorner()),
               ],
             );
           },

@@ -10,6 +10,7 @@ import '../services/strings.dart';
 import '../services/vending_service.dart';
 import '../theme.dart';
 import '../widgets/close_circle_button.dart';
+import '../widgets/support_corner.dart';
 import 'dispense_screen.dart';
 
 /// Payment screen — Kaspi QR only.
@@ -265,6 +266,11 @@ class _PaymentScreenState extends State<PaymentScreen> {
                 },
               ),
             ),
+            // Top-LEFT — the close button owns the right corner here.
+            // Worth having on this screen specifically: a QR that expired
+            // after the customer already paid is one of the two ways a
+            // dispute starts.
+            const Positioned(top: 16, left: 16, child: SupportCorner()),
           ],
         ),
       ),

@@ -40,6 +40,9 @@ class DeviceStorage extends ChangeNotifier {
   static const _kLytSwapRowCol = 'lyt_swap_row_col';
   static const _kShowSlotNumber = 'storefront_show_slot_number';
   static const _kShowShelfLabels = 'storefront_show_shelf_labels';
+  static const _kSupportPhone = 'support_phone';
+  static const _kSupportWhatsapp = 'support_whatsapp';
+  static const _kSupportHours = 'support_hours';
   static const _kScreensaverDelaySec = 'screensaver_delay_sec';
   static const _kScreensaverSlideSec = 'screensaver_slide_sec';
   static const _kScreensaverWaitVideo = 'screensaver_wait_video_end';
@@ -159,6 +162,59 @@ class DeviceStorage extends ChangeNotifier {
     await _prefs.setBool(_kShowShelfLabels, v);
     notifyListeners();
   }
+
+  // ─── Customer support contact ───────────────────────────────────
+  // Shown to the customer on the support screen, reached from the corner
+  // badge on every customer-facing screen. Kept per-tablet rather than
+  // pulled from the machine profile: it has to be readable when the
+  // machine is offline, which is exactly when a customer is most likely
+  // to be standing there with a failed dispense.
+
+  String? _nonEmpty(String key) {
+    final v = _prefs.getString(key);
+    return (v == null || v.trim().isEmpty) ? null : v.trim();
+  }
+
+  Future<void> _setNonEmpty(String key, String? v) async {
+    if (v == null || v.trim().isEmpty) {
+      await _prefs.remove(key);
+    } else {
+      await _prefs.setString(key, v.trim());
+    }
+    notifyListeners();
+  }
+
+  /// Support phone as the operator typed it — shown verbatim, never
+  /// reformatted. Kiosk tablets have no dialler, so this is something the
+  /// customer reads and types into their own phone.
+  String? get supportPhone => _nonEmpty(_kSupportPhone);
+
+  Future<void> setSupportPhone(String? v) => _setNonEmpty(_kSupportPhone, v);
+
+  /// WhatsApp number for the QR. Falls back to [supportPhone] when unset —
+  /// on most machines it is the same line and making the operator type it
+  /// twice would just be a way to get them out of sync.
+  String? get supportWhatsapp => rawSupportWhatsapp ?? supportPhone;
+
+  /// The stored WhatsApp override with no fallback applied. The service-mode
+  /// editor prefills from this: showing the fallen-back phone would silently
+  /// turn "same number" into a second copy to keep in sync by hand.
+  String? get rawSupportWhatsapp => _nonEmpty(_kSupportWhatsapp);
+
+  Future<void> setSupportWhatsapp(String? v) =>
+      _setNonEmpty(_kSupportWhatsapp, v);
+
+  /// Free-text working hours, e.g. «Пн–Пт, 9:00–18:00». Free text on
+  /// purpose: every operator words this differently and a structured
+  /// editor would fit none of them.
+  String? get supportHours => _nonEmpty(_kSupportHours);
+
+  Future<void> setSupportHours(String? v) => _setNonEmpty(_kSupportHours, v);
+
+  /// Whether there is anything worth showing. The corner badge stays inert
+  /// when false — a «Поддержка» button that opens an empty page is worse
+  /// than no button at all.
+  bool get hasSupportInfo => supportPhone != null || supportHours != null;
 
   // ─── Attract loop (screensaver) ─────────────────────────────────
   // Defaults reproduce the previous hard-coded behaviour: 5 minutes idle

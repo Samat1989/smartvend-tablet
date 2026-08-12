@@ -403,5 +403,80 @@ class Strings extends ChangeNotifier {
       'kk': 'Қайта әрекет автоматты түрде жасалады…',
       'en': 'Retrying automatically…',
     },
+    // Customer support
+    'support': {'ru': 'Помощь', 'kk': 'Көмек', 'en': 'Help'},
+    'support_title': {
+      'ru': 'Служба поддержки',
+      'kk': 'Қолдау қызметі',
+      'en': 'Customer support',
+    },
+    'support_intro': {
+      'ru': 'Товар не выдался или деньги списались дважды? '
+          'Позвоните или напишите — разберёмся и вернём.',
+      'kk': 'Тауар шықпады ма, әлде ақша екі рет шегерілді ме? '
+          'Қоңырау шалыңыз немесе жазыңыз — шешеміз және қайтарамыз.',
+      'en': 'Item never dropped, or charged twice? '
+          'Call or message us — we will sort it out and refund you.',
+    },
+    'support_machine': {
+      'ru': 'Номер аппарата',
+      'kk': 'Аппарат нөмірі',
+      'en': 'Machine number',
+    },
+    'support_machine_hint': {
+      'ru': 'Назовите этот номер оператору — по нему мы найдём вашу покупку',
+      'kk': 'Осы нөмірді операторға айтыңыз — ол бойынша сатып алуыңызды табамыз',
+      'en': 'Give this number to the operator — we find your purchase by it',
+    },
+    'support_phone_label': {'ru': 'Телефон', 'kk': 'Телефон', 'en': 'Phone'},
+    'support_hours_label': {
+      'ru': 'Время работы',
+      'kk': 'Жұмыс уақыты',
+      'en': 'Working hours',
+    },
+    'support_whatsapp_hint': {
+      'ru': 'Наведите камеру телефона, чтобы написать в WhatsApp',
+      'kk': 'WhatsApp-қа жазу үшін телефон камерасын бағыттаңыз',
+      'en': 'Point your phone camera here to message us on WhatsApp',
+    },
+    // Service mode — support contact editor
+    'service_support': {
+      'ru': 'Поддержка',
+      'kk': 'Қолдау',
+      'en': 'Support',
+    },
+    'support_settings_title': {
+      'ru': 'Контакты поддержки',
+      'kk': 'Қолдау байланыстары',
+      'en': 'Support contacts',
+    },
+    'support_settings_hint': {
+      'ru': 'Показывается покупателю по кнопке «Помощь» в углу экрана. '
+          'Пока телефон не указан, кнопка скрыта.',
+      'kk': 'Экран бұрышындағы «Көмек» түймесі арқылы сатып алушыға '
+          'көрсетіледі. Телефон көрсетілмейінше түйме жасырылады.',
+      'en': 'Shown to the customer via the «Help» button in the screen '
+          'corner. The button stays hidden until a phone is set.',
+    },
+    'support_field_phone': {
+      'ru': 'Телефон поддержки',
+      'kk': 'Қолдау телефоны',
+      'en': 'Support phone',
+    },
+    'support_field_whatsapp': {
+      'ru': 'WhatsApp, если отличается',
+      'kk': 'WhatsApp, өзгеше болса',
+      'en': 'WhatsApp, if different',
+    },
+    'support_field_hours': {
+      'ru': 'Время работы',
+      'kk': 'Жұмыс уақыты',
+      'en': 'Working hours',
+    },
+    'support_hours_example': {
+      'ru': 'Например: Пн–Пт, 9:00–18:00',
+      'kk': 'Мысалы: Дс–Жм, 9:00–18:00',
+      'en': 'For example: Mon–Fri, 9:00–18:00',
+    },
   };
 }

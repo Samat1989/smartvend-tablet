@@ -14,6 +14,7 @@ import '../services/supabase_api.dart';
 import '../services/vending_service.dart';
 import '../theme.dart';
 import '../widgets/close_circle_button.dart';
+import '../widgets/support_corner.dart';
 import '../widgets/product_thumb.dart';
 
 /// Dispense / Success screen ported from Figma "Success".
@@ -397,6 +398,11 @@ class _DispenseScreenState extends State<DispenseScreen>
                   right: 16,
                   child: CloseCircleButton(onTap: _goHomeNow),
                 ),
+              // Top-LEFT, and unlike the close button it is up from the
+              // start: this is the screen a customer is standing on when a
+              // motor fails to drop, which is where refund disputes are
+              // actually born.
+              const Positioned(top: 16, left: 16, child: SupportCorner()),
             ],
           ),
         ),

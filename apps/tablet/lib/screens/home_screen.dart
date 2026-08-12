@@ -15,6 +15,7 @@ import '../theme.dart';
 import '../widgets/action_pill.dart';
 import '../widgets/product_card.dart';
 import '../widgets/shelf_header.dart';
+import '../widgets/support_corner.dart';
 import 'cart_screen.dart';
 import 'screensaver_screen.dart';
 import 'service_pin_screen.dart';
@@ -251,47 +252,57 @@ class _HomeScreenState extends State<HomeScreen> {
         onPointerDown: (_) => _resetIdle(),
         onPointerMove: (_) => _resetIdle(),
         child: SafeArea(
-        child: Stack(
-          // Force the Stack to take the full SafeArea size so the
-          // Positioned(bottom: 0) action bar always sits at the
-          // screen bottom regardless of how short the catalog Row is.
-          fit: StackFit.expand,
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            Row(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                Expanded(
-                  child: _ProductList(
-                    shelfKey: _shelfKey,
-                    scrollController: _scrollController,
+            // Header sits ABOVE the maintenance overlay on purpose: a dead
+            // board is exactly when a customer wants the support number,
+            // and burying it under the "техническая проблема" curtain would
+            // hide it at the one moment it matters most.
+            const _TopBar(),
+            Expanded(
+              child: Stack(
+                // Force the Stack to take the full remaining height so the
+                // Positioned(bottom: 0) action bar always sits at the
+                // screen bottom regardless of how short the catalog Row is.
+                fit: StackFit.expand,
+                children: [
+                  Row(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      Expanded(
+                        child: _ProductList(
+                          shelfKey: _shelfKey,
+                          scrollController: _scrollController,
+                        ),
+                      ),
+                      _ShelfSelector(
+                        selected: _selectedShelf,
+                        onSelect: _scrollToShelf,
+                        onCaptionTap: _onServiceTap,
+                        shelfCount:
+                            context.watch<VendingService>().layout.isNotEmpty
+                                ? context
+                                    .read<VendingService>()
+                                    .layout
+                                    .shelves
+                                    .length
+                                : MotorLayout.rows,
+                      ),
+                    ],
                   ),
-                ),
-                _ShelfSelector(
-                  selected: _selectedShelf,
-                  onSelect: _scrollToShelf,
-                  onCaptionTap: _onServiceTap,
-                  shelfCount: context.watch<VendingService>().layout.isNotEmpty
-                      ? context
-                          .read<VendingService>()
-                          .layout
-                          .shelves
-                          .length
-                      : MotorLayout.rows,
-                ),
-              ],
+                  const _BottomActionBar(),
+                  if (boardDown)
+                    _MaintenanceOverlay(onServiceTap: _onServiceTap),
+                  // Service entry used to live in an invisible 80×80 box
+                  // pinned under the language chip. Being anchored to the
+                  // top edge, it landed differently on every screen height —
+                  // on some tablets in the dead space it was meant for, on
+                  // others under the catalog. It's now the visible "полки"
+                  // caption instead.
+                ],
+              ),
             ),
-            const _BottomActionBar(),
-            if (boardDown) _MaintenanceOverlay(onServiceTap: _onServiceTap),
-            // Order matters: MachidCorner first, LangCorner painted on top
-            // so its tap area isn't shadowed by the (also tappable) machid
-            // badge sitting above it.
-            const _MachidCorner(),
-            const _LangCorner(),
-            // Service entry used to live in an invisible 80×80 box pinned
-            // under the language chip. Being anchored to the top edge, it
-            // landed differently on every screen height — on some tablets
-            // in the dead space it was meant for, on others under the
-            // catalog. It's now the visible "полки" caption instead.
           ],
         ),
       ),
@@ -744,34 +755,34 @@ class _MaintenanceOverlay extends StatelessWidget {
   }
 }
 
-class _MachidCorner extends StatelessWidget {
-  const _MachidCorner();
+/// Right-aligned header strip: support badge + language switch.
+///
+/// These two used to float as `Positioned` children of the catalog Stack.
+/// Pinned to the top-right they sat directly over the first shelf's cards —
+/// on a 2-column layout the support chip covered a meaningful part of the
+/// top-right product. Laying them out in the flow instead costs one strip of
+/// height and gives the grid the whole area below, with nothing overlapping.
+class _TopBar extends StatelessWidget {
+  const _TopBar();
 
   @override
   Widget build(BuildContext context) {
-    final machid = context.watch<DeviceStorage>().machid;
-    if (machid == null) return const SizedBox.shrink();
-    return Positioned(
-      right: 8,
-      top: 8,
-      child: Padding(
-        padding: const EdgeInsets.all(4),
-        child: Text(
-          '№$machid',
-          style: const TextStyle(
-            fontSize: 10,
-            fontWeight: FontWeight.bold,
-            letterSpacing: 0.5,
-            color: Color.fromARGB(255, 162, 162, 175),
-          ),
-        ),
+    return const Padding(
+      padding: EdgeInsets.fromLTRB(16, 6, 8, 2),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.end,
+        children: [
+          SupportCorner(),
+          SizedBox(width: 2),
+          _LangChip(),
+        ],
       ),
     );
   }
 }
 
-class _LangCorner extends StatelessWidget {
-  const _LangCorner();
+class _LangChip extends StatelessWidget {
+  const _LangChip();
 
   // Storage / messages use ISO 'kk' for Kazakh — using 'kz' here makes
   // Strings.setLang() silently reject the call (containsKey check fails).
@@ -783,15 +794,15 @@ class _LangCorner extends StatelessWidget {
     final i = _cycle.indexOf(s.lang);
     final next = _cycle[(i + 1) % _cycle.length];
     final display = s.lang == 'kk' ? 'KZ' : s.lang.toUpperCase();
-    return Positioned(
-      // Sits under the machid badge (top: 8 + ≈26 dp of badge + 4 dp gap).
-      right: 8,
-      top: 40,
-      child: GestureDetector(
-        behavior: HitTestBehavior.opaque,
-        onTap: () => s.setLang(next),
+    return GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onTap: () => s.setLang(next),
+      child: SizedBox(
+        // Matches the support badge so the two line up in the strip and
+        // the language tap target stays finger-sized.
+        height: SupportCorner.height,
         child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 15),
+          padding: const EdgeInsets.symmetric(horizontal: 10),
           child: Row(
             mainAxisSize: MainAxisSize.min,
             children: [
