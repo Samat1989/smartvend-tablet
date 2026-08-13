@@ -1,5 +1,7 @@
 # One-shot release: build signed APKs, tag the current commit, push,
-# create a GitHub Release, and upload every ABI split as an asset.
+# create a GitHub Release, and upload the armeabi-v7a split as its only
+# asset — that is the one every tablet installs (see the $AbiOffset note
+# below and UpdateService.assetName).
 #
 # Requirements (one-time):
 #   1. GitHub CLI — winget install --id GitHub.cli -e
@@ -195,10 +197,12 @@ if ($dirty) {
 }
 
 # --- Build signed APKs ------------------------------------------------------
-$apkDir   = 'build/app/outputs/flutter-apk'
-$armApk   = "$apkDir/app-armeabi-v7a-release.apk"
-$arm64Apk = "$apkDir/app-arm64-v8a-release.apk"
-$x86Apk   = "$apkDir/app-x86_64-release.apk"
+# The build stays --split-per-abi even though only the v7a split ships: the
+# per-ABI split is what adds the +1000 offset to versionCode, and the whole
+# tag calculation above is built on that. The other splits are left on disk
+# for local testing and simply aren't uploaded.
+$apkDir = 'build/app/outputs/flutter-apk'
+$armApk = "$apkDir/app-armeabi-v7a-release.apk"
 
 if ($SkipBuild) {
     Section "Skipping build (-SkipBuild). Reusing existing APKs."
@@ -210,9 +214,7 @@ if ($SkipBuild) {
     if ($LASTEXITCODE -ne 0) { Fail "flutter build apk failed" }
 }
 
-foreach ($apk in @($armApk, $arm64Apk)) {
-    if (-not (Test-Path $apk)) { Fail "Expected APK not found: $apk" }
-}
+if (-not (Test-Path $armApk)) { Fail "Expected APK not found: $armApk" }
 
 # --- Verify signing cert (sanity check before upload) -----------------------
 Section "Verifying APK signature"
@@ -256,9 +258,11 @@ if ($Notes) {
 if ($Draft) {
     $releaseArgs += '--draft'
 }
+# One asset, on purpose. UpdateService.assetName is pinned to
+# app-armeabi-v7a-release.apk, so that is the only file any tablet ever
+# downloads; the arm64 and x86_64 splits were dead weight on the release
+# page and an invitation to hand-install the wrong one.
 $releaseArgs += $armApk
-$releaseArgs += $arm64Apk
-if (Test-Path $x86Apk) { $releaseArgs += $x86Apk }
 
 & gh @releaseArgs
 if ($LASTEXITCODE -ne 0) { Fail "gh release create failed" }
