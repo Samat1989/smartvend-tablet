@@ -52,8 +52,8 @@ static const char *TAG = "pulse_mart";
 // bistable-relay driver would leave this board's lock line dead) and vice versa,
 // so these two constants are the only thing keeping the fleets apart. Do not
 // reuse the relay prefix/asset here.
-#define FW_VERSION_NAME    "1.0.0"
-#define FW_VERSION_CODE    10000
+#define FW_VERSION_NAME    "1.0.1"
+#define FW_VERSION_CODE    10001
 #define OTA_OWNER_REPO     "Samat1989/smartvend-tablet"
 #define OTA_TAG_PREFIX     "pulse-v"
 #define OTA_ASSET_NAME     "pulse-mart.bin"
@@ -946,6 +946,42 @@ static void ota_boot_task(void *pv) {
 }
 
 // ============================ Setup portal (SoftAP + HTTP) ============================
+// Idle timeout. The portal is an OPEN AP with no auth, so a machine left in
+// service mode is a machine anyone in radio range can reconfigure — and the
+// installer has no reason to leave it up once they walk away. After
+// PORTAL_TIMEOUT_MS with no HTTP request we reboot back into normal operation.
+//
+// Idle, not absolute: filling the form (scan, password, machine id) plus the
+// 30-60 s GSM bring-up can easily outlast a flat 3-minute budget, and cutting
+// the operator off mid-setup would be worse than the risk we're closing. Every
+// request calls [portal_touch]; [g_portal_committing] additionally freezes the
+// clock while a save is in flight, since those paths reboot on their own.
+//
+// Only armed when there is a config to fall back to — see [start_setup_portal].
+#define PORTAL_TIMEOUT_MS  180000   // 3 min of inactivity
+
+static volatile bool g_portal_activity   = false;  // set by handlers, cleared by the task
+static volatile bool g_portal_committing = false;  // a save is running; don't reboot under it
+
+static void portal_touch(void) { g_portal_activity = true; }
+
+static void portal_timeout_task(void *pv) {
+    const int step_ms = 1000;
+    int idle_ms = 0;
+    while (1) {
+        vTaskDelay(pdMS_TO_TICKS(step_ms));
+        if (g_portal_activity) { g_portal_activity = false; idle_ms = 0; continue; }
+        if (g_portal_committing) { idle_ms = 0; continue; }
+        idle_ms += step_ms;
+        if (idle_ms >= PORTAL_TIMEOUT_MS) {
+            ESP_LOGW(TAG, "[Setup] portal idle %d s — rebooting into normal mode",
+                     PORTAL_TIMEOUT_MS / 1000);
+            vTaskDelay(pdMS_TO_TICKS(200));   // let the log line flush
+            esp_restart();
+        }
+    }
+}
+
 // The page is sent in three chunks: PAGE_HEAD (styles + the network list opens),
 // then one row per scanned network (radio + signal bars), then PAGE_TAIL_*
 // (password / machine id / lock hold time / submit).
@@ -1081,6 +1117,7 @@ static void scan_refresh(void) {
 }
 
 static esp_err_t root_get_handler(httpd_req_t *req) {
+    portal_touch();
     httpd_resp_set_type(req, "text/html; charset=utf-8");
     httpd_resp_sendstr_chunk(req, PAGE_HEAD);
 
@@ -1106,6 +1143,7 @@ static esp_err_t root_get_handler(httpd_req_t *req) {
 // Captive-portal: any unknown URL (OS connectivity probes) → redirect to the
 // setup form, so the captive sheet pops open automatically.
 static esp_err_t captive_redirect(httpd_req_t *req, httpd_err_code_t err) {
+    portal_touch();
     httpd_resp_set_status(req, "302 Found");
     httpd_resp_set_hdr(req, "Location", "http://192.168.4.1/");
     httpd_resp_send(req, NULL, 0);
@@ -1192,9 +1230,16 @@ static void provision_finish_task(void *pv) {
 }
 
 static esp_err_t save_post_handler(httpd_req_t *req) {
+    portal_touch();
+    // Freeze the idle timeout for the whole handler: the WiFi path blocks here
+    // through an association attempt plus a Supabase lookup, and the GSM path
+    // hands off to a task that owns the next 30-60 s. Every early return below
+    // hands control back to the operator, so each one thaws it again.
+    g_portal_committing = true;
+
     char body[512];
     int len = httpd_req_recv(req, body, sizeof(body) - 1);
-    if (len <= 0) return ESP_FAIL;
+    if (len <= 0) { g_portal_committing = false; return ESP_FAIL; }
     body[len] = 0;
 
     char ssid[64] = {0}, pass[64] = {0}, machid[16] = {0}, opensec[8] = {0};
@@ -1208,6 +1253,7 @@ static esp_err_t save_post_handler(httpd_req_t *req) {
     bool gsm = (strcmp(netmode, "gsm") == 0);
 
     if (machid[0] == 0) {
+        g_portal_committing = false;
         return send_msg(req, "Ошибка", "Впишите номер аппарата. <a href=/>Назад</a>");
     }
     int osv = atoi(opensec);
@@ -1231,13 +1277,16 @@ static esp_err_t save_post_handler(httpd_req_t *req) {
 
     // --- WiFi: fast — validate synchronously, then commit + reboot.
     if (ssid[0] == 0) {
+        g_portal_committing = false;
         return send_msg(req, "Ошибка", "Выберите сеть. <a href=/>Назад</a>");
     }
     ESP_LOGI(TAG, "[Setup] WiFi ssid=%s machid=%s", ssid, machid);
     if (!wifi_sta_try(ssid, pass)) {
+        g_portal_committing = false;
         return send_msg(req, "WiFi не подключился", "Проверьте сеть и пароль. <a href=/>Назад</a>");
     }
     if (!provision_fetch_and_store(machid)) {
+        g_portal_committing = false;
         return send_msg(req, "Аппарат не найден",
                         "Номер не найден в системе или нет связи. <a href=/>Назад</a>");
     }
@@ -1254,7 +1303,13 @@ static esp_err_t save_post_handler(httpd_req_t *req) {
     return ESP_OK;
 }
 
-static void start_setup_portal(void) {
+// [can_time_out] — arm the idle timeout only when the device has a stored
+// config to reboot back into. On a device that has never been provisioned there
+// is no normal mode to return to: rebooting would just land in the portal again,
+// so it would be a reboot loop that leaves the AP up either way. Such a device
+// waits for the installer indefinitely, which is also the only way in on a fresh
+// board short of the BOOT-button window right after power-on.
+static void start_setup_portal(bool can_time_out) {
     g_provisioning = true;   // LED task picks this up: 5 fast blinks, then solid ON
 
     // SoftAP (open) + STA (so we can validate WiFi and reach Supabase).
@@ -1307,6 +1362,14 @@ static void start_setup_portal(void) {
 
     // DNS hijack so probe domains resolve to us (captive portal trigger).
     xTaskCreate(dns_hijack_task, "dns_hijack", 4096, NULL, 5, NULL);
+
+    if (can_time_out) {
+        ESP_LOGI(TAG, "[Setup] portal will reboot after %d s of inactivity",
+                 PORTAL_TIMEOUT_MS / 1000);
+        xTaskCreate(portal_timeout_task, "portal_to", 2560, NULL, 4, NULL);
+    } else {
+        ESP_LOGI(TAG, "[Setup] device not provisioned — portal stays up until setup");
+    }
 }
 
 // ============================ button provisioning trigger ============================
@@ -1404,7 +1467,7 @@ void app_main(void) {
     }
 
     if (!have_cfg || force_portal) {
-        start_setup_portal();          // stays here serving the portal
+        start_setup_portal(have_cfg);  // stays here serving the portal
         ESP_LOGI(TAG, "Provisioning mode — waiting for setup");
         return;
     }
