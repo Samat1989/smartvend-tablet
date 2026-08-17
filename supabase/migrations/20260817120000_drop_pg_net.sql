@@ -1,0 +1,39 @@
+-- Drop pg_net — installed for a cron job that no longer exists.
+--
+-- History: pg_net came in with the per-minute payment-reconcile job
+-- (20260603220000_schedule_payment_reconcile.sql), whose cron command called
+-- net.http_post to poke the cron-process-payments Edge Function. That job was
+-- unscheduled on 2026-06-05 (20260605120000_unschedule_payment_reconcile.sql)
+-- once create-payment took over the polling in-process via
+-- EdgeRuntime.waitUntil. Nothing has used pg_net since.
+--
+-- Verified before dropping (2026-08-17, via Supabase MCP):
+--   • cron.job is empty — no scheduled jobs at all;
+--   • no function in any user schema references net.http_get/http_post/
+--     http_delete/worker_restart — the only match was Supabase's own internal
+--     extensions.grant_pg_net_access helper.
+--
+-- Two things go away with it. First the "Extension in Public" advisor warning:
+-- pg_net was the one extension registered in `public` (everything else sits in
+-- extensions/pg_catalog/vault). It could not simply be relocated — pg_net is
+-- extrelocatable = false, so ALTER EXTENSION ... SET SCHEMA errors out; drop +
+-- recreate is the only "move", and there is nothing here worth moving.
+--
+-- Second, and the actual reason this is worth doing rather than muting the
+-- warning: Supabase's grant_pg_net_access hands anon and authenticated EXECUTE
+-- on net.http_post/http_get/http_delete plus USAGE on schema net. PostgREST
+-- never exposed schema `net`, so that was not reachable from a client — but it
+-- left a ready-made outbound-HTTP primitive available to anything running with
+-- those roles' privileges. Dropping the extension removes the schema and the
+-- grants with it.
+--
+-- Deliberately no CASCADE: if some object does still depend on net.*, this
+-- should fail loudly rather than silently take that object down with it.
+--
+-- Reversible in one line if the dormant cron-process-payments backstop is ever
+-- rescheduled — but install it out of `public` that time:
+--   create extension pg_net with schema extensions;
+--
+-- Applied to prod via Supabase MCP on 2026-08-17.
+
+drop extension pg_net;
