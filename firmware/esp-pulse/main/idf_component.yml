@@ -1,0 +1,6 @@
+## IDF Component Manager manifest — pulls in esp_modem for the optional
+## A7670E GSM (LTE) uplink alongside the built-in WiFi path.
+dependencies:
+  idf:
+    version: '>=5.0.0'
+  espressif/esp_modem: '*'
