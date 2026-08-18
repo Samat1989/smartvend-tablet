@@ -40,6 +40,21 @@ class UpdateService {
   /// or a Dart isolate that runs `getprop ro.product.cpu.abilist`.
   static const String assetName = 'app-armeabi-v7a-release.apk';
 
+  /// Tag shape of OUR releases — "v1.1.27+10127".
+  ///
+  /// This repo also hosts the ESP firmware streams, which tag their releases
+  /// "relay-v*" / "pulse-v*" and attach a .bin instead of an APK. Those get
+  /// published more often than the tablet does and always sit at the top of
+  /// the /releases list.
+  ///
+  /// Matching our own shape positively, instead of blacklisting theirs, is
+  /// deliberate. This used to read `if (tag.startsWith('relay-')) return false`
+  /// and adding the esp-pulse stream silently broke the updater: the newest
+  /// release was a pulse one, it passed the relay-only filter, carried no APK,
+  /// and check() gave up and reported "up to date" from then on. A whitelist
+  /// cannot be outrun by the next firmware stream.
+  static final RegExp _tabletTag = RegExp(r'^v?\d+\.\d+\.\d+');
+
   /// Latest release info if available + newer than current.
   /// Returns null when:
   ///   • Current version is >= the published tag's version
@@ -55,44 +70,43 @@ class UpdateService {
       throw HttpException('GitHub API ${resp.statusCode}: ${resp.body}');
     }
     final list = jsonDecode(resp.body) as List;
-    final pick = list.firstWhere(
-      (r) {
-        // The repo is shared with the esp-relay firmware, whose releases are
-        // tagged "relay-vX.Y.Z". Skip them — they carry no APK and must not
-        // shadow the latest tablet release.
-        final tag = (r['tag_name'] as String?) ?? '';
-        if (tag.startsWith('relay-')) return false;
-        return allowPrereleases || (r['prerelease'] == false);
-      },
-      orElse: () => null,
-    );
-    if (pick == null) return null;
 
-    final tag = (pick['tag_name'] as String?) ?? '';
-    final version = _parseVersion(tag);
-    if (version == null) return null;
+    // Newest-first, take the first release that is ours AND actually carries
+    // the APK. A loop rather than a single firstWhere because a firmware
+    // release always sits at the top of the list, and because a tablet release
+    // whose asset upload failed would otherwise stop the updater dead instead
+    // of falling through to the last good one.
+    for (final r in list) {
+      final tag = (r['tag_name'] as String?) ?? '';
+      if (!_tabletTag.hasMatch(tag)) continue;
+      if (!allowPrereleases && r['prerelease'] != false) continue;
 
-    final assets = (pick['assets'] as List?) ?? const [];
-    final asset = assets.firstWhere(
-      (a) => (a['name'] as String?)?.toLowerCase() == assetName.toLowerCase(),
-      orElse: () => null,
-    );
-    if (asset == null) return null;
+      final version = _parseVersion(tag);
+      if (version == null) continue;
 
-    final info = await PackageInfo.fromPlatform();
-    final current = int.tryParse(info.buildNumber) ?? 0;
+      final assets = (r['assets'] as List?) ?? const [];
+      final asset = assets.firstWhere(
+        (a) => (a['name'] as String?)?.toLowerCase() == assetName.toLowerCase(),
+        orElse: () => null,
+      );
+      if (asset == null) continue;
 
-    return UpdateInfo(
-      tagName: tag,
-      versionName: version.name,
-      versionCode: version.code,
-      currentVersionName: info.version,
-      currentVersionCode: current,
-      assetUrl: asset['browser_download_url'] as String,
-      assetSize: (asset['size'] as num?)?.toInt() ?? 0,
-      body: pick['body'] as String? ?? '',
-      publishedAt: pick['published_at'] as String? ?? '',
-    );
+      final info = await PackageInfo.fromPlatform();
+      final current = int.tryParse(info.buildNumber) ?? 0;
+
+      return UpdateInfo(
+        tagName: tag,
+        versionName: version.name,
+        versionCode: version.code,
+        currentVersionName: info.version,
+        currentVersionCode: current,
+        assetUrl: asset['browser_download_url'] as String,
+        assetSize: (asset['size'] as num?)?.toInt() ?? 0,
+        body: r['body'] as String? ?? '',
+        publishedAt: r['published_at'] as String? ?? '',
+      );
+    }
+    return null;
   }
 
   /// Download the release APK and return the saved path.
