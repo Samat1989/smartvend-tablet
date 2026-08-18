@@ -2,7 +2,6 @@ import 'dart:async';
 import 'dart:typed_data';
 
 import 'package:flutter/foundation.dart';
-import 'package:flutter/services.dart';
 import 'package:usb_serial/usb_serial.dart';
 
 import '../services/device_storage.dart';
@@ -361,12 +360,12 @@ class BoardClient extends ChangeNotifier {
   /// (`UsbUtil.java:216`): how many times in a row the watchdog has
   /// had to force-reconnect without the bus coming back healthy.
   /// Reset to 0 on the next successful exchange in [_sendAndReceive].
-  /// Surfaced via [reconnectAttempts] so the service-mode log can
-  /// show 3-of-5 etc., and we escalate the message at the factory
-  /// thresholds (2 = restart USB, 5 = would-restart-app, 10 = would-
-  /// reboot-mainboard). We only log — the app-restart and mainboard-
-  /// reboot are factory-specific and need device-owner privileges we
-  /// don't have here.
+  /// Surfaced via [reconnectAttempts] so the service-mode log can show
+  /// 3-of-5 etc., and the message escalates at the factory thresholds
+  /// (2 / 5 / every 10th). We only log: the factory's app-restart and
+  /// device-reboot actions were removed deliberately, because this app is
+  /// the launcher and neither can reseat a cable — see docs/known-issues.md
+  /// KI-1.
   int _reconnectAttempts = 0;
   int get reconnectAttempts => _reconnectAttempts;
 
@@ -392,43 +391,34 @@ class BoardClient extends ChangeNotifier {
           _info('Health watchdog: ${unhealthyFor.inSeconds}s unhealthy '
               '→ auto-reconnect #$_reconnectAttempts');
 
-          // Escalation ladder modelled on factory app
-          // (UsbUtil.isRestartApp / m933reboot):
-          //   • #5 reconnects in a row  → restart the app to clear any
-          //     stuck USB-Serial driver state inside our own process
-          //   • #10 reconnects in a row → reboot the whole tablet
-          //     (DevicePolicyManager.reboot, device-owner only;
-          //     silent no-op if we haven't been provisioned).
-          // We *also* trigger forceReconnect() in the same tick for
-          // the in-process attempts — the escalation just adds a
-          // hammer on top once we've established the soft path isn't
-          // enough.
-          if (_reconnectAttempts == 5) {
-            _err('Reconnect #5 — restarting app to clear stuck '
-                'USB-driver state (factory pattern)');
-            // ignore: unawaited_futures
-            KioskBridge.restartApp();
-            return; // process is about to die, no point continuing
-          }
-          if (_reconnectAttempts >= 10) {
-            _err('Reconnect #$_reconnectAttempts — rebooting device '
-                '(factory pattern; needs device-owner)');
-            try {
-              await KioskBridge.rebootDevice();
-              return; // device is rebooting
-            } on PlatformException catch (e) {
-              if (e.code == 'not_device_owner') {
-                _err('Cannot reboot device — app is not device-owner. '
-                    'Provision with `adb shell dpm set-device-owner '
-                    'kz.smartvend.m102_tester/.KioskAdminReceiver`.');
-              } else {
-                _err('Reboot failed: ${e.message}');
-              }
-            }
-          }
+          // The factory app's escalation ladder (UsbUtil.isRestartApp /
+          // m933reboot) used to act here: #5 killed our own process to clear
+          // stuck USB-Serial driver state, #10 rebooted the whole tablet.
+          // Both actions are gone on purpose — see docs/known-issues.md KI-1.
+          //
+          // This app is the launcher (category.HOME), so killing it took the
+          // only thing on screen away with it, and the relaunch was an inexact
+          // AlarmManager alarm fired into a process that no longer existed —
+          // exactly the background activity start Android 10+ is free to drop.
+          // On top of that [_reconnectAttempts] only resets on a successful
+          // exchange, so a board that is merely unplugged or dead never cleared
+          // it: the kiosk disappeared every ~5 minutes, indefinitely. Neither a
+          // process restart nor a device reboot can reseat a cable, and on the
+          // native-UART transport there is no USB driver to unstick either.
+          //
+          // What survives is diagnosis: keep counting, keep saying it out loud
+          // in the board log, keep retrying quietly. The operator sees the
+          // connection error on screen instead of a vanishing app.
           if (_reconnectAttempts == 2) {
             _err('Reconnect #2 — board still silent after one full '
                 'close+open cycle');
+          } else if (_reconnectAttempts == 5) {
+            _err('Reconnect #5 — board still silent. Check the cable, board '
+                'power and the port in service mode. The app stays up and '
+                'keeps retrying.');
+          } else if (_reconnectAttempts % 10 == 0) {
+            _err('Reconnect #$_reconnectAttempts — board still silent after '
+                '$_reconnectAttempts cycles; a physical fault is likely.');
           }
           await forceReconnect();
         } finally {
