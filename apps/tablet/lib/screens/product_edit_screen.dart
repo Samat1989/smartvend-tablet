@@ -133,11 +133,25 @@ class _ProductEditScreenState extends State<ProductEditScreen> {
 
   Future<void> _save() async {
     final s = context.read<Strings>();
-    if (!(_formKey.currentState?.validate() ?? false)) return;
+    // Catalog first: the name field is hidden and filled from the picker, so
+    // with nothing picked the form fails on a field the operator cannot see.
+    // Checking here keeps the message about the thing that is actually wrong.
     if (_catalogProductId == null) {
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
         content: Text('Сначала выберите товар из каталога'),
         backgroundColor: Colors.redAccent,
+      ));
+      return;
+    }
+    // Past that point a validation failure can only be price or stock. The
+    // per-field errors appear under the inputs, but those can sit below the
+    // fold on a short screen — say it once in full so the operator knows
+    // which two rows are missing.
+    if (!(_formKey.currentState?.validate() ?? false)) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text(s.t('price_stock_required')),
+        backgroundColor: Colors.redAccent,
+        duration: const Duration(seconds: 4),
       ));
       return;
     }
@@ -257,6 +271,17 @@ class _ProductEditScreenState extends State<ProductEditScreen> {
   /// source slot is excluded from the candidate list.
   Future<void> _openBulkApply() async {
     if (_catalogProductId == null) return;
+    // Bulk-apply copies THIS slot's price/stock onto every slot the operator
+    // ticks, so empty fields would spread 0/0 across the whole cabinet.
+    // Same gate as _save, and worth more here than there.
+    if (!(_formKey.currentState?.validate() ?? false)) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text(context.read<Strings>().t('price_stock_required')),
+        backgroundColor: Colors.redAccent,
+        duration: const Duration(seconds: 4),
+      ));
+      return;
+    }
     final svc = context.read<VendingService>();
     final storage = context.read<DeviceStorage>();
     final machid = storage.machid;
@@ -488,6 +513,18 @@ class _ProductEditScreenState extends State<ProductEditScreen> {
                     ),
                     keyboardType: TextInputType.number,
                     inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+                    // Left empty this used to save as 0 — the row was
+                    // written, the slot stayed invisible in the storefront,
+                    // and the operator saw a green "Saved" with nothing to
+                    // show for it. Refuse instead of silently storing 0.
+                    autovalidateMode: AutovalidateMode.onUserInteraction,
+                    validator: (v) {
+                      final t = (v ?? '').trim();
+                      if (t.isEmpty) return s.t('price_required');
+                      return (int.tryParse(t) ?? 0) > 0
+                          ? null
+                          : s.t('price_positive');
+                    },
                   ),
                 ),
                 const SizedBox(width: 12),
@@ -502,6 +539,12 @@ class _ProductEditScreenState extends State<ProductEditScreen> {
                     ),
                     keyboardType: TextInputType.number,
                     inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+                    // Empty is refused, but an explicit 0 is allowed: zeroing
+                    // a slot is how an operator marks it sold out.
+                    autovalidateMode: AutovalidateMode.onUserInteraction,
+                    validator: (v) => (v ?? '').trim().isEmpty
+                        ? s.t('stock_required')
+                        : null,
                   ),
                 ),
               ],
