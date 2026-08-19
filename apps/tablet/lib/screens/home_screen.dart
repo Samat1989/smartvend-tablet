@@ -178,11 +178,12 @@ class _HomeScreenState extends State<HomeScreen> {
   /// updates [_selectedShelf] so the right-rail tabs follow the scroll.
   /// Strategy: walk the shelves bottom-up and pick the first one whose
   /// header has scrolled to or above a "trigger line" near the top of
-  /// the viewport. The 24-dp threshold matches the list's top padding
-  /// so the rail flips the moment a shelf header lines up with the
-  /// catalog's natural top edge.
+  /// the viewport. The threshold is the catalog's top edge plus slack, so
+  /// the rail flips about when a shelf header reaches the top of the list.
+  /// The slack dominates — it is not tied to the exact padding, which has
+  /// changed twice since this was written.
   void _onScroll() {
-    const triggerDy = 24.0 + 80.0; // list top padding + a bit of slack
+    const triggerDy = 8.0 + 80.0; // list top padding + a bit of slack
     final svc = context.read<VendingService>();
     final shelfCount = svc.layout.isNotEmpty
         ? svc.layout.shelves.length
@@ -292,6 +293,14 @@ class _HomeScreenState extends State<HomeScreen> {
                     ],
                   ),
                   const _BottomActionBar(),
+                  // Bottom-RIGHT, drawn after the action bar so it sits on
+                  // top of it. The bar centres its pill, so this corner is
+                  // empty; 16 matches the bar's own right padding.
+                  const Positioned(
+                    right: 16,
+                    bottom: 16,
+                    child: SupportCorner(),
+                  ),
                   if (boardDown)
                     _MaintenanceOverlay(onServiceTap: _onServiceTap),
                   // Service entry used to live in an invisible 80×80 box
@@ -375,7 +384,7 @@ class _ProductList extends StatelessWidget {
             }
             return SingleChildScrollView(
               controller: scrollController,
-              padding: const EdgeInsets.fromLTRB(16, 16, 8, 120),
+              padding: const EdgeInsets.fromLTRB(16, 8, 8, 120),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
@@ -768,12 +777,13 @@ class _TopBar extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return const Padding(
-      padding: EdgeInsets.fromLTRB(16, 6, 8, 2),
+      // Right padding is _ShelfSelector's own (10), so the language chip
+      // lines up with the shelf pills in the rail below it. Support no
+      // longer lives here — it sits in the bottom-right corner.
+      padding: EdgeInsets.fromLTRB(16, 4, 10, 2),
       child: Row(
         mainAxisAlignment: MainAxisAlignment.end,
         children: [
-          SupportCorner(),
-          SizedBox(width: 2),
           _LangChip(),
         ],
       ),
@@ -807,8 +817,8 @@ class _LangChip extends StatelessWidget {
             mainAxisSize: MainAxisSize.min,
             children: [
               const Icon(Icons.language,
-                  size: 14, color: Color.fromARGB(255, 175, 188, 197)),
-              const SizedBox(width: 4),
+                  size: 1, color: Color.fromARGB(255, 175, 188, 197)),
+              const SizedBox(width: 1),
               Text(
                 display,
                 style: const TextStyle(

@@ -99,9 +99,11 @@ class _CartScreenState extends State<CartScreen> {
                     },
                   ),
                 ),
-                // Top-LEFT here, unlike the catalog: the close button owns
-                // the right corner on every post-cart screen.
-                const Positioned(top: 16, left: 16, child: SupportCorner()),
+                // Bottom-RIGHT, same as every other screen. Listed after
+                // _BottomBar so it draws over it; the bar centres its
+                // content, so this corner is free.
+                const Positioned(
+                    right: 16, bottom: 16, child: SupportCorner()),
               ],
             );
           },

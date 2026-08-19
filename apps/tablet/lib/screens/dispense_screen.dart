@@ -402,11 +402,12 @@ class _DispenseScreenState extends State<DispenseScreen>
                   right: 16,
                   child: CloseCircleButton(onTap: _goHomeNow),
                 ),
-              // Top-LEFT, and unlike the close button it is up from the
-              // start: this is the screen a customer is standing on when a
-              // motor fails to drop, which is where refund disputes are
-              // actually born.
-              const Positioned(top: 16, left: 16, child: SupportCorner()),
+              // Bottom-RIGHT like everywhere else, and unlike the close
+              // button it is up from the start: this is the screen a customer
+              // is standing on when a motor fails to drop, which is where
+              // refund disputes are actually born. Listed after the bottom
+              // bar so it draws over it once the bar appears.
+              const Positioned(right: 16, bottom: 16, child: SupportCorner()),
             ],
           ),
         ),

@@ -270,7 +270,7 @@ class _PaymentScreenState extends State<PaymentScreen> {
             // Worth having on this screen specifically: a QR that expired
             // after the customer already paid is one of the two ways a
             // dispute starts.
-            const Positioned(top: 16, left: 16, child: SupportCorner()),
+            const Positioned(right: 16, bottom: 16, child: SupportCorner()),
           ],
         ),
       ),
