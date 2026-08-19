@@ -349,6 +349,29 @@ class Strings extends ChangeNotifier {
       'kk': 'Атауын енгізіңіз',
       'en': 'Name is required',
     },
+    'price_required': {
+      'ru': 'Укажите цену',
+      'kk': 'Бағасын көрсетіңіз',
+      'en': 'Enter the price',
+    },
+    'price_positive': {
+      'ru': 'Цена должна быть больше 0',
+      'kk': 'Бағасы 0-ден үлкен болуы керек',
+      'en': 'Price must be greater than 0',
+    },
+    'stock_required': {
+      'ru': 'Укажите остаток',
+      'kk': 'Қалдықты көрсетіңіз',
+      'en': 'Enter the stock',
+    },
+    'price_stock_required': {
+      'ru': 'Заполните обе строки — цену и остаток. '
+          'Без них товар не появится в витрине.',
+      'kk': 'Екі жолды да толтырыңыз — бағасы мен қалдығы. '
+          'Онсыз тауар витринада көрінбейді.',
+      'en': 'Fill in both fields — price and stock. '
+          'Without them the product will not appear in the storefront.',
+    },
     'motor_label': {'ru': 'Мотор', 'kk': 'Мотор', 'en': 'Motor'},
     // Board status / health
     'board_firmware': {'ru': 'Прошивка', 'kk': 'Прошивка', 'en': 'Firmware'},
