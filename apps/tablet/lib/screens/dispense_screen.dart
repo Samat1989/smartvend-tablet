@@ -104,6 +104,10 @@ class _DispenseScreenState extends State<DispenseScreen>
   static const _slotHardTimeout = Duration(seconds: 35);
 
   Future<void> _runQueue() async {
+    // Resolved up front: everything below runs across awaits, and reading a
+    // provider off `context` after one is what `use_build_context_synchronously`
+    // warns about.
+    final str = context.read<Strings>();
     final svc = context.read<VendingService>();
     final board = context.read<BoardClient>();
     final climate = context.read<ClimateController>();
@@ -155,7 +159,7 @@ class _DispenseScreenState extends State<DispenseScreen>
             final step = DispenseStepResult(
               product: p,
               outcome: DispenseOutcome.failed,
-              message: 'Связь с платой потеряна — возврат средств',
+              message: str.t('dispense_board_lost'),
             );
             _results[j] = step;
             if (saleId != null) {
@@ -200,7 +204,7 @@ class _DispenseScreenState extends State<DispenseScreen>
             // leave a paying customer empty-handed with no recourse.
             r = DispenseResult(
               success: false,
-              message: 'Превышено время выдачи',
+              message: str.t('dispense_timeout'),
             );
           }
         }
@@ -458,8 +462,11 @@ class _Header extends StatelessWidget {
       tint = const Color(0xFFFF9F0A);
       title = s.t('dispense_partial');
     }
-    final summary = StringBuffer('Выдано $delivered');
-    if (failed > 0) summary.write(' · Возврат $failed');
+    final summary =
+        StringBuffer('${s.t('dispense_sum_delivered')} $delivered');
+    if (failed > 0) {
+      summary.write(' · ${s.t('dispense_sum_refund')} $failed');
+    }
     return Column(
       children: [
         Container(
@@ -785,19 +792,19 @@ class _BottomBar extends StatelessWidget {
           mainAxisAlignment: MainAxisAlignment.end,
           children: [
             if (saving)
-              const Padding(
-                padding: EdgeInsets.only(bottom: 10),
+              Padding(
+                padding: const EdgeInsets.only(bottom: 10),
                 child: Row(
                   mainAxisAlignment: MainAxisAlignment.center,
                   children: [
-                    SizedBox(
+                    const SizedBox(
                       width: 14,
                       height: 14,
                       child: CircularProgressIndicator(strokeWidth: 2),
                     ),
-                    SizedBox(width: 8),
-                    Text('Сохранение продажи…',
-                        style: TextStyle(
+                    const SizedBox(width: 8),
+                    Text(context.read<Strings>().t('sale_saving'),
+                        style: const TextStyle(
                           fontSize: 12,
                           color: AppColors.iosGray,
                         )),

@@ -107,6 +107,46 @@ class Strings extends ChangeNotifier {
       'kk': 'Қателермен аяқталды',
       'en': 'Completed with errors',
     },
+    'pay_not_configured': {
+      'ru': 'Аппарат не настроен',
+      'kk': 'Автомат бапталмаған',
+      'en': 'Machine is not configured',
+    },
+    'pay_time_expired': {
+      'ru': 'Время оплаты истекло',
+      'kk': 'Төлем уақыты аяқталды',
+      'en': 'Payment time expired',
+    },
+    'pay_transaction_closed': {
+      'ru': 'Транзакция закрыта',
+      'kk': 'Транзакция жабылды',
+      'en': 'Transaction closed',
+    },
+    'details_more': {'ru': 'Подробнее', 'kk': 'Толығырақ', 'en': 'Details'},
+    'dispense_board_lost': {
+      'ru': 'Связь с платой потеряна — возврат средств',
+      'kk': 'Платамен байланыс жоғалды — қаражат қайтарылады',
+      'en': 'Board link lost — refunding',
+    },
+    'dispense_timeout': {
+      'ru': 'Превышено время выдачи',
+      'kk': 'Беру уақыты асып кетті',
+      'en': 'Dispense timed out',
+    },
+    // Composed as "<label> <count>" so the number can follow the word in
+    // all three languages without a per-language template.
+    'dispense_sum_delivered': {'ru': 'Выдано', 'kk': 'Берілді', 'en': 'Delivered'},
+    'dispense_sum_refund': {'ru': 'Возврат', 'kk': 'Қайтарым', 'en': 'Refund'},
+    'sale_saving': {
+      'ru': 'Сохранение продажи…',
+      'kk': 'Сатылым сақталуда…',
+      'en': 'Saving the sale…',
+    },
+    'tap_to_choose': {
+      'ru': 'Коснитесь, чтобы выбрать',
+      'kk': 'Таңдау үшін түртіңіз',
+      'en': 'Tap to choose',
+    },
     'home_btn': {'ru': 'На главную', 'kk': 'Басты бетке', 'en': 'Home'},
     'auto_return_in': {
       'ru': 'Возврат на главную через',

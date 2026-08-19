@@ -81,7 +81,7 @@ class _PaymentScreenState extends State<PaymentScreen> {
     if (machid == null || secret == null) {
       setState(() {
         _state = _State.failed;
-        _statusMsg = 'Аппарат не настроен';
+        _statusMsg = context.read<Strings>().t('pay_not_configured');
       });
       return;
     }
@@ -149,7 +149,7 @@ class _PaymentScreenState extends State<PaymentScreen> {
           _stopTimers();
           setState(() {
             _state = _State.expired;
-            _statusMsg = 'Время оплаты истекло';
+            _statusMsg = context.read<Strings>().t('pay_time_expired');
           });
           _scheduleExpiredReturn();
           break;
@@ -157,7 +157,7 @@ class _PaymentScreenState extends State<PaymentScreen> {
           _stopTimers();
           setState(() {
             _state = _State.failed;
-            _statusMsg = 'Транзакция закрыта';
+            _statusMsg = context.read<Strings>().t('pay_transaction_closed');
           });
           _scheduleExpiredReturn();
           break;
@@ -172,7 +172,7 @@ class _PaymentScreenState extends State<PaymentScreen> {
       _stopTimers();
       setState(() {
         _state = _State.expired;
-        _statusMsg = 'Время оплаты истекло';
+        _statusMsg = context.read<Strings>().t('pay_time_expired');
       });
       _scheduleExpiredReturn();
     });
@@ -620,8 +620,8 @@ class _FailedView extends StatelessWidget {
         if (details != null && details!.isNotEmpty) ...[
           const SizedBox(height: 12),
           ExpansionTile(
-            title: const Text('Подробнее',
-                style: TextStyle(
+            title: Text(context.read<Strings>().t('details_more'),
+                style: const TextStyle(
                   fontSize: 13,
                   fontWeight: FontWeight.w600,
                   color: AppColors.iosBlack,

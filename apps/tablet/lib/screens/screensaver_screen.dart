@@ -384,7 +384,7 @@ class _ShelfSlideView extends StatelessWidget {
           const SizedBox(height: 12),
           Center(
             child: Text(
-              'Коснитесь, чтобы выбрать',
+              context.read<Strings>().t('tap_to_choose'),
               style: TextStyle(
                 color: AppColors.iosGray.withValues(alpha: 0.7),
                 fontSize: 14,
@@ -540,7 +540,7 @@ class _MediaSlideView extends StatelessWidget {
           const SizedBox(height: 12),
           Center(
             child: Text(
-              'Коснитесь, чтобы выбрать',
+              context.read<Strings>().t('tap_to_choose'),
               style: TextStyle(
                 color: AppColors.iosGray.withValues(alpha: 0.7),
                 fontSize: 14,
