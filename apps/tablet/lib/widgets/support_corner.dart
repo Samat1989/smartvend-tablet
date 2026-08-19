@@ -26,10 +26,12 @@ class SupportCorner extends StatelessWidget {
 
   /// Diameter of the button.
   ///
-  /// NOTE: 26 dp is well under the 44 dp that kiosk tablets used at arm's
-  /// length really want. Kept because the compact corner was asked for; if
+  /// The language chip next to it reads this, so both grow together.
+  ///
+  /// NOTE: still under the 44 dp that kiosk tablets used at arm's length
+  /// really want. Kept small because the compact corner was asked for; if
   /// customers start missing it, grow this before anything else.
-  static const double height = 26;
+  static const double height = 29;
 
   @override
   Widget build(BuildContext context) {
@@ -59,7 +61,7 @@ class SupportCorner extends StatelessWidget {
             child: Center(
               child: Icon(
                 Icons.support_agent,
-                size: 18,
+                size: 20,
                 color: AppColors.iosBlue,
               ),
             ),

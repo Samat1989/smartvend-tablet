@@ -257,22 +257,29 @@ class ProductCard extends StatelessWidget {
                         ),
                       ),
                       const SizedBox(width: 8),
-                      // Price shrinks rather than pushing the name out or
-                      // overflowing: at 3 columns a four-digit price plus a
-                      // long product name is wider than the card.
-                      Flexible(
-                        child: FittedBox(
-                          fit: BoxFit.scaleDown,
-                          alignment: Alignment.bottomRight,
-                          child: Text(
-                            '${product.priceTenge} ₸',
-                            maxLines: 1,
-                            style: const TextStyle(
-                              color: AppColors.iosOrange,
-                              fontSize: 18,
-                              fontWeight: FontWeight.w800,
-                              letterSpacing: -0.18,
-                            ),
+                      // NOT Flexible: that gave the price a flex of 1 against
+                      // the name's Expanded, so the row split its width in
+                      // half and the price started at the middle of the card
+                      // instead of hugging its right edge — and the FittedBox
+                      // alignment could not fix it, because a loose Flexible
+                      // shrinks to its child and leaves nothing to align in.
+                      //
+                      // Laid out first at its natural width instead, with the
+                      // name's Expanded taking whatever is left. A long name
+                      // now ellipsises rather than squeezing the price, which
+                      // is the right trade: the price is the one number the
+                      // customer must be able to read.
+                      FittedBox(
+                        fit: BoxFit.scaleDown,
+                        alignment: Alignment.bottomRight,
+                        child: Text(
+                          '${product.priceTenge} ₸',
+                          maxLines: 1,
+                          style: const TextStyle(
+                            color: AppColors.iosOrange,
+                            fontSize: 18,
+                            fontWeight: FontWeight.w800,
+                            letterSpacing: -0.18,
                           ),
                         ),
                       ),

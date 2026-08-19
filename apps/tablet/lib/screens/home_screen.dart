@@ -846,7 +846,7 @@ class _LangChip extends StatelessWidget {
         // finger-sized.
         height: SupportCorner.height,
         child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 10),
+          padding: const EdgeInsets.symmetric(horizontal: 11),
           child: Row(
             mainAxisSize: MainAxisSize.min,
             children: [
@@ -858,7 +858,7 @@ class _LangChip extends StatelessWidget {
                 style: const TextStyle(
                   color: Color.fromARGB(255, 139, 151, 161),
                   fontWeight: FontWeight.w900,
-                  fontSize: 11,
+                  fontSize: 12,
                   letterSpacing: 0.5,
                 ),
               ),

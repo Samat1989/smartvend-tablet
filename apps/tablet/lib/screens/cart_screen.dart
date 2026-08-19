@@ -266,7 +266,12 @@ class _CartItemCard extends StatelessWidget {
             child: Padding(
               padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
               child: Row(
-                crossAxisAlignment: CrossAxisAlignment.start,
+                // Bottom-aligned, matching ProductCard: the price sits on the
+                // same line as the last line of the name, so it lands in the
+                // card's bottom-right corner whether the name wrapped to one
+                // line or two. Top-aligned it floated next to the first line
+                // with the bottom padding empty under it.
+                crossAxisAlignment: CrossAxisAlignment.end,
                 children: [
                   Expanded(
                     child: Text(
