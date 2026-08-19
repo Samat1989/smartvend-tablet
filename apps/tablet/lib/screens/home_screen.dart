@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
 import 'package:provider/provider.dart';
 
 import '../board/board_client.dart';
@@ -19,6 +20,14 @@ import '../widgets/support_corner.dart';
 import 'cart_screen.dart';
 import 'screensaver_screen.dart';
 import 'service_pin_screen.dart';
+
+/// Space above the first row of product cards.
+///
+/// Lives here rather than inline because three places have to agree on it:
+/// the list's own padding, the rail's scroll target, and the trigger line
+/// that decides which shelf the rail highlights. The trigger comment drifted
+/// out of sync with the padding twice before this constant existed.
+const double _kCatalogTopPadding = 12;
 
 /// Customer-facing catalog ported from the Figma file
 /// "MicroMart / Menu - Nothing Selected".
@@ -183,7 +192,7 @@ class _HomeScreenState extends State<HomeScreen> {
   /// The slack dominates — it is not tied to the exact padding, which has
   /// changed twice since this was written.
   void _onScroll() {
-    const triggerDy = 8.0 + 80.0; // list top padding + a bit of slack
+    const triggerDy = _kCatalogTopPadding + 80.0; // padding + slack
     final svc = context.read<VendingService>();
     final shelfCount = svc.layout.isNotEmpty
         ? svc.layout.shelves.length
@@ -226,11 +235,31 @@ class _HomeScreenState extends State<HomeScreen> {
     setState(() => _selectedShelf = shelf);
     final ctx = _shelfKey(shelf).currentContext;
     if (ctx == null) return;
-    await Scrollable.ensureVisible(
-      ctx,
+
+    // Not Scrollable.ensureVisible(alignment: 0): that lands the shelf's top
+    // edge exactly on the viewport's leading edge, which scrolls the list's
+    // own top padding out of sight — picking a shelf made the grid sit flush
+    // against the screen edge while free scrolling kept the gap. Compute the
+    // same offset and back off by the padding so the two agree.
+    final box = ctx.findRenderObject() as RenderBox?;
+    final viewport = box == null ? null : RenderAbstractViewport.maybeOf(box);
+    if (box == null || viewport == null || !_scrollController.hasClients) {
+      await Scrollable.ensureVisible(
+        ctx,
+        duration: const Duration(milliseconds: 350),
+        curve: Curves.easeOutCubic,
+        alignment: 0,
+      );
+      return;
+    }
+    final position = _scrollController.position;
+    final target = (viewport.getOffsetToReveal(box, 0).offset -
+            _kCatalogTopPadding)
+        .clamp(position.minScrollExtent, position.maxScrollExtent);
+    await _scrollController.animateTo(
+      target,
       duration: const Duration(milliseconds: 350),
       curve: Curves.easeOutCubic,
-      alignment: 0,
     );
   }
 
@@ -256,11 +285,9 @@ class _HomeScreenState extends State<HomeScreen> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            // Header sits ABOVE the maintenance overlay on purpose: a dead
-            // board is exactly when a customer wants the support number,
-            // and burying it under the "техническая проблема" curtain would
-            // hide it at the one moment it matters most.
-            const _TopBar(),
+            // No header strip: the language chip and the support button both
+            // live in the bottom-right corner now, so the grid starts at the
+            // top of the screen.
             Expanded(
               child: Stack(
                 // Force the Stack to take the full remaining height so the
@@ -293,16 +320,33 @@ class _HomeScreenState extends State<HomeScreen> {
                     ],
                   ),
                   const _BottomActionBar(),
-                  // Bottom-RIGHT, drawn after the action bar so it sits on
-                  // top of it. The bar centres its pill, so this corner is
-                  // empty; 16 matches the bar's own right padding.
+                  if (boardDown)
+                    _MaintenanceOverlay(onServiceTap: _onServiceTap),
+                  // Bottom-RIGHT stack: language chip over the support
+                  // button. Listed LAST on purpose — after the action bar so
+                  // it sits over the bar's empty right side, and after the
+                  // maintenance curtain because a dead board is exactly when
+                  // a customer reaches for support, and burying the button
+                  // under the "техническая проблема" screen would hide it at
+                  // the one moment it matters most.
                   const Positioned(
                     right: 16,
                     bottom: 16,
-                    child: SupportCorner(),
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      // Centred, not end-aligned: the chip is wider than the
+                      // round support button, so aligning their right edges
+                      // left the two visually off-axis. The Column takes the
+                      // width of the wider child and the narrower one centres
+                      // inside it.
+                      crossAxisAlignment: CrossAxisAlignment.center,
+                      children: [
+                        _LangChip(),
+                        SizedBox(height: 8),
+                        SupportCorner(),
+                      ],
+                    ),
                   ),
-                  if (boardDown)
-                    _MaintenanceOverlay(onServiceTap: _onServiceTap),
                   // Service entry used to live in an invisible 80×80 box
                   // pinned under the language chip. Being anchored to the
                   // top edge, it landed differently on every screen height —
@@ -384,7 +428,8 @@ class _ProductList extends StatelessWidget {
             }
             return SingleChildScrollView(
               controller: scrollController,
-              padding: const EdgeInsets.fromLTRB(16, 8, 8, 120),
+              padding: const EdgeInsets.fromLTRB(
+                  16, _kCatalogTopPadding, 8, 120),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
@@ -627,11 +672,17 @@ class _ShelfTab extends StatelessWidget {
 
 // ─────────────────────────── Bottom action ───────────────────────────
 
-/// Persistent action bar pinned to the bottom of the catalog. Holds just
-/// the centred action pill — the catalog is the root screen, so there is
-/// nowhere to go back to. (The cart screen keeps a RoundBackButton beside
-/// its pill, where "back" actually means something.) The pill is a fixed
-/// size, so the bar height never jumps between empty / filled states.
+/// Action bar pinned to the bottom of the catalog, shown only while the
+/// cart has something in it. Holds just the centred action pill — the
+/// catalog is the root screen, so there is nowhere to go back to. (The cart
+/// screen keeps a RoundBackButton beside its pill, where "back" actually
+/// means something.)
+///
+/// An empty cart renders nothing: the pill had a disabled «пусто» state that
+/// occupied the bottom of every idle screen while saying that there is
+/// nothing to tap. The list's bottom padding stays reserved either way, so
+/// adding the first item reveals the bar over space the scroll already left
+/// free instead of shifting the grid under the customer's finger.
 class _BottomActionBar extends StatelessWidget {
   const _BottomActionBar();
 
@@ -639,7 +690,14 @@ class _BottomActionBar extends StatelessWidget {
   Widget build(BuildContext context) {
     final s = context.watch<Strings>();
     final svc = context.watch<VendingService>();
-    final hasCart = svc.cartCount > 0;
+    if (svc.cartCount == 0) {
+      return const Positioned(
+        left: 0,
+        right: 0,
+        bottom: 0,
+        child: SizedBox.shrink(),
+      );
+    }
     return Positioned(
       left: 0,
       right: 0,
@@ -668,16 +726,11 @@ class _BottomActionBar extends StatelessWidget {
             ActionPill(
               icon: Icons.shopping_cart_outlined,
               label: s.t('cart'),
-              value: hasCart
-                  ? '${svc.cartCount} ${s.t('items_short')}'
-                  : s.t('cart_empty').toLowerCase(),
-              filled: hasCart,
-              onTap: hasCart
-                  ? () => Navigator.of(context).push(
-                        MaterialPageRoute(
-                            builder: (_) => const CartScreen()),
-                      )
-                  : null,
+              value: '${svc.cartCount} ${s.t('items_short')}',
+              filled: true,
+              onTap: () => Navigator.of(context).push(
+                MaterialPageRoute(builder: (_) => const CartScreen()),
+              ),
             ),
           ],
         ),
@@ -771,26 +824,6 @@ class _MaintenanceOverlay extends StatelessWidget {
 /// on a 2-column layout the support chip covered a meaningful part of the
 /// top-right product. Laying them out in the flow instead costs one strip of
 /// height and gives the grid the whole area below, with nothing overlapping.
-class _TopBar extends StatelessWidget {
-  const _TopBar();
-
-  @override
-  Widget build(BuildContext context) {
-    return const Padding(
-      // Right padding is _ShelfSelector's own (10), so the language chip
-      // lines up with the shelf pills in the rail below it. Support no
-      // longer lives here — it sits in the bottom-right corner.
-      padding: EdgeInsets.fromLTRB(16, 4, 10, 2),
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.end,
-        children: [
-          _LangChip(),
-        ],
-      ),
-    );
-  }
-}
-
 class _LangChip extends StatelessWidget {
   const _LangChip();
 
@@ -808,8 +841,9 @@ class _LangChip extends StatelessWidget {
       behavior: HitTestBehavior.opaque,
       onTap: () => s.setLang(next),
       child: SizedBox(
-        // Matches the support badge so the two line up in the strip and
-        // the language tap target stays finger-sized.
+        // Same height as the support button below it, so the two read as one
+        // stack in the bottom-right corner and the language tap target stays
+        // finger-sized.
         height: SupportCorner.height,
         child: Padding(
           padding: const EdgeInsets.symmetric(horizontal: 10),
