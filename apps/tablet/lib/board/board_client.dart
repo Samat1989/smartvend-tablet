@@ -86,7 +86,19 @@ enum BoardProtocol {
   /// 115200 8N1, dispense addressed by (ряд, колонка), status echoed in
   /// the result frame. Reverse-engineered from the factory `com.li.fut`
   /// APK — full contract in `docs/ИНТЕГРАЦИЯ_платы_LiYuTai_FINAL.md`.
-  lyt('lyt_v27', 'BarysVend V27.2', 115200);
+  lyt('lyt_v27', 'BarysVend V27.2', 115200),
+
+  /// Микромаркет: холодильник с электрозамком вместо моторов. На том конце не
+  /// вендинговая плата, а релейный модуль (прошивка от esp-relay, переведённая
+  /// с MQTT на USB-serial), понимающий построчные текстовые команды:
+  ///
+  ///     PING       -> PONG
+  ///     OPEN <сек> -> OK | ERR
+  ///
+  /// Моторов нет, значит нет ни 900-мс опроса, ни адресации (ряд, колонка):
+  /// после оплаты подаётся одна команда, товар покупатель берёт сам.
+  /// Подробности — docs/tablet-micromarket.md.
+  micromarket('micromarket', 'Микромаркет (замок)', 115200);
 
   const BoardProtocol(this.storageName, this.label, this.defaultBaud);
 
@@ -152,6 +164,7 @@ class BoardClient extends ChangeNotifier {
   BoardProtocol _protocol = BoardProtocol.m102;
   BoardProtocol get protocol => _protocol;
   bool get isLyt => _protocol == BoardProtocol.lyt;
+  bool get isMicromarket => _protocol == BoardProtocol.micromarket;
 
   /// Switch the wire protocol. Persists the choice and resets the baud
   /// to the protocol's default. The caller reconnects afterwards so the
@@ -240,7 +253,8 @@ class BoardClient extends ChangeNotifier {
   /// The LiYuTai board answers nothing except a real dispense (doc §7),
   /// so there is no passive health signal — an open port is the best we
   /// can report in that mode.
-  bool get isHealthy => isConnected && (isLyt || _consecutiveFailures < 4);
+  bool get isHealthy =>
+      isConnected && (isLyt || isMicromarket || _consecutiveFailures < 4);
 
   List<UsbDevice> get devices => List.unmodifiable(_devices);
   UsbDevice? get selectedDevice => _selected;
@@ -533,6 +547,13 @@ class BoardClient extends ChangeNotifier {
       _info('Opened ${transport.description} @ $_baud 8N1 '
           '(${_protocol.label})');
       notifyListeners();
+      if (isMicromarket) {
+        // Релейный модуль отвечает только на свои команды: и опрос 0x03, и
+        // запрос версии для него — мусор в порту. Хартбит здесь заводить
+        // нельзя, иначе watchdog зациклит close/open на исправной связи.
+        _mmRx.clear();
+        return true;
+      }
       if (isLyt) {
         // LiYuTai ignores both the version query (0x80) and any poll —
         // it only ever answers a dispense (doc §7). No heartbeat, no
@@ -888,6 +909,11 @@ class BoardClient extends ChangeNotifier {
     // up a complete 20-byte frame. Helps diagnose RS485 direction issues,
     // wrong baud (frame misalignment), or noise on the line.
     if (data.isNotEmpty) _addLog(LogEntry('RAW', _hex(data)));
+    if (isMicromarket) {
+      _mmRx.addAll(data);
+      _drainMicromarket();
+      return;
+    }
     if (isLyt) {
       _lytRx.addAll(data);
       _drainLyt();
@@ -928,6 +954,111 @@ class BoardClient extends ChangeNotifier {
       _err('pending LYT dispense failed: $reason');
       lp.complete(-1);
     }
+  }
+
+  // ---------- Микромаркет: замок по USB-serial ----------
+  //
+  // Построчный текст вместо кадров: `PING\n` -> `PONG`,
+  // `OPEN 20\n` -> `OK`.
+  // Выбран сознательно — монтажник проверяет плату из любой терминалки, не имея
+  // планшета. Для одной команды разбор кадров ничего бы не сэкономил.
+  //
+  // Время удержания приходит с планшета в самой команде: у этой платы нет
+  // сетевого OTA, перепрошить её можно только кабелем, поэтому настройка
+  // обязана жить там, где её можно поменять без визита к железу.
+
+  /// Накопитель принятых байт до перевода строки.
+  final List<int> _mmRx = [];
+
+  /// Ответ на команду, которая сейчас в полёте. Одна за раз — вызовы
+  /// сериализуются через [_busLock], как и у остальных протоколов.
+  Completer<String>? _mmPending;
+  Timer? _mmTimeout;
+
+  /// Режет накопленное по `\n` и отдаёт первую же строку ожидающему.
+  /// Пустые строки пропускаются: плата может слать `\r\n`,
+  /// а терминалы при отладке добавляют лишний перевод.
+  void _drainMicromarket() {
+    while (true) {
+      final nl = _mmRx.indexOf(0x0A);
+      if (nl < 0) break;
+      final line = String.fromCharCodes(_mmRx.sublist(0, nl)).trim();
+      _mmRx.removeRange(0, nl + 1);
+      if (line.isEmpty) continue;
+      _addLog(LogEntry('RX', line));
+      final pending = _mmPending;
+      if (pending != null && !pending.isCompleted) pending.complete(line);
+    }
+  }
+
+  /// Отправляет строку и ждёт одну строку ответа. Возвращает null при
+  /// таймауте, обрыве или отсутствии порта — вызывающий сам решает, что это
+  /// значит для его команды.
+  Future<String?> _mmCommand(String cmd,
+      {Duration timeout = const Duration(seconds: 2)}) {
+    final prev = _busLock;
+    final done = Completer<void>();
+    _busLock = done.future;
+    return prev
+        .then((_) => _mmExchange(cmd, timeout: timeout))
+        .whenComplete(done.complete);
+  }
+
+  Future<String?> _mmExchange(String cmd, {required Duration timeout}) async {
+    if (_transport == null) {
+      _err('not connected');
+      return null;
+    }
+    final bytes = Uint8List.fromList('$cmd\n'.codeUnits);
+    _addLog(LogEntry('TX', cmd));
+
+    final completer = Completer<String>();
+    _mmPending = completer;
+    _mmTimeout = Timer(timeout, () {
+      if (!completer.isCompleted) completer.complete('');
+    });
+
+    try {
+      await _transport!.write(bytes);
+    } catch (e) {
+      _err('write: $e');
+      _mmTimeout?.cancel();
+      _mmPending = null;
+      return null;
+    }
+
+    final line = await completer.future;
+    _mmPending = null;
+    _mmTimeout?.cancel();
+    if (line.isEmpty) {
+      _err('$cmd — нет ответа за ${timeout.inMilliseconds} мс');
+      return null;
+    }
+    return line;
+  }
+
+  /// Открыть замок на [seconds]. true — плата подтвердила приём команды.
+  ///
+  /// Подтверждение означает «команда принята», а не «покупатель забрал товар»:
+  /// датчиков двери в первой версии нет, экран выдачи закрывается по таймеру.
+  ///
+  /// Таймаут ответа с запасом больше самого удержания — прошивка отвечает `OK`
+  /// сразу, но если она когда-нибудь начнёт отвечать по завершении, ждать
+  /// придётся всё время удержания.
+  Future<bool> openLock({int seconds = 20}) async {
+    if (!isMicromarket) {
+      _err('openLock вызван не в режиме микромаркета');
+      return false;
+    }
+    final sec = seconds.clamp(1, 600);
+    final reply = await _mmCommand('OPEN $sec',
+        timeout: Duration(seconds: sec + 5));
+    if (reply == 'OK') {
+      _info('Замок открыт на $sec с');
+      return true;
+    }
+    _err('Замок не открылся: ${reply ?? "нет ответа"}');
+    return false;
   }
 
   // ---------- BarysVend V27.2 (LiYuTai) protocol ----------
@@ -1229,12 +1360,14 @@ class BoardClient extends ChangeNotifier {
     // non-actuating probe doesn't exist, so an open port is the best
     // pre-payment check available in that mode.
     if (isLyt) return true;
+    if (isMicromarket) return (await _mmCommand('PING')) == 'PONG';
     final r = await _sendAndReceive(0x01, List.filled(16, 0), timeout: timeout);
     return r != null && r.isNotEmpty;
   }
 
   Future<String?> getId() async {
     if (isLyt) return null; // no version/ID command answered (doc §7)
+    if (isMicromarket) return null; // релейный модуль версию не сообщает
     final r = await _sendAndReceive(0x01, List.filled(16, 0));
     if (r == null || r.length < 14) return null;
     final sn = String.fromCharCodes(r.sublist(2, 14).where((b) => b >= 0x20 && b <= 0x7E)).trim();

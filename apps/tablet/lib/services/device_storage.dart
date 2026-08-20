@@ -38,6 +38,12 @@ class DeviceStorage extends ChangeNotifier {
   // BarysVend only: swap ряд/колонка in outgoing dispense frames for
   // cross-wired cabinets (see BoardClient.lytSwapRowCol).
   static const _kLytSwapRowCol = 'lyt_swap_row_col';
+
+  // Сколько секунд держать замок открытым в режиме микромаркета.
+  // Живёт на планшете, а не в прошивке: у релейной платы нет сетевого OTA,
+  // перепрошить её можно только кабелем — значит настройка обязана быть там,
+  // где её меняют без визита к железу. Уходит в команду OPEN <сек>.
+  static const _kLockHoldSeconds = 'lock_hold_seconds';
   static const _kShowSlotNumber = 'storefront_show_slot_number';
   static const _kShowShelfLabels = 'storefront_show_shelf_labels';
   static const _kSupportPhone = 'support_phone';
@@ -138,6 +144,17 @@ class DeviceStorage extends ChangeNotifier {
 
   Future<void> setLytSwapRowCol(bool v) async {
     await _prefs.setBool(_kLytSwapRowCol, v);
+    notifyListeners();
+  }
+
+  /// Время удержания замка, секунды. 20 по умолчанию — столько же, сколько
+  /// DEFAULT_OPEN_SECONDS в прошивке esp-pulse, чтобы поведение вариантов не
+  /// разъезжалось. Границы те же, что у драйвера: 1..600.
+  int get lockHoldSeconds =>
+      (_prefs.getInt(_kLockHoldSeconds) ?? 20).clamp(1, 600);
+
+  Future<void> setLockHoldSeconds(int v) async {
+    await _prefs.setInt(_kLockHoldSeconds, v.clamp(1, 600));
     notifyListeners();
   }
 
