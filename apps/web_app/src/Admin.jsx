@@ -455,6 +455,12 @@ export default function Admin() {
   const [catalogProducts, setCatalogProducts] = useState([]);
   const [catalogFilter, setCatalogFilter] = useState('active'); // 'active' | 'drafts' | 'archived'
   const [editingCatalog, setEditingCatalog] = useState(null);
+  // In-app confirmation instead of window.confirm(). The native dialog is a
+  // trap here: after a few of them the browser offers "prevent this page from
+  // creating more dialogs", and once the operator ticks it confirm() returns
+  // false instantly — the delete button then does nothing at all, silently and
+  // for the rest of the session, with no clue that anything was suppressed.
+  const [confirmAction, setConfirmAction] = useState(null); // {message, onYes}
   const catalogFileInputRef = useRef(null);
 
   // Picker overlay used by the inventory edit modal to pick a catalog
@@ -1012,8 +1018,14 @@ export default function Admin() {
     }
   }
 
-  async function deleteCatalogProduct(p) {
-    if (!confirm(`${t('delete_catalog_confirm_prefix')}${p.name}${t('delete_catalog_confirm_suffix')}`)) return;
+  function deleteCatalogProduct(p) {
+    setConfirmAction({
+      message: `${t('delete_catalog_confirm_prefix')}${p.name}${t('delete_catalog_confirm_suffix')}`,
+      onYes: () => reallyDeleteCatalogProduct(p),
+    });
+  }
+
+  async function reallyDeleteCatalogProduct(p) {
     try {
       // .select() matters: without it PostgREST answers 204 whether it deleted
       // a row or RLS filtered every candidate out, and the UI cheerfully
@@ -1286,8 +1298,14 @@ export default function Admin() {
     }
   }
 
-  async function deleteCategory(id) {
-    if (!confirm(t('delete_category_confirm'))) return;
+  function deleteCategory(id) {
+    setConfirmAction({
+      message: t('delete_category_confirm'),
+      onYes: () => reallyDeleteCategory(id),
+    });
+  }
+
+  async function reallyDeleteCategory(id) {
     try {
       await supabase.from('categories').delete().eq('id', id);
       fetchCategories();
@@ -2254,6 +2272,28 @@ export default function Admin() {
       {/* Catalog edit modal — separate form from inventory edit since
           catalog rows have different fields (volume_ml, description,
           is_draft, is_archived) and no per-slot price/stock. */}
+      {confirmAction && (
+        <div className="fixed inset-0 z-[60] bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-white rounded-3xl p-6 w-full max-w-sm shadow-2xl border-2 border-slate-300">
+            <p className="font-bold text-slate-900 text-sm mb-6">{confirmAction.message}</p>
+            <div className="flex gap-2">
+              <button
+                onClick={() => setConfirmAction(null)}
+                className="flex-1 bg-white border-2 border-slate-300 text-slate-700 py-2.5 rounded-xl font-bold text-sm hover:bg-slate-50 transition-all"
+              >
+                {t('cancel')}
+              </button>
+              <button
+                onClick={() => { const a = confirmAction; setConfirmAction(null); a.onYes(); }}
+                className="flex-1 bg-red-600 text-white py-2.5 rounded-xl font-black text-sm hover:bg-red-700 transition-all border-2 border-red-600"
+              >
+                {t('delete_forever')}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {editingCatalog && (
         <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4">
           <div className="bg-white rounded-3xl p-6 w-full max-w-md shadow-2xl border-2 border-slate-300 max-h-[90vh] overflow-y-auto">
