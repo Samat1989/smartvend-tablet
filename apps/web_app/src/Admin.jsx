@@ -661,7 +661,10 @@ export default function Admin() {
       try { payload = await error.context?.json(); } catch (_) { /* not JSON */ }
       const err = new Error(payload?.error || error.message);
       err.code = payload?.error;   // stable machine-readable code
+      err.status = error.context?.status;
       err.details = payload;       // full body — e.g. the row counts on a delete
+      // 401 here means the function's own getUser() rejected our token.
+      if (err.status === 401) await handleAuthFailure(err);
       throw err;
     }
     return data;
@@ -917,6 +920,7 @@ export default function Admin() {
       setCatalogProducts(data || []);
     } catch (err) {
       console.error('Error fetching catalog:', err);
+      if (await handleAuthFailure(err)) return;
       showToast(t('catalog_load_error'), 'error');
     } finally {
       setLoading(false);
@@ -1117,6 +1121,32 @@ export default function Admin() {
     }
   }
 
+  // A dead session arrives in two disguises. PostgREST answers 42501: the
+  // request fell through to the `anon` role, which lost its direct grants in
+  // the June lockdown, so "permission denied for table micromarkets" really
+  // means "no token". Edge functions answer 401 from their own getUser check.
+  //
+  // Neither deserves a generic "could not load" toast. Until now the panel
+  // swallowed both and kept polling every 30 s with the anon key, showing the
+  // operator empty lists and no explanation. Re-check the session, and if it
+  // is really gone, drop to the login screen — which is what `session === null`
+  // renders.
+  //
+  // Returns true when it handled the error, so callers can skip their own toast.
+  async function handleAuthFailure(err) {
+    const looksAuth =
+      err?.code === '42501' || err?.code === 'PGRST301' ||
+      err?.status === 401 || err?.context?.status === 401;
+    if (!looksAuth) return false;
+
+    const { data } = await supabase.auth.getSession();
+    if (data?.session) return false;   // signed in after all — a genuine denial
+
+    setSession(null);
+    showToast(t('session_expired'), 'error');
+    return true;
+  }
+
   async function fetchMarkets() {
     try {
       // Two queries, merged here rather than one embedded select: PostgREST
@@ -1144,6 +1174,7 @@ export default function Admin() {
       // operator drills into a specific machine. Sales/Catalog don't need one.
     } catch (err) {
       console.error('Error fetching markets:', err);
+      if (await handleAuthFailure(err)) return;
       showToast(t('could_not_load_markets'), 'error');
     }
   }
