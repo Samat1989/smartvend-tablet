@@ -71,7 +71,7 @@ class UsbTransport extends BoardTransport {
         log('create($label): null');
         return null;
       }
-      if (type.isNotEmpty) log('драйвер подобран вручную: $label');
+      if (type.isNotEmpty) log('драйвер подобран перебором: $label');
       return p;
     } catch (e) {
       log('create($label): $e');
