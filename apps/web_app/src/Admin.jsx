@@ -321,6 +321,25 @@ function Toast({ toast, onClose }) {
 //
 // `online` is computed server-side (device_status_view, 3-minute threshold);
 // this only renders it.
+// Три типа машин, а проверка была одна: "static или вендинг". С появлением
+// micromarket_tablet тернарник начал врать — планшетный микромаркет
+// показывался как вендинг. Одно место вместо трёх копий.
+// Цвет бейджа по типу. Планшетный микромаркет отличается от static-QR не
+// косметически: у него есть устройство, которое отчитывается, поэтому у него
+// горит лампочка связи — и в списке он не должен сливаться с тем, у которого
+// её никогда не будет.
+function kindTint(kind) {
+  if (kind === 'micromarket_static') return 'bg-emerald-100 text-emerald-700';
+  if (kind === 'micromarket_tablet') return 'bg-amber-100 text-amber-700';
+  return 'bg-indigo-100 text-indigo-700';
+}
+
+function kindLabel(kind, t) {
+  if (kind === 'micromarket_static') return t('badge_micromarket');
+  if (kind === 'micromarket_tablet') return t('badge_micromarket_tablet');
+  return t('badge_vending');
+}
+
 function DeviceStatusDot({ status, kind, withLabel = false }) {
   const { t, i18n } = useTranslation();
 
@@ -1664,8 +1683,8 @@ export default function Admin() {
                     const meta = (
                       <>
                         <DeviceStatusDot status={m.status} kind={m.kind} withLabel />
-                        <span className={`text-[9px] font-black uppercase tracking-wider px-2 py-1 rounded-lg shrink-0 ${m.kind === 'micromarket_static' ? 'bg-emerald-100 text-emerald-700' : 'bg-indigo-100 text-indigo-700'}`}>
-                          {m.kind === 'micromarket_static' ? t('badge_micromarket') : t('badge_vending')}
+                        <span className={`text-[9px] font-black uppercase tracking-wider px-2 py-1 rounded-lg shrink-0 ${kindTint(m.kind)}`}>
+                          {kindLabel(m.kind, t)}
                         </span>
                       </>
                     );
@@ -2536,9 +2555,10 @@ export default function Admin() {
               </div>
               <div>
                 <label className="text-xs font-bold text-slate-500 ml-1">{t('device_kind')}</label>
-                <div className="grid grid-cols-2 gap-2 mt-1">
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 mt-1">
                   {[
                     { value: 'vending', label: t('badge_vending'), hint: t('device_kind_vending_hint') },
+                    { value: 'micromarket_tablet', label: t('badge_micromarket_tablet'), hint: t('device_kind_tablet_hint') },
                     { value: 'micromarket_static', label: t('badge_micromarket'), hint: t('device_kind_static_hint') },
                   ].map(opt => (
                     <button
@@ -2989,15 +3009,15 @@ function UsersTab({
             Status and type move under the name on a phone. */}
         <div className="flex sm:hidden items-center gap-2 mt-1.5 flex-wrap">
           <DeviceStatusDot status={m.heartbeat} kind={m.kind} />
-          <span className={`text-[9px] font-black uppercase tracking-wider px-2 py-1 rounded-lg ${m.kind === 'micromarket_static' ? 'bg-emerald-100 text-emerald-700' : 'bg-indigo-100 text-indigo-700'}`}>
-            {m.kind === 'micromarket_static' ? t('badge_micromarket') : t('badge_vending')}
+          <span className={`text-[9px] font-black uppercase tracking-wider px-2 py-1 rounded-lg ${kindTint(m.kind)}`}>
+            {kindLabel(m.kind, t)}
           </span>
         </div>
       </div>
       <div className="hidden sm:flex items-center gap-3 shrink-0">
         <DeviceStatusDot status={m.heartbeat} kind={m.kind} />
-        <span className={`text-[9px] font-black uppercase tracking-wider px-2 py-1 rounded-lg ${m.kind === 'micromarket_static' ? 'bg-emerald-100 text-emerald-700' : 'bg-indigo-100 text-indigo-700'}`}>
-          {m.kind === 'micromarket_static' ? t('badge_micromarket') : t('badge_vending')}
+        <span className={`text-[9px] font-black uppercase tracking-wider px-2 py-1 rounded-lg ${kindTint(m.kind)}`}>
+          {kindLabel(m.kind, t)}
         </span>
       </div>
       <div className="flex gap-1.5 shrink-0">
