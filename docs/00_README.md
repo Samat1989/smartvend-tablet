@@ -12,6 +12,8 @@
 | [`03_PERIPHERALS_AND_CONFIG.md`](03_PERIPHERALS_AND_CONFIG.md) | **Периферия и конфигурация** — свет, холодильник, датчики, БД, облако |
 | [`04_MOTOR_LAYOUT.md`](04_MOTOR_LAYOUT.md) | **Раскладка моторов конкретного аппарата** — 6×6=36 моторов, индексы 44-99, формула координат |
 | [`known-issues.md`](known-issues.md) | **Открытые дефекты** — разобранные, но пока не исправленные проблемы, и принятые по ним решения |
+| [`tablet-micromarket.md`](tablet-micromarket.md) | **Микромаркет на планшете** — то же приложение, вместо моторов замок на USB-реле |
+| [`esp-screen-micromarket.md`](esp-screen-micromarket.md) | Микромаркет с экраном на ESP32 — **отложенный** вариант, разбор для истории |
 
 Базовый референс протокола: [`../api_docsM109E.txt`](../api_docsM109E.txt) (заводская инструкция M102).
 Рабочий Python-клиент: [`../vending_ctrl.py`](../vending_ctrl.py).
