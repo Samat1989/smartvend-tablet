@@ -101,3 +101,9 @@ esp32_dump/
 # --- ESP-IDF managed components (fetched by the component manager) -------
 # Refetched from idf_component.yml + dependencies.lock; don't commit the copies.
 **/managed_components/
+
+# --- Provisioning QR (NEVER commit) -------------------------------------
+# device-owner-qr.json/.png carry the site Wi-Fi password in clear text, and
+# the QR is a working key to enrol any freshly reset tablet as device owner.
+# Regenerate locally when needed; see docs on QR provisioning.
+provisioning/
