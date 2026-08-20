@@ -253,8 +253,14 @@ class BoardClient extends ChangeNotifier {
   /// The LiYuTai board answers nothing except a real dispense (doc §7),
   /// so there is no passive health signal — an open port is the best we
   /// can report in that mode.
-  bool get isHealthy =>
-      isConnected && (isLyt || isMicromarket || _consecutiveFailures < 4);
+  /// LiYuTai остаётся исключением — оно вообще ни на что не отвечает, кроме
+  /// выдачи, так что открытый порт там и есть лучшая доступная проверка.
+  ///
+  /// У микромаркета порог ниже: пинг раз в 10 с, значит два промаха — это
+  /// 20 секунд молчания, чего достаточно, чтобы поймать отошедший разъём, но
+  /// мало, чтобы среагировать на одну потерянную строку.
+  bool get isHealthy => isConnected &&
+      (isLyt || _consecutiveFailures < (isMicromarket ? 2 : 4));
 
   List<UsbDevice> get devices => List.unmodifiable(_devices);
   UsbDevice? get selectedDevice => _selected;
@@ -552,6 +558,8 @@ class BoardClient extends ChangeNotifier {
         // запрос версии для него — мусор в порту. Хартбит здесь заводить
         // нельзя, иначе watchdog зациклит close/open на исправной связи.
         _mmRx.clear();
+        _consecutiveFailures = 0;
+        _startMicromarketHeartbeat();
         return true;
       }
       if (isLyt) {
@@ -760,6 +768,7 @@ class BoardClient extends ChangeNotifier {
     // and we tear down the actual port in the background with a
     // 2-second timeout.
     _stopPollHeartbeat();
+    _stopMicromarketHeartbeat();
     _failPending('disconnected');
     final oldRx = _rxSub;
     final oldTransport = _transport;
@@ -966,6 +975,46 @@ class BoardClient extends ChangeNotifier {
   // Время удержания приходит с планшета в самой команде: у этой платы нет
   // сетевого OTA, перепрошить её можно только кабелем, поэтому настройка
   // обязана жить там, где её можно поменять без визита к железу.
+
+  /// Пинг раз в 10 секунд — единственный источник правды о связи в этом
+  /// режиме.
+  ///
+  /// Без него `isHealthy` означал бы всего лишь «порт открыт», а полуотошедший
+  /// USB-разъём докладывает это ещё долго после того, как плата перестала
+  /// слушать. Теперь молчание платы гасит витрину штатной шторкой
+  /// обслуживания и блокирует добавление в корзину — той же механикой, что уже
+  /// работает для вендинга, ничего нового рисовать не пришлось.
+  ///
+  /// 10 секунд, а не секунда: команда идёт через тот же мьютекс шины, что и
+  /// открытие замка, и частый опрос без нужды соревновался бы с ней за очередь.
+  /// Поймать отвалившийся кабель за 10-20 секунд более чем достаточно —
+  /// покупатель за это время не успеет дойти до оплаты.
+  static const Duration _mmHeartbeatInterval = Duration(seconds: 10);
+  Timer? _mmHeartbeat;
+
+  void _startMicromarketHeartbeat() {
+    _mmHeartbeat?.cancel();
+    _mmHeartbeat = Timer.periodic(_mmHeartbeatInterval, (_) async {
+      if (_transport == null || !isMicromarket) return;
+      final alive = await ping();
+      if (alive) {
+        if (_consecutiveFailures != 0) {
+          _consecutiveFailures = 0;
+          _info('Связь с платой восстановлена');
+          notifyListeners();
+        }
+        return;
+      }
+      _consecutiveFailures++;
+      _err('Плата не ответила на PING (подряд: $_consecutiveFailures)');
+      notifyListeners();
+    });
+  }
+
+  void _stopMicromarketHeartbeat() {
+    _mmHeartbeat?.cancel();
+    _mmHeartbeat = null;
+  }
 
   /// Накопитель принятых байт до перевода строки.
   final List<int> _mmRx = [];

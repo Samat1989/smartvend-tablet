@@ -102,11 +102,21 @@ class SupabaseApi {
   /// is of the right kind for this app, via the `verify_pairing` RPC.
   ///
   /// The RPC validates the secret server-side and returns only `kind` — the
-  /// secret column is never sent to the client (closes audit F1). This app
-  /// only handles `kind='vending'` machines; other kinds are rejected here
-  /// with a clear message.
+  /// secret column is never sent to the client (closes audit F1).
+  ///
+  /// Two kinds are ours, because one app now drives both: `vending` (motors)
+  /// and `micromarket_tablet` (a fridge with an electric lock). Which of the
+  /// two a given machine behaves as is decided on site by the board protocol,
+  /// not here — that setting is local and works without a network. This check
+  /// only keeps the app off a machine it has no business running.
+  ///
+  /// `micromarket_static` stays rejected: that is the QR-sticker flow with no
+  /// device at all, and a tablet paired to one would be claiming a machine
+  /// nobody expects it on.
   ///
   /// Returns null on success, or a localised-style error string.
+  static const _supportedKinds = {'vending', 'micromarket_tablet'};
+
   Future<String?> verifyPairing(String machid, String secret) async {
     try {
       final resp = await _rpc('verify_pairing', {
@@ -114,11 +124,14 @@ class SupabaseApi {
         'p_secret': secret.trim(),
       });
       if (resp.statusCode >= 200 && resp.statusCode < 300) {
+        // Legacy rows predate the discriminator and default to
+        // micromarket_tablet — which is now supported, so an absent value is
+        // no longer a reason to refuse.
         final kind = (jsonDecode(resp.body) as String?)?.trim() ??
             'micromarket_tablet';
-        if (kind != 'vending') {
-          return 'Это не вендинг-аппарат (тип: $kind). '
-              'Используйте приложение, соответствующее типу.';
+        if (!_supportedKinds.contains(kind)) {
+          return 'Этот аппарат не обслуживается приложением (тип: $kind). '
+              'Для static-QR аппарата планшет не нужен.';
         }
         return null;
       }
