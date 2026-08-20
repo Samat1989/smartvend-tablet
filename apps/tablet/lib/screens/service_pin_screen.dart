@@ -44,7 +44,8 @@ class _ServicePinScreenState extends State<ServicePinScreen> {
       return;
     }
     if (pin != _confirmCtrl.text.trim()) {
-      setState(() => _error = 'PIN не совпадает');
+      setState(() =>
+          _error = context.read<Strings>().t('pin_mismatch'));
       return;
     }
     await context.read<DeviceStorage>().setServicePin(pin);
@@ -68,7 +69,8 @@ class _ServicePinScreenState extends State<ServicePinScreen> {
     setState(() {
       _error = lockedNow
           ? null
-          : 'Неверный PIN. Осталось попыток: ${storage.pinAttemptsRemaining}';
+          : '${context.read<Strings>().t('pin_wrong_left')} '
+              '${storage.pinAttemptsRemaining}';
     });
   }
 
@@ -79,9 +81,9 @@ class _ServicePinScreenState extends State<ServicePinScreen> {
 
     final Widget body;
     if (storage.isPinLocked) {
-      body = _lockedBody(storage);
+      body = _lockedBody(storage, s);
     } else if (!storage.servicePinIsSet) {
-      body = _createBody();
+      body = _createBody(s);
     } else {
       body = _enterBody(s);
     }
@@ -138,7 +140,7 @@ class _ServicePinScreenState extends State<ServicePinScreen> {
       [FilteringTextInputFormatter.digitsOnly];
 
   // ── locked ──────────────────────────────────────────────────────
-  Widget _lockedBody(DeviceStorage storage) {
+  Widget _lockedBody(DeviceStorage storage, Strings s) {
     final until = storage.pinLockedUntil;
     final mins = until == null
         ? 0
@@ -148,14 +150,14 @@ class _ServicePinScreenState extends State<ServicePinScreen> {
       children: [
         _icon(Icons.lock_clock, Colors.redAccent),
         const SizedBox(height: 16),
-        const Text(
-          'Слишком много попыток',
+        Text(
+          s.t('pin_too_many'),
           style: TextStyle(
               color: Colors.white, fontSize: 20, fontWeight: FontWeight.bold),
         ),
         const SizedBox(height: 8),
         Text(
-          'Ввод PIN заблокирован. Попробуйте через ~$mins мин.',
+          '${s.t('pin_locked_for')} $mins ${s.t('pin_minutes_short')}',
           textAlign: TextAlign.center,
           style: TextStyle(color: Colors.grey.shade400, fontSize: 14),
         ),
@@ -164,21 +166,21 @@ class _ServicePinScreenState extends State<ServicePinScreen> {
   }
 
   // ── create ──────────────────────────────────────────────────────
-  Widget _createBody() {
+  Widget _createBody(Strings s) {
     return Column(
       mainAxisSize: MainAxisSize.min,
       children: [
         _icon(Icons.lock_reset, Colors.amber.shade400),
         const SizedBox(height: 16),
-        const Text(
-          'Задайте сервис-PIN',
+        Text(
+          s.t('pin_set_title'),
           style: TextStyle(
               color: Colors.white, fontSize: 20, fontWeight: FontWeight.bold),
         ),
         const SizedBox(height: 8),
         Text(
-          'PIN по умолчанию больше не используется. Придумайте свой '
-          '(минимум ${DeviceStorage.minPinLength} цифры).',
+          s.t('pin_set_hint').replaceFirst(
+              '%d', '${DeviceStorage.minPinLength}'),
           textAlign: TextAlign.center,
           style: TextStyle(color: Colors.grey.shade400, fontSize: 13),
         ),
@@ -204,7 +206,7 @@ class _ServicePinScreenState extends State<ServicePinScreen> {
           inputFormatters: _digits,
           style: _pinTextStyle,
           decoration: _pinDecoration(errorText: _error).copyWith(
-            hintText: 'Повторите PIN',
+            hintText: s.t('pin_repeat'),
             hintStyle: TextStyle(color: Colors.grey.shade600, letterSpacing: 0),
           ),
           onSubmitted: (_) => _onCreate(),
@@ -216,8 +218,9 @@ class _ServicePinScreenState extends State<ServicePinScreen> {
             backgroundColor: Colors.amber.shade700,
           ),
           onPressed: _onCreate,
-          child: const Text('Сохранить PIN',
-              style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+          child: Text(s.t('pin_save'),
+              style: const TextStyle(
+                  fontSize: 16, fontWeight: FontWeight.bold)),
         ),
       ],
     );

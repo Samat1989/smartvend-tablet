@@ -413,6 +413,108 @@ class Strings extends ChangeNotifier {
           'Without them the product will not appear in the storefront.',
     },
     'motor_label': {'ru': 'Мотор', 'kk': 'Мотор', 'en': 'Motor'},
+    // Service mode — menu tiles disabled on a lock board
+    'tile_off_no_motors': {'ru': 'нет моторов', 'kk': 'моторлар жоқ', 'en': 'no motors'},
+    'tile_off_no_channels': {'ru': 'нет каналов', 'kk': 'арналар жоқ', 'en': 'no channels'},
+    'service_update': {'ru': 'Обновление', 'kk': 'Жаңарту', 'en': 'Update'},
+    'pin_changed': {'ru': 'PIN изменён', 'kk': 'PIN өзгертілді', 'en': 'PIN changed'},
+    // Service mode — inventory editor
+    'layout_not_set': {
+      'ru': 'Раскладка не настроена',
+      'kk': 'Сөре сызбасы бапталмаған',
+      'en': 'Layout is not configured',
+    },
+    'layout_not_set_hint': {
+      'ru': 'Сначала откройте редактор раскладки и выберите шаблон — после '
+          'этого здесь появятся строки на каждый слот.',
+      'kk': 'Алдымен сызба редакторын ашып, үлгіні таңдаңыз — содан кейін '
+          'мұнда әр слотқа жол пайда болады.',
+      'en': 'Open the layout editor and pick a template first — a row per '
+          'slot appears here afterwards.',
+    },
+    'open_layout_editor': {
+      'ru': 'Открыть редактор',
+      'kk': 'Редакторды ашу',
+      'en': 'Open the editor',
+    },
+    'no_slots': {'ru': 'нет слотов', 'kk': 'слоттар жоқ', 'en': 'no slots'},
+    // Service mode — PIN
+    'pin_mismatch': {
+      'ru': 'PIN не совпадает',
+      'kk': 'PIN сәйкес келмейді',
+      'en': 'PINs do not match',
+    },
+    'pin_wrong_left': {
+      'ru': 'Неверный PIN. Осталось попыток:',
+      'kk': 'PIN қате. Қалған әрекет:',
+      'en': 'Wrong PIN. Attempts left:',
+    },
+    'pin_too_many': {
+      'ru': 'Слишком много попыток',
+      'kk': 'Тым көп әрекет',
+      'en': 'Too many attempts',
+    },
+    'pin_locked_for': {
+      'ru': 'Ввод PIN заблокирован. Попробуйте через ~',
+      'kk': 'PIN енгізу бұғатталды. Шамамен кейін көріңіз:',
+      'en': 'PIN entry is locked. Try again in about',
+    },
+    'pin_minutes_short': {'ru': 'мин.', 'kk': 'мин.', 'en': 'min'},
+    'pin_set_title': {
+      'ru': 'Задайте сервис-PIN',
+      'kk': 'Қызмет PIN-ін орнатыңыз',
+      'en': 'Set a service PIN',
+    },
+    'pin_set_hint': {
+      'ru': 'PIN по умолчанию больше не используется. Придумайте свой '
+          '(минимум %d цифры).',
+      'kk': 'Әдепкі PIN енді қолданылмайды. Өз PIN-іңізді ойлап табыңыз '
+          '(кемінде %d сан).',
+      'en': 'The default PIN is no longer in use. Choose your own '
+          '(at least %d digits).',
+    },
+    'pin_repeat': {'ru': 'Повторите PIN', 'kk': 'PIN-ді қайталаңыз', 'en': 'Repeat the PIN'},
+    'pin_save': {'ru': 'Сохранить PIN', 'kk': 'PIN сақтау', 'en': 'Save the PIN'},
+    // Service mode — screensaver media
+    'media_copy_failed': {
+      'ru': 'Не удалось скопировать',
+      'kk': 'Көшіру мүмкін болмады',
+      'en': 'Could not copy',
+    },
+    'media_added': {
+      'ru': 'Добавлено файлов:',
+      'kk': 'Қосылған файлдар:',
+      'en': 'Files added:',
+    },
+    'media_add': {'ru': 'Добавить', 'kk': 'Қосу', 'en': 'Add'},
+    'media_folder': {
+      'ru': 'Папка с медиа на устройстве',
+      'kk': 'Құрылғыдағы медиа қалтасы',
+      'en': 'Media folder on the device',
+    },
+    'media_folder_missing': {
+      'ru': '(не доступна)',
+      'kk': '(қолжетімсіз)',
+      'en': '(unavailable)',
+    },
+    'media_copy_hint': {
+      'ru': 'Копируйте сюда .jpg / .png / .webp / .gif или .mp4 / .mov / '
+          '.webm / .mkv через adb push или файловый менеджер, потом нажмите '
+          '«обновить» сверху.',
+      'kk': 'Мұнда .jpg / .png / .webp / .gif немесе .mp4 / .mov / .webm / '
+          '.mkv файлдарын adb push немесе файл менеджері арқылы көшіріңіз, '
+          'содан кейін жоғарыдан «жаңарту» түймесін басыңыз.',
+      'en': 'Copy .jpg / .png / .webp / .gif or .mp4 / .mov / .webm / .mkv '
+          'here with adb push or a file manager, then hit "refresh" above.',
+    },
+    'media_scanning': {'ru': 'Сканирование…', 'kk': 'Сканерлеу…', 'en': 'Scanning…'},
+    'media_empty': {
+      'ru': 'Медиа-файлов пока нет',
+      'kk': 'Әзірге медиа файлдар жоқ',
+      'en': 'No media files yet',
+    },
+    'media_video': {'ru': 'видео', 'kk': 'видео', 'en': 'video'},
+    'media_image': {'ru': 'изображение', 'kk': 'сурет', 'en': 'image'},
     // Board status / health
     'board_firmware': {'ru': 'Прошивка', 'kk': 'Прошивка', 'en': 'Firmware'},
     'board_status': {'ru': 'Связь с платой', 'kk': 'Платамен байланыс', 'en': 'Board link'},

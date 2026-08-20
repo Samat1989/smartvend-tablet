@@ -58,7 +58,7 @@ class ServiceMenuScreen extends StatelessWidget {
                       icon: Icons.precision_manufacturing,
                       label: s.t('service_test_motors'),
                       color: Colors.indigo,
-                      disabledReason: lockBoard ? 'нет моторов' : null,
+                      disabledReason: lockBoard ? s.t('tile_off_no_motors') : null,
                       onTap: () => Navigator.of(context).push(
                         MaterialPageRoute(
                             builder: (_) => const TesterScreen()),
@@ -71,7 +71,7 @@ class ServiceMenuScreen extends StatelessWidget {
                       // На релейной плате нет каналов DO и датчиков: writeDo и
                       // readTemp в этом режиме возвращают «не поддерживается»,
                       // так что экран климата управлял бы пустотой.
-                      disabledReason: lockBoard ? 'нет каналов' : null,
+                      disabledReason: lockBoard ? s.t('tile_off_no_channels') : null,
                       onTap: () => Navigator.of(context).push(
                         MaterialPageRoute(
                             builder: (_) => const ClimateScreen()),
@@ -222,7 +222,9 @@ class ServiceMenuScreen extends StatelessWidget {
     await context.read<DeviceStorage>().setServicePin(pin);
     if (!context.mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('PIN изменён'), backgroundColor: Colors.green),
+      SnackBar(
+          content: Text(context.read<Strings>().t('pin_changed')),
+          backgroundColor: Colors.green),
     );
   }
 

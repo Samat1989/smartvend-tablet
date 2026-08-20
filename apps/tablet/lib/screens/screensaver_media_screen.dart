@@ -59,7 +59,9 @@ class _ScreensaverMediaScreenState extends State<ScreensaverMediaScreen> {
         } catch (e) {
           if (mounted) {
             ScaffoldMessenger.of(context).showSnackBar(
-              SnackBar(content: Text('Не удалось скопировать ${f.name}: $e')),
+              SnackBar(
+                  content: Text('${context.read<Strings>().t('media_copy_failed')} '
+                      '${f.name}: $e')),
             );
           }
         }
@@ -67,7 +69,9 @@ class _ScreensaverMediaScreenState extends State<ScreensaverMediaScreen> {
       await media.refresh();
       if (mounted && copied > 0) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Добавлено файлов: $copied')),
+          SnackBar(
+              content: Text('${context.read<Strings>().t('media_added')} '
+                  '$copied')),
         );
       }
     } finally {
@@ -108,7 +112,7 @@ class _ScreensaverMediaScreenState extends State<ScreensaverMediaScreen> {
                 ),
               )
             : const Icon(Icons.add),
-        label: const Text('Добавить'),
+        label: Text(s.t('media_add')),
         onPressed: _importing ? null : _addFiles,
       ),
       body: SafeArea(
@@ -126,9 +130,9 @@ class _ScreensaverMediaScreenState extends State<ScreensaverMediaScreen> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  const Text(
-                    'Папка с медиа на устройстве',
-                    style: TextStyle(
+                  Text(
+                    s.t('media_folder'),
+                    style: const TextStyle(
                       color: Colors.white,
                       fontWeight: FontWeight.w700,
                       fontSize: 13,
@@ -136,7 +140,7 @@ class _ScreensaverMediaScreenState extends State<ScreensaverMediaScreen> {
                   ),
                   const SizedBox(height: 6),
                   SelectableText(
-                    media.folderPath ?? '(не доступна)',
+                    media.folderPath ?? s.t('media_folder_missing'),
                     style: const TextStyle(
                       color: Colors.white70,
                       fontFamily: 'monospace',
@@ -144,11 +148,9 @@ class _ScreensaverMediaScreenState extends State<ScreensaverMediaScreen> {
                     ),
                   ),
                   const SizedBox(height: 6),
-                  const Text(
-                    'Копируйте сюда .jpg / .png / .webp / .gif или '
-                    '.mp4 / .mov / .webm / .mkv через adb push или '
-                    'файловый менеджер, потом нажмите «обновить» сверху.',
-                    style: TextStyle(
+                  Text(
+                    s.t('media_copy_hint'),
+                    style: const TextStyle(
                       color: Colors.white54,
                       fontSize: 11,
                     ),
@@ -161,8 +163,8 @@ class _ScreensaverMediaScreenState extends State<ScreensaverMediaScreen> {
                   ? Center(
                       child: Text(
                         media.isScanning
-                            ? 'Сканирование…'
-                            : 'Медиа-файлов пока нет',
+                            ? s.t('media_scanning')
+                            : s.t('media_empty'),
                         style: const TextStyle(color: Colors.white54),
                       ),
                     )
@@ -187,7 +189,9 @@ class _ScreensaverMediaScreenState extends State<ScreensaverMediaScreen> {
                             ),
                           ),
                           subtitle: Text(
-                            it.kind == MediaKind.video ? 'видео' : 'изображение',
+                            it.kind == MediaKind.video
+                                ? s.t('media_video')
+                                : s.t('media_image'),
                             style: const TextStyle(
                               color: Colors.white54,
                               fontSize: 11,

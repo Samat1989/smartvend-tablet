@@ -279,6 +279,7 @@ class _EmptyLayoutHint extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final s = context.watch<Strings>();
     return Center(
       child: Padding(
         padding: const EdgeInsets.all(32),
@@ -287,21 +288,20 @@ class _EmptyLayoutHint extends StatelessWidget {
           children: [
             Icon(Icons.grid_off, size: 56, color: Colors.grey.shade500),
             const SizedBox(height: 16),
-            const Text(
-              'Раскладка не настроена',
-              style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700),
+            Text(
+              s.t('layout_not_set'),
+              style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w700),
             ),
             const SizedBox(height: 8),
-            const Text(
-              'Сначала откройте редактор раскладки и выберите шаблон '
-              '— после этого здесь появятся строки на каждый слот.',
+            Text(
+              s.t('layout_not_set_hint'),
               textAlign: TextAlign.center,
-              style: TextStyle(fontSize: 13, color: Colors.black54),
+              style: const TextStyle(fontSize: 13, color: Colors.black54),
             ),
             const SizedBox(height: 16),
             FilledButton.icon(
               icon: const Icon(Icons.dashboard_customize),
-              label: const Text('Открыть редактор'),
+              label: Text(s.t('open_layout_editor')),
               onPressed: () => Navigator.of(context).push(
                 MaterialPageRoute(
                   builder: (_) => const LayoutEditorScreen(),
@@ -364,11 +364,11 @@ class _ShelfBlock extends StatelessWidget {
             ),
           ),
           if (shelf.slots.isEmpty)
-            const Padding(
-              padding: EdgeInsets.symmetric(horizontal: 4, vertical: 6),
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 6),
               child: Text(
-                'нет слотов',
-                style: TextStyle(fontSize: 12, color: Colors.black45),
+                context.watch<Strings>().t('no_slots'),
+                style: const TextStyle(fontSize: 12, color: Colors.black45),
               ),
             )
           else
