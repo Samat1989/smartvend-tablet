@@ -176,7 +176,45 @@ class LayoutTemplate {
     builder: _buildBarysvendV272,
   );
 
-  static const List<LayoutTemplate> all = [factory6x6, mp2404_5_50, barysvendV272];
+  /// Микромаркет: холодильник с замком вместо моторов. Ячейки нумеруются
+  /// подряд 1…20 и означают номер, написанный на полке, — тот же
+  /// `inventory.motor_id`, что у вендинга хранит номер мотора.
+  ///
+  /// 4 полки по 5 ячеек — отправная точка, а не догма: полки и ячейки
+  /// добавляются и удаляются в редакторе, номера правятся вручную, если
+  /// наклейки идут не подряд.
+  static const LayoutTemplate micromarket4x5 = LayoutTemplate(
+    id: 'micromarket_4x5',
+    name: 'Микромаркет 4×5',
+    description: '4 полки × 5 ячеек, сквозная нумерация 1…20',
+    builder: _buildMicromarket4x5,
+  );
+
+  static const List<LayoutTemplate> all = [
+    factory6x6,
+    mp2404_5_50,
+    barysvendV272,
+    micromarket4x5,
+  ];
+}
+
+MachineLayout _buildMicromarket4x5() {
+  const shelfCount = 4;
+  const perShelf = 5;
+  final shelves = <Shelf>[];
+  var n = 1;
+  for (var s = 1; s <= shelfCount; s++) {
+    final slots = <Slot>[];
+    final first = n;
+    for (var j = 0; j < perShelf; j++) {
+      // Подпись ячейки — сам номер: в микромаркете он совпадает с тем, что
+      // наклеено на полке, и второе имя ему ни к чему.
+      slots.add(Slot(label: '$n', motorIds: [n]));
+      n++;
+    }
+    shelves.add(Shelf(label: '$first — ${n - 1}', slots: slots));
+  }
+  return MachineLayout(shelves: shelves);
 }
 
 MachineLayout _buildFactory6x6() {

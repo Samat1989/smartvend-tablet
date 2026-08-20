@@ -6,12 +6,14 @@ import 'package:qr_flutter/qr_flutter.dart';
 
 import '../services/device_storage.dart';
 import '../services/payment_service.dart';
+import '../board/board_client.dart';
 import '../services/strings.dart';
 import '../services/vending_service.dart';
 import '../theme.dart';
 import '../widgets/close_circle_button.dart';
 import '../widgets/support_corner.dart';
 import 'dispense_screen.dart';
+import 'unlock_screen.dart';
 
 /// Payment screen — Kaspi QR only.
 ///
@@ -141,8 +143,19 @@ class _PaymentScreenState extends State<PaymentScreen> {
           context.read<VendingService>().beginPaidDispense(
                 paymentId: req.torderid.isNotEmpty ? req.torderid : req.orderid,
               );
+          // Where paid orders go depends on what the machine actually is.
+          // A micromarket has no motors to turn: the door opens once and the
+          // customer takes the goods off the shelf, so the per-motor screen
+          // would have nothing to show and dispense() refuses in that mode
+          // anyway. The board protocol is the source of truth here rather
+          // than micromarkets.kind, because it is set on site and works
+          // without a network.
+          final micromarket = context.read<BoardClient>().isMicromarket;
           Navigator.of(context).pushReplacement(
-            MaterialPageRoute(builder: (_) => const DispenseScreen()),
+            MaterialPageRoute(
+              builder: (_) =>
+                  micromarket ? const UnlockScreen() : const DispenseScreen(),
+            ),
           );
           break;
         case PaymentStatus.expired:

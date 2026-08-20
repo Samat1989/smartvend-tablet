@@ -4,8 +4,10 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import '../board/board_client.dart';
+import '../models/machine_layout.dart';
 import '../services/device_storage.dart';
 import '../services/strings.dart';
+import '../services/vending_service.dart';
 
 /// Service-mode "Плата" screen — connection control, M102 CRC-password
 /// switch, and a live bus log mirroring the MMD diagnostic UI. Lets the
@@ -183,6 +185,48 @@ class _BoardDiagScreenState extends State<BoardDiagScreen> {
     } else {
       await board.autoConnect();
     }
+    if (p == BoardProtocol.micromarket) await _offerMicromarketLayout();
+  }
+
+  /// Раскладка микромаркета при переключении на этот тип платы.
+  ///
+  /// Пустую применяем молча — это настройка новой машины, и заставлять
+  /// оператора идти в редактор ради очевидного шага незачем. А вот готовую
+  /// раскладку молча затирать нельзя: её собирали руками, и промах по чипу
+  /// протокола не должен стоить этой работы. Товары при замене не теряются —
+  /// они привязаны к номерам в inventory, а не к раскладке, — но соответствие
+  /// «номер ↔ полка» пришлось бы восстанавливать.
+  Future<void> _offerMicromarketLayout() async {
+    final svc = context.read<VendingService>();
+    if (svc.layout.isNotEmpty) {
+      final replace = await showDialog<bool>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: const Text('Раскладка микромаркета'),
+          content: const Text(
+            'Заменить текущую раскладку на 4 полки по 5 ячеек с нумерацией '
+            '1…20? Товары останутся привязаны к своим номерам.',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(ctx).pop(false),
+              child: const Text('Оставить'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.of(ctx).pop(true),
+              child: const Text('Заменить'),
+            ),
+          ],
+        ),
+      );
+      if (replace != true) return;
+    }
+    await svc.setLayout(LayoutTemplate.micromarket4x5.builder());
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+      content: Text('Применена раскладка микромаркета: 20 ячеек'),
+      backgroundColor: Colors.green,
+    ));
   }
 
   @override
