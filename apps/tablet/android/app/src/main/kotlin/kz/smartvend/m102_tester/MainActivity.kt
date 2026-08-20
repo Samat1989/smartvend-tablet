@@ -552,6 +552,19 @@ class MainActivity : FlutterActivity() {
             Log.i(TAG_KIOSK, "lock task suppressed: install in progress")
             return
         }
+        // Already pinned? Then leave it alone. startLockTask() was called from
+        // every onResume, and on a tablet that is not device-owner each call
+        // re-shows the system "App is pinned" confirmation. With a flaky USB
+        // contact that turned into a dialog on every replug: the attach fires
+        // our USB intent-filter, the activity resumes, and up it came again.
+        //
+        // LOCKED is the device-owner path (silent), PINNED is the user-confirmed
+        // one — in both we are already where we want to be.
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            val am = getSystemService(Context.ACTIVITY_SERVICE) as? ActivityManager
+            val state = am?.lockTaskModeState ?: ActivityManager.LOCK_TASK_MODE_NONE
+            if (state != ActivityManager.LOCK_TASK_MODE_NONE) return
+        }
         try {
             startLockTask()
             Log.i(TAG_KIOSK, "startLockTask OK")
