@@ -1,13 +1,28 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-    USB host intent-filter for auto-launching the app when the M109E's
-    inline USB-Serial adapter is attached. Mirrors the factory app's
-    UsbUtil.findUSB which only accepts vid=0x1A86 pid=0x7523 (CH340).
+    USB host intent-filter: lets Android offer "always open this app for this
+    device" when a board is attached. Without a matching entry the operator has
+    to grant USB permission by hand after every replug — and on a pinned kiosk
+    screen that also means unpinning first, which is not something to ask of a
+    technician on site.
 
-    Decimal equivalents (Android requires both forms):
-      0x1A86 = 6790
-      0x7523 = 29987
+    Vendor is always QinHeng (0x1A86 = 6790); only the product differs across
+    the bridges we ship on. The list started as CH340G alone, mirroring the
+    factory app's UsbUtil.findUSB, and the micromarket relay board — a CH340K —
+    silently fell outside it.
+
+      0x7523 = 29987  CH340G / CH340C   M109E control board
+      0x7522 = 29986  CH340K / CH340N   micromarket relay board
+      0x5523 = 21795  CH341             seen on some clone adapters
+      0x55D4 = 21972  CH9102            newer bridges, kept ahead of need
+
+    An entry that matches nothing costs nothing, so err on the side of listing
+    the variant. If a board still asks for permission on every replug, read the
+    vid/pid the board log prints on refresh and add the pair here.
 -->
 <resources>
     <usb-device vendor-id="6790" product-id="29987" />
+    <usb-device vendor-id="6790" product-id="29986" />
+    <usb-device vendor-id="6790" product-id="21795" />
+    <usb-device vendor-id="6790" product-id="21972" />
 </resources>

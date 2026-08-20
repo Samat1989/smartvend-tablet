@@ -44,11 +44,52 @@ class UsbTransport extends BoardTransport {
   @override
   Stream<Uint8List> get onData => _rx.stream;
 
+  /// Драйверы, которые перебираются, если автоопределение не узнало чип.
+  /// Порядок по вероятности для наших плат: CH340/CH9102 стоят на релейных
+  /// модулях и M109E, CP2102 — на части ESP32-плат, остальное на всякий случай.
+  ///
+  /// Перебор нужен потому, что `create()` без аргумента сверяет VID/PID со
+  /// своей таблицей и на незнакомой паре бросает «Not an Serial device», хотя
+  /// сам мост при этом обычный CH34x с другим PID (тот же CH9102 — 0x1A86/
+  /// 0x55D4). Явно указанный тип эту таблицу обходит.
+  static const List<String> _driverFallbacks = [
+    UsbSerial.CH34x,
+    UsbSerial.CP210x,
+    UsbSerial.CDC,
+    UsbSerial.FTDI,
+    UsbSerial.PL2303,
+  ];
+
+  /// Одна попытка создать порт. Пустой [type] — автоопределение.
+  /// Возвращает null и пишет причину в лог, наружу ничего не бросает:
+  /// это проба, а не ошибка.
+  Future<UsbPort?> _tryCreate(String type) async {
+    final label = type.isEmpty ? 'auto' : type;
+    try {
+      final p = await device.create(type);
+      if (p == null) {
+        log('create($label): null');
+        return null;
+      }
+      if (type.isNotEmpty) log('драйвер подобран вручную: $label');
+      return p;
+    } catch (e) {
+      log('create($label): $e');
+      return null;
+    }
+  }
+
   @override
   Future<bool> open() async {
-    final port = await device.create();
+    var port = await _tryCreate('');
     if (port == null) {
-      log('create() returned null');
+      for (final type in _driverFallbacks) {
+        port = await _tryCreate(type);
+        if (port != null) break;
+      }
+    }
+    if (port == null) {
+      log('ни один драйвер не подошёл — проверьте, что это USB-Serial мост');
       return false;
     }
     if (!await port.open()) {

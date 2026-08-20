@@ -270,12 +270,30 @@ class MainActivity : FlutterActivity() {
      * overlay — lock-task only prevents leaving the app, not
      * interacting with system surfaces.
      */
+    /**
+     * Vendors that ship USB-to-UART bridges we might be plugged into. Matched
+     * by vendor alone, not by (vid, pid): this used to demand CH340's exact
+     * 0x1A86/0x7523, and the micromarket relay board — a CH9102, same vendor,
+     * different product — fell straight through to "no_device". The dialog the
+     * operator eventually saw came from usb_serial's own implicit request
+     * inside open(), which defeats the point of asking first.
+     *
+     * Same list as BoardClient.knownUsbSerialVids on the Dart side; keep them
+     * in step.
+     */
+    private val usbSerialVendors = setOf(
+        0x1A86, // QinHeng: CH340 / CH341 / CH9102
+        0x0403, // FTDI
+        0x10C4, // Silicon Labs: CP210x
+        0x067B, // Prolific: PL2303
+    )
+
     private fun requestUsbPermissionForCh340(): String {
         val usbManager = getSystemService(Context.USB_SERVICE) as? UsbManager
             ?: return "no_device"
         var sawDevice = false
         for ((_, device) in usbManager.deviceList) {
-            if (device.vendorId == 0x1A86 && device.productId == 0x7523) {
+            if (device.vendorId in usbSerialVendors) {
                 sawDevice = true
                 if (usbManager.hasPermission(device)) {
                     Log.i(TAG_KIOSK, "USB permission already granted for ${device.deviceName}")
@@ -293,7 +311,7 @@ class MainActivity : FlutterActivity() {
                 return "requested"
             }
         }
-        Log.w(TAG_KIOSK, "No CH340 found (deviceList size=${usbManager.deviceList.size})")
+        Log.w(TAG_KIOSK, "No USB-serial bridge found (deviceList size=${usbManager.deviceList.size})")
         return if (sawDevice) "requested" else "no_device"
     }
 
