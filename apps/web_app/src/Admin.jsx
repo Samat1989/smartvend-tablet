@@ -1565,7 +1565,11 @@ export default function Admin() {
                 name: '',
                 image_url: '',
                 emoji: '',
-                category_id: categories[0]?.id || null,
+                // Default to no category rather than whichever one happens
+                // to sort first: silently filing every new product under it was
+                // wrong more often than right, and for a shared template a
+                // personal category would be unreadable to the owners copying it.
+                category_id: null,
                 volume_ml: '',
                 description: '',
                 is_draft: false,
@@ -3079,16 +3083,24 @@ function CatalogTab({
   onCopyStarter,
 }) {
   const { t } = useTranslation();
-  const visible = products.filter(p => {
+
+  // Templates (owner_id NULL) are the platform's, not this owner's. They are
+  // fetched so the copy button knows they exist, but they do not belong in the
+  // list: the owner's own copy shows up there the moment they press Copy, and
+  // showing both would read as a duplicate. The superadmin is the exception —
+  // for them this list IS the template library.
+  const mine = isSuperadmin ? products : products.filter(p => p.owner_id !== null);
+
+  const visible = mine.filter(p => {
     if (filter === 'drafts') return p.is_draft && !p.is_archived;
     if (filter === 'archived') return p.is_archived;
     return !p.is_draft && !p.is_archived;
   });
 
   const counts = {
-    active: products.filter(p => !p.is_draft && !p.is_archived).length,
-    drafts: products.filter(p => p.is_draft && !p.is_archived).length,
-    archived: products.filter(p => p.is_archived).length,
+    active: mine.filter(p => !p.is_draft && !p.is_archived).length,
+    drafts: mine.filter(p => p.is_draft && !p.is_archived).length,
+    archived: mine.filter(p => p.is_archived).length,
   };
 
   return (
