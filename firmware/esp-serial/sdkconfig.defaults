@@ -1,0 +1,10 @@
+CONFIG_IDF_TARGET="esp32"
+CONFIG_ESPTOOLPY_FLASHSIZE_4MB=y
+
+# UART0 is the command channel, not a console. Anything the framework prints
+# there would land in the tablet's line parser and be mistaken for a reply, so
+# both the bootloader and the app are silenced. Debug by watching the replies.
+CONFIG_BOOTLOADER_LOG_LEVEL_NONE=y
+CONFIG_BOOTLOADER_LOG_LEVEL=0
+CONFIG_LOG_DEFAULT_LEVEL_NONE=y
+CONFIG_LOG_DEFAULT_LEVEL=0
