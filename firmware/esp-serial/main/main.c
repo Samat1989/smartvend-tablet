@@ -60,6 +60,24 @@
 #define WD_RESET_MS  120000
 #define WD_PULSE_MS  500
 
+// --- Status LED -------------------------------------------------------------
+// Same pin esp-relay used. Two patterns, and the difference between them is the
+// only diagnosis available on a board with no console:
+//
+//   one short blink every 2 s   firmware is running, nobody is talking to it
+//   two quick blinks + pause    the host is sending commands
+//
+// "Host is talking" rather than "USB is connected", because the ESP cannot see
+// the latter: the CH340 owns the USB side and hands us a plain UART, with no
+// enumeration state to read. What we can see is traffic — and since the tablet
+// pings every 10 s, traffic is an accurate stand-in for a live link. The idle
+// window is three times that ping period, so one lost reply cannot flip the
+// pattern.
+#define STATUS_LED_GPIO GPIO_NUM_33
+#define HOST_IDLE_MS    30000
+
+static volatile TickType_t s_last_cmd_tick = 0;
+
 // --- Command channel --------------------------------------------------------
 // UART0 is the same port used for flashing. Console logging is switched off in
 // sdkconfig.defaults so nothing but our replies ever reaches the tablet.
@@ -132,6 +150,42 @@ static void ext_wd_task(void *arg) {
     }
 }
 
+// ============================ Status LED ====================================
+
+static void led_blink(int times, int on_ms, int gap_ms) {
+    for (int i = 0; i < times; i++) {
+        gpio_set_level(STATUS_LED_GPIO, 1);
+        vTaskDelay(pdMS_TO_TICKS(on_ms));
+        gpio_set_level(STATUS_LED_GPIO, 0);
+        if (i + 1 < times) vTaskDelay(pdMS_TO_TICKS(gap_ms));
+    }
+}
+
+static void status_led_task(void *arg) {
+    gpio_config_t io = {
+        .pin_bit_mask = 1ULL << STATUS_LED_GPIO,
+        .mode = GPIO_MODE_OUTPUT,
+        .pull_up_en = GPIO_PULLUP_DISABLE,
+        .pull_down_en = GPIO_PULLDOWN_DISABLE,
+        .intr_type = GPIO_INTR_DISABLE,
+    };
+    gpio_config(&io);
+    gpio_set_level(STATUS_LED_GPIO, 0);
+
+    while (1) {
+        // Unsigned subtraction, so the 32-bit tick counter wrapping after some
+        // seven weeks of uptime does not make the board look idle.
+        const TickType_t since = xTaskGetTickCount() - s_last_cmd_tick;
+        if (s_last_cmd_tick != 0 && since < pdMS_TO_TICKS(HOST_IDLE_MS)) {
+            led_blink(2, 70, 130);
+            vTaskDelay(pdMS_TO_TICKS(1400));
+        } else {
+            led_blink(1, 60, 0);
+            vTaskDelay(pdMS_TO_TICKS(1940));
+        }
+    }
+}
+
 // ============================ Command channel ===============================
 
 static void reply(const char *s) {
@@ -143,6 +197,11 @@ static void reply(const char *s) {
 // than silence — a tester on a terminal should never be left guessing whether
 // the board is wedged or just did not understand.
 static void handle_line(char *line) {
+    // Stamped for any line at all, including one we go on to reject: a garbled
+    // command still proves somebody is on the other end, which is exactly what
+    // the LED is reporting.
+    s_last_cmd_tick = xTaskGetTickCount();
+
     if (strcmp(line, "PING") == 0) {
         reply("PONG");
         return;
@@ -228,5 +287,6 @@ void app_main(void) {
     relay_off();
 
     xTaskCreate(ext_wd_task, "ext_wd", 2048, NULL, 4, NULL);
+    xTaskCreate(status_led_task, "status_led", 2048, NULL, 3, NULL);
     xTaskCreate(cmd_task, "cmd", 4096, NULL, 5, NULL);
 }
