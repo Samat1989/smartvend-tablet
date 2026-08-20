@@ -132,6 +132,26 @@ class _BoardDiagScreenState extends State<BoardDiagScreen> {
   /// watchdog, so the motor only twitches — the single command this
   /// board answers, hence the only reliable "are we alive" check over
   /// USB adapters and native UARTs alike.
+  /// Ping + открыть замок на выставленное время. Единственный способ
+  /// проверить связку планшет-плата до того, как появится UnlockScreen, и
+  /// первое, чем пользуются на монтаже.
+  Future<void> _lockTest() async {
+    final board = context.read<BoardClient>();
+    final storage = context.read<DeviceStorage>();
+    final messenger = ScaffoldMessenger.of(context);
+    final sec = storage.lockHoldSeconds;
+    final ok = await board.openLock(seconds: sec);
+    if (!mounted) return;
+    messenger.showSnackBar(SnackBar(
+      duration: const Duration(seconds: 6),
+      content: Text(ok
+          ? 'Плата приняла команду — замок открыт на $sec с'
+          : 'Плата не ответила OK. Проверьте кабель, скорость 115200 и что '
+              'прошита esp-serial — журнал ниже покажет, что ушло и что пришло'),
+      backgroundColor: ok ? Colors.green : Colors.redAccent,
+    ));
+  }
+
   Future<void> _lytTest() async {
     final board = context.read<BoardClient>();
     final messenger = ScaffoldMessenger.of(context);
@@ -190,6 +210,9 @@ class _BoardDiagScreenState extends State<BoardDiagScreen> {
               onSelect: _selectProtocol,
               onSwapChanged: (v) =>
                   context.read<BoardClient>().setLytSwapRowCol(v),
+              holdSeconds: context.watch<DeviceStorage>().lockHoldSeconds,
+              onHoldChanged: (v) =>
+                  context.read<DeviceStorage>().setLockHoldSeconds(v),
             ),
             _ControlsCard(
               board: board,
@@ -197,6 +220,7 @@ class _BoardDiagScreenState extends State<BoardDiagScreen> {
               onToggleConnection: _toggleConnection,
               onTogglePassword: () => _togglePassword(context),
               onLytTest: _lytTest,
+              onLockTest: _lockTest,
             ),
             _SerialModeCard(
               selectedPath: context.watch<DeviceStorage>().serialPortPath,
@@ -228,6 +252,8 @@ class _ProtocolCard extends StatelessWidget {
     required this.swapRowCol,
     required this.onSelect,
     required this.onSwapChanged,
+    required this.holdSeconds,
+    required this.onHoldChanged,
   });
 
   final BoardProtocol selected;
@@ -237,6 +263,12 @@ class _ProtocolCard extends StatelessWidget {
   final bool swapRowCol;
   final Future<void> Function(BoardProtocol p) onSelect;
   final ValueChanged<bool> onSwapChanged;
+
+  /// Микромаркет: сколько секунд держать замок. Шагами по 5 и без поля ввода —
+  /// на киоске клавиатура поверх экрана мешает больше, чем помогает, а точность
+  /// до секунды тут никому не нужна.
+  final int holdSeconds;
+  final ValueChanged<int> onHoldChanged;
 
   /// One-line reminder of what each protocol implies, shown under the
   /// chips so the operator on-site doesn't need the doc open.
@@ -301,6 +333,46 @@ class _ProtocolCard extends StatelessWidget {
             _hints[selected] ?? '',
             style: const TextStyle(color: Colors.white38, fontSize: 11),
           ),
+          if (selected == BoardProtocol.micromarket)
+            Padding(
+              padding: const EdgeInsets.only(top: 6),
+              child: Row(
+                children: [
+                  const Expanded(
+                    child: Text(
+                      'Время удержания замка',
+                      style: TextStyle(color: Colors.white, fontSize: 13),
+                    ),
+                  ),
+                  IconButton(
+                    icon: const Icon(Icons.remove_circle_outline,
+                        color: Colors.amberAccent),
+                    onPressed: holdSeconds > 5
+                        ? () => onHoldChanged(holdSeconds - 5)
+                        : null,
+                  ),
+                  SizedBox(
+                    width: 52,
+                    child: Text(
+                      '$holdSeconds с',
+                      textAlign: TextAlign.center,
+                      style: const TextStyle(
+                        color: Colors.amberAccent,
+                        fontSize: 15,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                  ),
+                  IconButton(
+                    icon: const Icon(Icons.add_circle_outline,
+                        color: Colors.amberAccent),
+                    onPressed: holdSeconds < 120
+                        ? () => onHoldChanged(holdSeconds + 5)
+                        : null,
+                  ),
+                ],
+              ),
+            ),
           if (selected == BoardProtocol.lyt)
             SwitchListTile(
               dense: true,
@@ -523,6 +595,7 @@ class _ControlsCard extends StatelessWidget {
     required this.onToggleConnection,
     required this.onTogglePassword,
     required this.onLytTest,
+    required this.onLockTest,
   });
 
   final BoardClient board;
@@ -530,6 +603,7 @@ class _ControlsCard extends StatelessWidget {
   final VoidCallback onToggleConnection;
   final VoidCallback onTogglePassword;
   final VoidCallback onLytTest;
+  final VoidCallback onLockTest;
 
   @override
   Widget build(BuildContext context) {
@@ -560,6 +634,19 @@ class _ControlsCard extends StatelessWidget {
           // frames carry a plain XOR — its slot hosts the link test
           // instead (the board answers nothing but a dispense, so a
           // tiny row-1/col-1 twitch is the only health check there is).
+          if (board.isMicromarket) ...[
+            const SizedBox(width: 8),
+            Expanded(
+              child: FilledButton.icon(
+                icon: const Icon(Icons.lock_open),
+                label: const Text('Открыть замок'),
+                style: FilledButton.styleFrom(
+                  backgroundColor: Colors.teal,
+                ),
+                onPressed: board.isConnected ? onLockTest : null,
+              ),
+            ),
+          ],
           if (board.isLyt) ...[
             const SizedBox(width: 8),
             Expanded(

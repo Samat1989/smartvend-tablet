@@ -1385,6 +1385,7 @@ class BoardClient extends ChangeNotifier {
   /// turn the spiral, so the cabinet stays loaded.
   Future<int?> scanMotor(int motorId) async {
     if (isLyt) return null; // LiYuTai has no non-destructive motor scan
+    if (isMicromarket) return null; // моторов нет — сканировать нечего
     final data = <int>[motorId & 0xFF, ...List.filled(15, 0)];
     final r = await _sendAndReceive(0x04, data,
         timeout: const Duration(milliseconds: 400));
@@ -1394,6 +1395,7 @@ class BoardClient extends ChangeNotifier {
 
   Future<PollStatus?> poll() async {
     if (isLyt) return null; // LiYuTai ignores the 0x03 poll
+    if (isMicromarket) return null; // опроса в этом протоколе нет
     final r = await _sendAndReceive(0x03, List.filled(16, 0));
     if (r == null || r.length < 13) return null;
     return PollStatus(
@@ -1425,8 +1427,11 @@ class BoardClient extends ChangeNotifier {
 
   Future<double?> readTemp() async {
     // LiYuTai carries no climate sensors — return "no probe" without
-    // touching the bus so the climate controller stays quiet.
-    if (isLyt) return null;
+    // touching the bus so the climate controller stays quiet. Same for the
+    // micromarket relay board: a 20-byte frame in a line-based channel gets
+    // answered with "ERR unknown", and that stray line could then be taken
+    // for the reply to whatever command came next.
+    if (isLyt || isMicromarket) return null;
     final r = await _sendAndReceive(0x07, List.filled(16, 0));
     if (r == null || r.length < 4) return null;
     // Factory formula (ParseM102.m175jx): °C = (signed_int16(bytes 2..3) - 20) / 10
@@ -1440,7 +1445,7 @@ class BoardClient extends ChangeNotifier {
 
   /// Returns humidity percent (0-100) or null if no sensor / no reply.
   Future<int?> readHumidity() async {
-    if (isLyt) return null; // no humidity sensor on LiYuTai
+    if (isLyt || isMicromarket) return null; // датчиков влажности нет
     final r = await _sendAndReceive(0x10, List.filled(16, 0));
     if (r == null || r.length < 5) return null;
     // Factory layout (ParseM102.m176jx):
@@ -1453,7 +1458,7 @@ class BoardClient extends ChangeNotifier {
   }
 
   Future<bool> writeDo(int idx, bool state) async {
-    if (isLyt) return false; // no DO channels on LiYuTai
+    if (isLyt || isMicromarket) return false; // каналов DO нет
     final r = await _sendAndReceive(0x08, [idx, state ? 1 : 0, ...List.filled(14, 0)]);
     if (r == null || r.length < 4) return false;
     final code = r[3];
@@ -1484,6 +1489,13 @@ class BoardClient extends ChangeNotifier {
     // (ряд, кол); [type] and [curtain] don't exist in that protocol —
     // the board itself stops on the home micro-switch.
     if (isLyt) return _dispenseLyt(motorIdx);
+    if (isMicromarket) {
+      // Выдачи как таковой нет: дверь открывается один раз на всю корзину,
+      // и делает это UnlockScreen через openLock(). Сюда попасть можно
+      // только по ошибке ветвления — молча провалиться хуже, чем сказать.
+      _err('dispense вызван в режиме микромаркета');
+      return DispenseResult(success: false, message: 'Неверный режим платы');
+    }
 
     _info('--- DISPENSE motor=$motorIdx type=$type curtain=$curtain ---');
     final ack = await motorRun(motorIdx, type: type, curtain: curtain);
