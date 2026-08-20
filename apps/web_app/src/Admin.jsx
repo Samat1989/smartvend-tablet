@@ -1015,12 +1015,27 @@ export default function Admin() {
   async function deleteCatalogProduct(p) {
     if (!confirm(`${t('delete_catalog_confirm_prefix')}${p.name}${t('delete_catalog_confirm_suffix')}`)) return;
     try {
-      const { error } = await supabase.from('products').delete().eq('id', p.id);
+      // .select() matters: without it PostgREST answers 204 whether it deleted
+      // a row or RLS filtered every candidate out, and the UI cheerfully
+      // reported success while the product stayed put.
+      const { data, error } = await supabase
+        .from('products').delete().eq('id', p.id).select('id');
       if (error) throw error;
+      if (!data || data.length === 0) {
+        showToast(t('delete_catalog_no_rights'), 'error');
+        return;
+      }
       showToast(t('deleted_toast'));
       fetchCatalogProducts();
     } catch (err) {
-      showToast(t('delete_catalog_failed'), 'error');
+      console.error('Delete catalog product error:', err);
+      // 23503 = still referenced by inventory (products.id is ON DELETE
+      // RESTRICT there). That is the one failure an operator can actually act
+      // on, so name it instead of showing the raw Postgres text.
+      const msg = err.code === '23503'
+        ? t('delete_catalog_in_use')
+        : `${t('delete_catalog_failed')}: ${err.message}`;
+      showToast(msg, 'error');
     }
   }
 
