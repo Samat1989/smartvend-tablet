@@ -87,6 +87,33 @@ class _PaymentScreenState extends State<PaymentScreen> {
       });
       return;
     }
+    // Micromarket: check the lock answers BEFORE taking money.
+    //
+    // Without a door sensor there is no way to learn afterwards whether the
+    // customer actually got in, so the only guard left is asking the board if
+    // it is alive while nothing is at stake yet. A real PING matters here more
+    // than elsewhere: this protocol has no heartbeat, so isHealthy only means
+    // "the port is open", which a half-seated USB plug can keep reporting long
+    // after the board stopped listening.
+    //
+    // The failure path without this check works — the sale is never recorded
+    // and the gateway returns the uncaptured payment in about a minute — but
+    // that is money leaving a customer's account and coming back later, which
+    // reads as a scam to the person standing at the fridge. Two hundred
+    // milliseconds here avoids the whole conversation.
+    if (context.read<BoardClient>().isMicromarket) {
+      final alive = await context.read<BoardClient>().ping();
+      if (!mounted) return;
+      if (!alive) {
+        setState(() {
+          _state = _State.failed;
+          _statusMsg = 'Нет связи с замком. Оплата не начата — обратитесь '
+              'к оператору';
+        });
+        return;
+      }
+    }
+
     final total = vending.cartTotalTenge;
     final names = vending.cartItems.map((i) => i.product.name).join(', ');
     try {

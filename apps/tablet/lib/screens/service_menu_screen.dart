@@ -25,6 +25,10 @@ class ServiceMenuScreen extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final s = context.watch<Strings>();
+    // На плате с замком половина сервисных функций физически отсутствует:
+    // моторов нет, каналов DO и датчиков температуры тоже. Плитки не прячем,
+    // а гасим — см. _Tile.disabledReason.
+    final lockBoard = context.watch<BoardClient>().isMicromarket;
 
     return Scaffold(
       backgroundColor: Colors.grey.shade900,
@@ -54,6 +58,7 @@ class ServiceMenuScreen extends StatelessWidget {
                       icon: Icons.precision_manufacturing,
                       label: s.t('service_test_motors'),
                       color: Colors.indigo,
+                      disabledReason: lockBoard ? 'нет моторов' : null,
                       onTap: () => Navigator.of(context).push(
                         MaterialPageRoute(
                             builder: (_) => const TesterScreen()),
@@ -63,6 +68,10 @@ class ServiceMenuScreen extends StatelessWidget {
                       icon: Icons.thermostat,
                       label: s.t('service_climate'),
                       color: Colors.lightBlue,
+                      // На релейной плате нет каналов DO и датчиков: writeDo и
+                      // readTemp в этом режиме возвращают «не поддерживается»,
+                      // так что экран климата управлял бы пустотой.
+                      disabledReason: lockBoard ? 'нет каналов' : null,
                       onTap: () => Navigator.of(context).push(
                         MaterialPageRoute(
                             builder: (_) => const ClimateScreen()),
@@ -396,36 +405,55 @@ class _Tile extends StatelessWidget {
   final String label;
   final Color color;
   final VoidCallback onTap;
+
+  /// Причина, по которой плитка неактивна. Null — плитка работает.
+  ///
+  /// Выключаем, а не прячем: у пропавшей плитки нет объяснения, и техник на
+  /// точке будет искать её в обновлении или в другой прошивке. Серая плитка с
+  /// подписью «нет моторов на этой плате» отвечает на вопрос сразу.
+  final String? disabledReason;
+
   const _Tile({
     required this.icon,
     required this.label,
     required this.color,
     required this.onTap,
+    this.disabledReason,
   });
 
   @override
   Widget build(BuildContext context) {
+    final off = disabledReason != null;
+    final tint = off ? Colors.grey : color;
     return Material(
-      color: color.withValues(alpha: 0.15),
+      color: tint.withValues(alpha: off ? 0.08 : 0.15),
       borderRadius: BorderRadius.circular(16),
       child: InkWell(
         borderRadius: BorderRadius.circular(16),
-        onTap: onTap,
+        onTap: off ? null : onTap,
         child: Padding(
           padding: const EdgeInsets.all(16),
           child: Column(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
-              Icon(icon, color: color, size: 36),
+              Icon(icon, color: off ? Colors.white24 : color, size: 36),
               const SizedBox(height: 12),
               Text(
                 label,
                 textAlign: TextAlign.center,
-                style: const TextStyle(
-                    color: Colors.white,
+                style: TextStyle(
+                    color: off ? Colors.white38 : Colors.white,
                     fontSize: 14,
                     fontWeight: FontWeight.w600),
               ),
+              if (off) ...[
+                const SizedBox(height: 4),
+                Text(
+                  disabledReason!,
+                  textAlign: TextAlign.center,
+                  style: const TextStyle(color: Colors.white24, fontSize: 11),
+                ),
+              ],
             ],
           ),
         ),
