@@ -39,10 +39,17 @@ class _UnlockScreenState extends State<UnlockScreen> {
   final _api = SupabaseApi();
 
   _Phase _phase = _Phase.opening;
-  String? _error;
 
-  /// Counts the door open, then the wait before going back to the catalog.
-  int _secondsLeft = 0;
+  /// How long the receipt stays up before the catalog comes back.
+  ///
+  /// Deliberately unrelated to the relay hold time. That number is the window
+  /// in which the door *may* be opened; the lock itself relocks off its own
+  /// Hall sensor the moment the door shuts, which can be five seconds or
+  /// thirty. A countdown here would have been describing something that is not
+  /// what actually closes the door.
+  static const _successSeconds = 15;
+  static const _failureSeconds = 20;
+
   Timer? _timer;
 
   @override
@@ -67,19 +74,15 @@ class _UnlockScreenState extends State<UnlockScreen> {
     if (!mounted) return;
 
     if (!opened) {
-      setState(() {
-        _phase = _Phase.failed;
-        _error = 'Замок не открылся. Обратитесь в поддержку — оплата не '
-            'подтверждена и вернётся автоматически.';
-      });
+      setState(() => _phase = _Phase.failed);
       // No sale row: nothing was handed over. The payment stays uncaptured,
       // which is what makes the refund automatic.
-      _startCountdown(20);
+      _scheduleReturn(_failureSeconds);
       return;
     }
 
     setState(() => _phase = _Phase.open);
-    _startCountdown(hold);
+    _scheduleReturn(_successSeconds);
     await _recordSale(svc, storage);
   }
 
@@ -131,20 +134,11 @@ class _UnlockScreenState extends State<UnlockScreen> {
     svc.clearCart();
   }
 
-  void _startCountdown(int seconds) {
-    setState(() => _secondsLeft = seconds);
+  /// One-shot, not a per-second tick: nothing on screen counts down any more,
+  /// so rebuilding once a second would be work for nobody.
+  void _scheduleReturn(int seconds) {
     _timer?.cancel();
-    _timer = Timer.periodic(const Duration(seconds: 1), (t) {
-      if (!mounted) {
-        t.cancel();
-        return;
-      }
-      setState(() => _secondsLeft--);
-      if (_secondsLeft <= 0) {
-        t.cancel();
-        _goHome();
-      }
-    });
+    _timer = Timer(Duration(seconds: seconds), _goHome);
   }
 
   void _goHome() {
@@ -176,7 +170,7 @@ class _UnlockScreenState extends State<UnlockScreen> {
                       failed
                           ? s.t('dispense_failed')
                           : _phase == _Phase.opening
-                              ? 'Открываем…'
+                              ? s.t('unlock_opening')
                               : s.t('dispense_done'),
                       textAlign: TextAlign.center,
                       style: const TextStyle(
@@ -185,10 +179,10 @@ class _UnlockScreenState extends State<UnlockScreen> {
                         color: AppColors.iosBlack,
                       ),
                     ),
-                    if (_error != null) ...[
+                    if (failed) ...[
                       const SizedBox(height: 12),
                       Text(
-                        _error!,
+                        s.t('unlock_failed_hint'),
                         textAlign: TextAlign.center,
                         style: const TextStyle(
                           fontSize: 15,
@@ -198,11 +192,26 @@ class _UnlockScreenState extends State<UnlockScreen> {
                       ),
                     ],
                     if (_phase == _Phase.open) ...[
-                      const SizedBox(height: 10),
+                      const SizedBox(height: 14),
                       Text(
-                        'Дверь закроется через $_secondsLeft с',
+                        s.t('unlock_thanks'),
+                        textAlign: TextAlign.center,
                         style: const TextStyle(
-                          fontSize: 16,
+                          fontSize: 19,
+                          fontWeight: FontWeight.w700,
+                          color: AppColors.iosBlack,
+                        ),
+                      ),
+                      const SizedBox(height: 6),
+                      // Просьба закрыть дверь — не вежливость, а единственный
+                      // способ её закрыть: датчика двери пока нет, замок
+                      // защёлкнется по таймеру, и оставленная открытой дверь
+                      // это окно для выноса товара.
+                      Text(
+                        s.t('unlock_close_door'),
+                        textAlign: TextAlign.center,
+                        style: const TextStyle(
+                          fontSize: 17,
                           fontWeight: FontWeight.w600,
                           color: AppColors.iosGray,
                         ),

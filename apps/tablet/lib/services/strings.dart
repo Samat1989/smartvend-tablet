@@ -154,6 +154,33 @@ class Strings extends ChangeNotifier {
       'en': 'Returning home in',
     },
     'seconds_short': {'ru': 'сек', 'kk': 'сек', 'en': 's'},
+    // Micromarket: the door opens once and the customer serves themselves
+    'unlock_opening': {'ru': 'Открываем…', 'kk': 'Ашылуда…', 'en': 'Opening…'},
+    'unlock_thanks': {
+      'ru': 'Спасибо за покупку!',
+      'kk': 'Сатып алғаныңыз үшін рахмет!',
+      'en': 'Thank you for your purchase!',
+    },
+    'unlock_close_door': {
+      'ru': 'Пожалуйста, закройте дверь',
+      'kk': 'Есікті жабуды ұмытпаңыз',
+      'en': 'Please close the door',
+    },
+    'unlock_failed_hint': {
+      'ru': 'Замок не открылся. Оплата не подтверждена и вернётся '
+          'автоматически — обратитесь в поддержку.',
+      'kk': 'Құлып ашылмады. Төлем расталмады және автоматты түрде '
+          'қайтарылады — қолдау қызметіне хабарласыңыз.',
+      'en': 'The lock did not open. The payment was not captured and comes '
+          'back automatically — please contact support.',
+    },
+    'pay_no_lock_link': {
+      'ru': 'Нет связи с замком. Оплата не начата — обратитесь к оператору',
+      'kk': 'Құлыппен байланыс жоқ. Төлем басталмады — операторға '
+          'хабарласыңыз',
+      'en': 'No link to the lock. Payment was not started — please contact '
+          'the operator',
+    },
     'refund_title': {'ru': 'Возврат', 'kk': 'Қайтару', 'en': 'Refund'},
     'refund_msg': {
       'ru': 'Покажите чек владельцу для возврата',

@@ -107,8 +107,7 @@ class _PaymentScreenState extends State<PaymentScreen> {
       if (!alive) {
         setState(() {
           _state = _State.failed;
-          _statusMsg = 'Нет связи с замком. Оплата не начата — обратитесь '
-              'к оператору';
+          _statusMsg = context.read<Strings>().t('pay_no_lock_link');
         });
         return;
       }

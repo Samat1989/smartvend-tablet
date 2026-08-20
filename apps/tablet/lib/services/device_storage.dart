@@ -159,10 +159,20 @@ class DeviceStorage extends ChangeNotifier {
   }
 
   /// Show the slot number from the machine layout on storefront product
-  /// cards. Off by default: on a cabinet whose doors aren't numbered the
-  /// digits mean nothing to the customer. When on, a card with no photo
-  /// shows the number in place of the picture instead of a generic emoji.
-  bool get showSlotNumber => _prefs.getBool(_kShowSlotNumber) ?? false;
+  /// cards. When on, a card with no photo shows the number in place of the
+  /// picture instead of a generic emoji.
+  ///
+  /// The default depends on the machine, because the same digit means
+  /// opposite things on the two of them. On a vending cabinet the doors are
+  /// usually unnumbered, so it is noise — off. In a micromarket the number is
+  /// written on the shelf and is the only thing tying the card to the physical
+  /// goods — on.
+  ///
+  /// Only the DEFAULT is derived. The moment an operator touches the switch in
+  /// «Витрина» their choice is stored and wins from then on, on either kind.
+  bool get showSlotNumber =>
+      _prefs.getBool(_kShowSlotNumber) ??
+      (boardProtocolName == 'micromarket');
 
   Future<void> setShowSlotNumber(bool v) async {
     await _prefs.setBool(_kShowSlotNumber, v);
