@@ -342,7 +342,7 @@ class _HomeScreenState extends State<HomeScreen> {
                       crossAxisAlignment: CrossAxisAlignment.center,
                       children: [
                         _LangChip(),
-                        SizedBox(height: 8),
+                        SizedBox(height: 14),
                         SupportCorner(),
                       ],
                     ),
@@ -846,7 +846,7 @@ class _LangChip extends StatelessWidget {
         // finger-sized.
         height: SupportCorner.height,
         child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 11),
+          padding: const EdgeInsets.symmetric(horizontal: 12),
           child: Row(
             mainAxisSize: MainAxisSize.min,
             children: [
@@ -858,7 +858,7 @@ class _LangChip extends StatelessWidget {
                 style: const TextStyle(
                   color: Color.fromARGB(255, 139, 151, 161),
                   fontWeight: FontWeight.w900,
-                  fontSize: 12,
+                  fontSize: 14,
                   letterSpacing: 0.5,
                 ),
               ),

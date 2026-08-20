@@ -28,10 +28,10 @@ class SupportCorner extends StatelessWidget {
   ///
   /// The language chip next to it reads this, so both grow together.
   ///
-  /// NOTE: still under the 44 dp that kiosk tablets used at arm's length
-  /// really want. Kept small because the compact corner was asked for; if
-  /// customers start missing it, grow this before anything else.
-  static const double height = 29;
+  /// 36 dp: still shy of the 44 dp a kiosk used at arm's length really wants,
+  /// but close enough that misses should be rare. The language chip reads this
+  /// too, so the pair grows together and stays the same height.
+  static const double height = 36;
 
   @override
   Widget build(BuildContext context) {
@@ -61,7 +61,7 @@ class SupportCorner extends StatelessWidget {
             child: Center(
               child: Icon(
                 Icons.support_agent,
-                size: 20,
+                size: 24,
                 color: AppColors.iosBlue,
               ),
             ),
