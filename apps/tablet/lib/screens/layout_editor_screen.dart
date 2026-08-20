@@ -158,6 +158,8 @@ class _LayoutEditorScreenState extends State<LayoutEditorScreen> {
       }
     }
     final base = 'Полок: ${l.shelves.length} · ячеек: $slots';
+    // «Сдвоенных» — про две спирали на один товар. В микромаркете таких не
+    // бывает, и счётчик там всегда 0, так что отдельная ветка не нужна.
     return twins == 0 ? base : '$base · сдвоенных: $twins';
   }
 
@@ -470,7 +472,12 @@ class _LayoutEditorScreenState extends State<LayoutEditorScreen> {
   /// each cell carries the encoded id = ряд×10+колонка (11..100), so
   /// the operator picks a physical position, not an abstract channel.
   Future<Slot?> _openSlotPicker({Slot? initial}) async {
-    final isLyt = context.read<BoardClient>().isLyt;
+    final board = context.read<BoardClient>();
+    final isLyt = board.isLyt;
+    // В микромаркете мотора нет — ячейка это номер, написанный на полке.
+    // Прячем всё, что про моторы: сканирование обмотки, сдвоенные спирали,
+    // легенду результатов. Остаётся выбор одного номера и подпись.
+    final isMm = board.isMicromarket;
     final labelCtrl =
         TextEditingController(text: initial?.label ?? _suggestSlotLabel());
     final selected = <int>{...(initial?.motorIds ?? const [])};
@@ -506,7 +513,7 @@ class _LayoutEditorScreenState extends State<LayoutEditorScreen> {
                         ),
                         // LiYuTai has no non-destructive motor scan —
                         // the board only ever answers a real dispense.
-                        if (!isLyt)
+                        if (!isLyt && !isMm)
                           TextButton.icon(
                             icon: const Icon(Icons.search),
                             label: Text(_scanning
@@ -519,20 +526,23 @@ class _LayoutEditorScreenState extends State<LayoutEditorScreen> {
                     const SizedBox(height: 8),
                     TextField(
                       controller: labelCtrl,
-                      decoration: const InputDecoration(
-                        labelText: 'Подпись слота',
-                        hintText: 'например 001',
-                        border: OutlineInputBorder(),
+                      decoration: InputDecoration(
+                        labelText: isMm ? 'Подпись ячейки' : 'Подпись слота',
+                        hintText: isMm ? 'необязательно' : 'например 001',
+                        border: const OutlineInputBorder(),
                       ),
                     ),
                     const SizedBox(height: 8),
                     Text(
-                      isLyt
-                          ? 'Задайте позицию мотора рядом и колонкой '
-                              '(2+ позиции для сдвоенного слота).  '
-                              '${selected.length} выбрано.'
-                          : 'Выберите motor id (1+ для сдвоенного слота).  '
-                              '${selected.length} выбрано.',
+                      isMm
+                          ? 'Выберите номер ячейки — тот, что написан на '
+                              'полке.  ${selected.length} выбрано.'
+                          : isLyt
+                              ? 'Задайте позицию мотора рядом и колонкой '
+                                  '(2+ позиции для сдвоенного слота).  '
+                                  '${selected.length} выбрано.'
+                              : 'Выберите motor id (1+ для сдвоенного слота).  '
+                                  '${selected.length} выбрано.',
                       style: const TextStyle(
                           fontSize: 12, color: Colors.black54),
                     ),
@@ -653,6 +663,11 @@ class _LayoutEditorScreenState extends State<LayoutEditorScreen> {
                                         if (isSelected) {
                                           selected.remove(i);
                                         } else {
+                                          // Сдвоенная ячейка — понятие из
+                                          // моторов: две спирали крутятся на
+                                          // один товар. У полки с замком
+                                          // такого нет, поэтому номер один.
+                                          if (isMm) selected.clear();
                                           selected.add(i);
                                         }
                                       });
@@ -662,7 +677,7 @@ class _LayoutEditorScreenState extends State<LayoutEditorScreen> {
                         ),
                       ),
                     const SizedBox(height: 8),
-                    _ScanLegend(isLyt: isLyt),
+                    if (!isMm) _ScanLegend(isLyt: isLyt),
                     const SizedBox(height: 8),
                     Row(
                       mainAxisAlignment: MainAxisAlignment.end,
@@ -754,6 +769,7 @@ class _LayoutEditorScreenState extends State<LayoutEditorScreen> {
                           ? _draft.shelves[_selectedShelf]
                           : null,
                       isLyt: context.watch<BoardClient>().isLyt,
+                      isMm: context.watch<BoardClient>().isMicromarket,
                       onAddSlot: _addSlot,
                       onEditSlot: _editSlot,
                       onDeleteSlot: _deleteSlot,
@@ -972,6 +988,7 @@ class _SlotsPanel extends StatelessWidget {
   const _SlotsPanel({
     required this.shelf,
     required this.isLyt,
+    required this.isMm,
     required this.onAddSlot,
     required this.onEditSlot,
     required this.onDeleteSlot,
@@ -979,6 +996,9 @@ class _SlotsPanel extends StatelessWidget {
 
   final Shelf? shelf;
   final bool isLyt;
+
+  /// Микромаркет: у ячейки один номер и нет ни моторов, ни сдвоенных спиралей.
+  final bool isMm;
   final VoidCallback onAddSlot;
   final void Function(int) onEditSlot;
   final void Function(int) onDeleteSlot;
@@ -1021,8 +1041,11 @@ class _SlotsPanel extends StatelessWidget {
                   ),
                   const SizedBox(height: 2),
                   Text(
-                    'Ячеек: ${slots.length} · нажмите на ячейку, '
-                    'чтобы изменить подпись и моторы',
+                    isMm
+                        ? 'Ячеек: ${slots.length} · нажмите на ячейку, '
+                            'чтобы изменить номер и подпись'
+                        : 'Ячеек: ${slots.length} · нажмите на ячейку, '
+                            'чтобы изменить подпись и моторы',
                     style: const TextStyle(
                         color: Colors.white54, fontSize: 12),
                   ),
@@ -1130,7 +1153,7 @@ class _SlotsPanel extends StatelessWidget {
                                   padding: const EdgeInsets.only(right: 8),
                                   child: Row(
                                   children: [
-                                    if (sl.isTwin)
+                                    if (sl.isTwin && !isMm)
                                       Container(
                                         margin: const EdgeInsets.only(right: 6),
                                         padding: const EdgeInsets.symmetric(
@@ -1153,13 +1176,16 @@ class _SlotsPanel extends StatelessWidget {
                                       ),
                                     Expanded(
                                       child: Text(
-                                        isLyt
-                                            ? sl.motorIds
-                                                .map((m) => _motorLabel(m,
-                                                    isLyt: true))
-                                                .join(', ')
-                                            : 'motors: '
-                                                '${sl.motorIds.join(", ")}',
+                                        isMm
+                                            ? 'ячейка '
+                                                '${sl.motorIds.join(", ")}'
+                                            : isLyt
+                                                ? sl.motorIds
+                                                    .map((m) => _motorLabel(m,
+                                                        isLyt: true))
+                                                    .join(', ')
+                                                : 'motors: '
+                                                    '${sl.motorIds.join(", ")}',
                                         style: const TextStyle(
                                           color: Colors.white70,
                                           fontSize: 11,
