@@ -3,6 +3,7 @@ import 'package:flutter/services.dart';
 import 'package:usb_serial/usb_serial.dart';
 
 import 'board_client.dart';
+import 'provision_screen.dart';
 
 void main() {
   runApp(const MmdApp());
@@ -70,6 +71,16 @@ class _DiagScreenState extends State<DiagScreen> {
               tooltip: 'Refresh USB devices',
               icon: const Icon(Icons.usb),
               onPressed: _refreshDevices,
+            ),
+            // Provisioning has nothing to do with the board on the other end
+            // of the USB cable, so it gets its own screen rather than a sixth
+            // tab among the diagnostics.
+            IconButton(
+              tooltip: 'Provision a tablet',
+              icon: const Icon(Icons.tablet_android),
+              onPressed: () => Navigator.of(context).push(
+                MaterialPageRoute(builder: (_) => const ProvisionScreen()),
+              ),
             ),
           ],
           bottom: const TabBar(

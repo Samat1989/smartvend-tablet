@@ -2,6 +2,8 @@ allprojects {
     repositories {
         google()
         mavenCentral()
+        // libadb-android publishes only here.
+        maven { url = uri("https://jitpack.io") }
     }
 }
 
