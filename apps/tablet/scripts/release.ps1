@@ -182,10 +182,21 @@ if ($newVersion -ne $curVersion) {
     $updated = $pubspecText -replace "(?m)^version:\s*\d+\.\d+\.\d+\+\d+\s*$", "version: $newVersion"
     if ($updated -eq $pubspecText) { Fail "Failed to rewrite the version line." }
     Set-Content -Path $pubspecPath -Value $updated -NoNewline -Encoding UTF8
+    # git writes its CRLF advice to stderr, and PowerShell 5.1 can raise that
+    # as an ErrorRecord — which $ErrorActionPreference='Stop' escalates into a
+    # failed release over a warning about line endings. Judge by exit code,
+    # which is the only part that means anything.
+    $prevEap = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
     git add $pubspecPath
-    if ($LASTEXITCODE -ne 0) { Fail "git add failed" }
-    git commit -m "Bump version to $newVersion"
-    if ($LASTEXITCODE -ne 0) { Fail "git commit failed" }
+    $addExit = $LASTEXITCODE
+    if ($addExit -eq 0) {
+        git commit -m "Bump version to $newVersion"
+        $commitExit = $LASTEXITCODE
+    }
+    $ErrorActionPreference = $prevEap
+    if ($addExit -ne 0) { Fail "git add failed" }
+    if ($commitExit -ne 0) { Fail "git commit failed" }
 }
 
 # --- No uncommitted TRACKED changes -----------------------------------------
