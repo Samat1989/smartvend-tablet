@@ -60,6 +60,26 @@ android {
                 keyPassword = keystoreProperties["keyPassword"] as String
                 storeFile = file(keystoreProperties["storeFile"] as String)
                 storePassword = keystoreProperties["storePassword"] as String
+
+                // Sign with every scheme, v1 included.
+                //
+                // Gradle drops v1 (JAR) signing on its own once minSdk
+                // reaches 24, and for ordinary installs that is right —
+                // v2 is verified faster and covers the whole archive.
+                //
+                // QR provisioning is not an ordinary install. Android's
+                // ManagedProvisioning verifies the DPC it just downloaded
+                // through getPackageArchiveInfo(GET_SIGNATURES), the
+                // deprecated path, and on AOSP-derived builds that path
+                // does not reliably see a v2-only signature — provisioning
+                // then dies with a bare "something went wrong" right after
+                // the code is scanned.
+                //
+                // The signing certificate is the same either way, so the
+                // checksum baked into the QR payload stays valid.
+                enableV1Signing = true
+                enableV2Signing = true
+                enableV3Signing = true
             }
         }
     }
