@@ -50,6 +50,12 @@ class _ProvisionScreenState extends State<ProvisionScreen> {
       if (e is! Map) return;
       final stage = e['stage']?.toString() ?? '';
       _say(e['message']?.toString() ?? '');
+      if (stage == 'needPairing' && mounted) {
+        // Only now is the QR worth showing: reconnecting failed, so the
+        // tablet either never knew us or has forgotten.
+        _startPairing();
+        return;
+      }
       if (stage == 'connected' && mounted) {
         // The QR has done its job; leaving it up invites a second scan that
         // would pair against a rendezvous nobody is listening on any more.
@@ -100,6 +106,26 @@ class _ProvisionScreenState extends State<ProvisionScreen> {
   void _say(String line) {
     if (!mounted || line.isEmpty) return;
     setState(() => _log.insert(0, line));
+  }
+
+  /// Try the connection we may already have before asking for a new one.
+  ///
+  /// The phone's ADB identity is generated once and kept, and the tablet
+  /// remembers it — so a tablet paired last week needs no QR, only for
+  /// wireless debugging to be switched on again, which no reboot survives.
+  /// Starting from the QR every time asked the technician to redo work the
+  /// tablet had not forgotten, and quietly filled its paired-devices list.
+  Future<void> _reconnect() async {
+    setState(() {
+      _log.clear();
+      _connected = false;
+      _qr = null;
+    });
+    try {
+      await _channel.invokeMethod('reconnect');
+    } on PlatformException catch (e) {
+      _say('Ошибка: ${e.message}');
+    }
   }
 
   Future<void> _startPairing() async {
@@ -187,9 +213,14 @@ class _ProvisionScreenState extends State<ProvisionScreen> {
           ),
           const SizedBox(height: 8),
           FilledButton.icon(
+            onPressed: _busy ? null : _reconnect,
+            icon: const Icon(Icons.link),
+            label: const Text('Подключить планшет'),
+          ),
+          TextButton.icon(
             onPressed: _busy ? null : _startPairing,
             icon: const Icon(Icons.qr_code_2),
-            label: const Text('Показать QR для сопряжения'),
+            label: const Text('Сопрячь заново по QR'),
           ),
           if (_qr != null) ...[
             const SizedBox(height: 16),

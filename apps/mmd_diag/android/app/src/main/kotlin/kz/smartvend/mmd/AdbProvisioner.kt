@@ -68,6 +68,16 @@ class AdbProvisioner(private val context: Context) : MethodChannel.MethodCallHan
         context.getSystemService(Context.NSD_SERVICE) as NsdManager
     }
 
+    /**
+     * Address of the service [discoverDebugPort] settled on.
+     *
+     * Needed because the port alone is not enough to connect, and the
+     * address we end up using is not always the one we paired with: on a
+     * reconnect there is no paired address at all, and on a dual-stack
+     * network the tablet can answer on a different family than it paired on.
+     */
+    private var lastAddress: String? = null
+
     /** Guards against a second pairing run while one is still hunting. */
     private val pairing = AtomicBoolean(false)
     private var discoveryListener: NsdManager.DiscoveryListener? = null
@@ -97,6 +107,24 @@ class AdbProvisioner(private val context: Context) : MethodChannel.MethodCallHan
     override fun onMethodCall(call: MethodCall, result: MethodChannel.Result) {
         when (call.method) {
             "startPairing" -> startPairing(result)
+            "reconnect" -> {
+                io.execute {
+                    try {
+                        emit("discovering", "Ищу уже сопряжённый планшет")
+                        acquireMulticast()
+                        if (connectWithRetry(null)) {
+                            emit("connected", "Подключено к планшету")
+                        } else {
+                            emit("needPairing", "Готового соединения нет — нужен QR")
+                        }
+                    } catch (t: Throwable) {
+                        emit("needPairing", t.message ?: t.toString())
+                    } finally {
+                        releaseMulticast()
+                    }
+                }
+                result.success(null)
+            }
             "cancelPairing" -> {
                 stopDiscovery()
                 releaseMulticast()
@@ -352,17 +380,19 @@ class AdbProvisioner(private val context: Context) : MethodChannel.MethodCallHan
      * Retried because adbd rebuilds its TLS listener the moment a new peer is
      * trusted and re-advertises afterwards, so a first miss means little.
      */
-    private fun connectWithRetry(host: String): Boolean {
+    private fun connectWithRetry(host: String?): Boolean {
         // Let the pairing discovery finish dying before starting another.
         Thread.sleep(SETTLE_MS)
         for (attempt in 1..CONNECT_ATTEMPTS) {
+            lastAddress = null
             val port = discoverDebugPort(host)
-            if (port == null) {
+            val target = lastAddress
+            if (port == null || target == null) {
                 emit("connecting", "Попытка $attempt: порт отладки ещё не объявлен")
             } else {
                 emit("connecting", "Порт отладки $port, подключаюсь")
                 try {
-                    if (manager().connect(host, port)) return true
+                    if (manager().connect(target, port)) return true
                 } catch (t: Throwable) {
                     emit("connecting", "Попытка $attempt: ${t.message}")
                 }
@@ -393,7 +423,7 @@ class AdbProvisioner(private val context: Context) : MethodChannel.MethodCallHan
      * blamed the tablet. Anything on one of our own addresses is now
      * discarded before it can be chosen.
      */
-    private fun discoverDebugPort(host: String): Int? {
+    private fun discoverDebugPort(host: String?): Int? {
         val found = mutableListOf<NsdServiceInfo>()
         val listener = object : NsdManager.DiscoveryListener {
             override fun onDiscoveryStarted(serviceType: String) = Unit
@@ -443,16 +473,25 @@ class AdbProvisioner(private val context: Context) : MethodChannel.MethodCallHan
                 continue
             }
             emit("connecting", "Служба ${info.serviceName}: $addr:$port")
-            if (addr == host) return port
+            if (host != null && addr == host) {
+                lastAddress = addr
+                return port
+            }
+            if (fallback == null) lastAddress = addr
             fallback = fallback ?: port
             others++
         }
         if (others == 1 && fallback != null) {
-            emit("connecting", "Адрес не совпал с $host, но устройство одно — беру его")
+            if (host != null) {
+                emit("connecting", "Адрес не совпал с $host, но планшет один — беру его")
+            }
             return fallback
         }
-        if (others > 1) emit("connecting", "Несколько устройств в отладке, ни одно не на $host")
-        else emit("connecting", "Кроме этого телефона в отладке никого")
+        if (others > 1) {
+            emit("connecting", "Планшетов в отладке несколько — нужен QR, чтобы выбрать нужный")
+        } else {
+            emit("connecting", "Кроме этого телефона в отладке никого")
+        }
         return null
     }
 
