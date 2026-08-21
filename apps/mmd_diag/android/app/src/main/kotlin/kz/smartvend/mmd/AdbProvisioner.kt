@@ -707,6 +707,11 @@ class AdbProvisioner(private val context: Context) : MethodChannel.MethodCallHan
                 throw IllegalStateException("Установка не прошла: ${reply.trim()}")
             }
             emit("installed", "Приложение установлено")
+            // The APK stream ends by closing a channel the daemon is still
+            // using, and that reliably leaves the connection unusable. Waiting
+            // for the next command to discover it costs a full timeout, so
+            // rebuild now while we know exactly where to reconnect.
+            reconnectSameTarget()
             return reply.trim()
         }
     }
@@ -752,8 +757,17 @@ class AdbProvisioner(private val context: Context) : MethodChannel.MethodCallHan
     private fun setDeviceOwner(component: String): String {
         emit("owner", "Проверяю планшет")
 
-        val accounts = shell("dumpsys account")
-        val accountCount = accounts.lineSequence().count { it.contains("Account {") }
+        // Advisory only. dumpsys account is a large dump on a fresh tablet
+        // and the first command after an install is the most likely to hit a
+        // half-dead stream; failing here would block provisioning over a
+        // check whose whole purpose is to explain a failure that has not
+        // happened yet.
+        val accountCount = try {
+            shell("dumpsys account").lineSequence().count { it.contains("Account {") }
+        } catch (t: Throwable) {
+            emit("owner", "Проверку аккаунтов пропускаю: ${t.message}")
+            0
+        }
         if (accountCount > 0) {
             throw IllegalStateException(
                 "На планшете есть аккаунт ($accountCount). Удалите его в " +
@@ -817,8 +831,12 @@ class AdbProvisioner(private val context: Context) : MethodChannel.MethodCallHan
         private const val PAIRING_SERVICE = "_adb-tls-pairing._tcp."
         private const val CONNECT_SERVICE = "_adb-tls-connect._tcp."
         private const val OWNER_PACKAGE = "kz.smartvend.m102_tester"
-        /** Long enough for pm to unpack a Flutter APK on a slow tablet. */
-        private const val SHELL_TIMEOUT_MS = 120_000L
+        /**
+         * Every command we run answers in under a second when the link is
+         * healthy — the APK no longer goes through here. Two minutes only
+         * ever meant two minutes of staring at a dead connection.
+         */
+        private const val SHELL_TIMEOUT_MS = 30_000L
         private const val CONNECT_ATTEMPTS = 5
         private const val CONNECT_RETRY_DELAY_MS = 2_000L
         private const val DISCOVERY_TIMEOUT_MS = 6_000L
