@@ -88,6 +88,32 @@ class MainActivity : FlutterActivity() {
      */
     private var suppressLockUntilMs = 0L
 
+    /** Main-thread handler for the immersive ticker below. */
+    private val uiHandler = Handler(Looper.getMainLooper())
+
+    /**
+     * Ticker that keeps the system bars shut.
+     *
+     * [installInsetsRehideListener] only fires when the window insets
+     * change, and a *transient* bar — the empty strip a swipe from the
+     * screen edge pulls in — deliberately leaves insets alone so the
+     * app's layout does not jump underneath it. The listener therefore
+     * never sees it, and the strip sits over the catalog for the three
+     * seconds the system allows before retracting on its own.
+     *
+     * Three seconds is plenty of time to tap something. Asking the
+     * controller to hide again cancels the transient state at once, so
+     * we simply keep asking on a short period while resumed. Cheap: one
+     * call into the insets controller, and no relayout when the bars are
+     * already hidden.
+     */
+    private val immersiveTicker = object : Runnable {
+        override fun run() {
+            hideSystemBars()
+            uiHandler.postDelayed(this, IMMERSIVE_TICK_MS)
+        }
+    }
+
     /** Reference to the kiosk MethodChannel kept on the activity so the
      *  USB permission BroadcastReceiver can call back into Flutter when
      *  the user accepts/denies the system dialog. */
@@ -317,6 +343,7 @@ class MainActivity : FlutterActivity() {
 
     override fun onDestroy() {
         if (instance === this) instance = null
+        stopImmersiveTicker()
         try {
             unregisterReceiver(usbPermissionReceiver)
         } catch (_: Throwable) {
@@ -507,12 +534,35 @@ class MainActivity : FlutterActivity() {
         applyGestureExclusion()
     }
 
+    override fun onPause() {
+        // Nothing to fight over while we are off screen, and a ticker
+        // running behind the APK-install dialog would poke the very bars
+        // the installer needs.
+        stopImmersiveTicker()
+        super.onPause()
+    }
+
     override fun onWindowFocusChanged(hasFocus: Boolean) {
         super.onWindowFocusChanged(hasFocus)
         if (hasFocus) {
             applyImmersive()
             applyGestureExclusion()
         }
+    }
+
+    /** Just the hide call — what [immersiveTicker] repeats. */
+    private fun hideSystemBars() {
+        WindowInsetsControllerCompat(window, window.decorView)
+            .hide(WindowInsetsCompat.Type.systemBars())
+    }
+
+    private fun startImmersiveTicker() {
+        uiHandler.removeCallbacks(immersiveTicker)
+        uiHandler.postDelayed(immersiveTicker, IMMERSIVE_TICK_MS)
+    }
+
+    private fun stopImmersiveTicker() {
+        uiHandler.removeCallbacks(immersiveTicker)
     }
 
     private fun applyImmersive() {
@@ -527,6 +577,7 @@ class MainActivity : FlutterActivity() {
         controller.systemBarsBehavior =
             WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
         controller.hide(WindowInsetsCompat.Type.systemBars())
+        startImmersiveTicker()
         // Ensure the bar surfaces themselves are transparent so the
         // catalog shows through whenever they do appear.
         window.statusBarColor = android.graphics.Color.TRANSPARENT
@@ -746,6 +797,13 @@ class MainActivity : FlutterActivity() {
 
     companion object {
         private const val KIOSK_CHANNEL = "kz.smartvend/kiosk"
+
+        /**
+         * How often to re-hide the system bars. Short enough that a
+         * transient bar is gone before it can be aimed at, long enough
+         * to be invisible on the CPU.
+         */
+        private const val IMMERSIVE_TICK_MS = 600L
 
         /**
          * Live activity, for [InstallReceiver] — an activity context is
