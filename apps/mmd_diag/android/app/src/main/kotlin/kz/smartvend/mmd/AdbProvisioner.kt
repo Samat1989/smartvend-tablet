@@ -756,25 +756,7 @@ class AdbProvisioner(private val context: Context) : MethodChannel.MethodCallHan
      */
     private fun setDeviceOwner(component: String): String {
         emit("owner", "Проверяю планшет")
-
-        // Advisory only. dumpsys account is a large dump on a fresh tablet
-        // and the first command after an install is the most likely to hit a
-        // half-dead stream; failing here would block provisioning over a
-        // check whose whole purpose is to explain a failure that has not
-        // happened yet.
-        val accountCount = try {
-            shell("dumpsys account").lineSequence().count { it.contains("Account {") }
-        } catch (t: Throwable) {
-            emit("owner", "Проверку аккаунтов пропускаю: ${t.message}")
-            0
-        }
-        if (accountCount > 0) {
-            throw IllegalStateException(
-                "На планшете есть аккаунт ($accountCount). Удалите его в " +
-                    "Настройках → Аккаунты и повторите — с аккаунтом Android " +
-                    "не отдаёт права администратора.",
-            )
-        }
+        clearBlockingAccounts()
 
         emit("owner", "Выдаю права администратора")
         val direct = shell("dpm set-device-owner $component")
@@ -783,18 +765,19 @@ class AdbProvisioner(private val context: Context) : MethodChannel.MethodCallHan
             return direct.trim()
         }
 
-        // Newer ROMs refuse once the setup wizard has finished. Say what is
-        // being done: it changes system settings, briefly, and an installer
-        // watching the log deserves to know.
-        emit("owner", "Прошивка не отдаёт права после настройки — обхожу")
+        // Not always the cause, so not always tried: on both tablets
+        // provisioned so far the account was the only obstacle and a
+        // finished setup wizard did not matter. Reach for this only after
+        // dpm has actually refused.
+        emit("owner", "Отказ — пробую обойти завершённую настройку")
         val retry = try {
             shell("settings put secure user_setup_complete 0")
             shell("settings put global device_provisioned 0")
             shell("dpm set-device-owner $component")
         } finally {
-            // Unconditionally: a tablet left thinking it is mid-setup would
-            // relaunch the wizard on the next boot, which is a far worse
-            // state than simply not having the rights.
+            // Unconditionally: a tablet left thinking it is mid-setup
+            // relaunches the wizard on the next boot, which is worse than
+            // simply lacking the rights.
             shell("settings put secure user_setup_complete 1")
             shell("settings put global device_provisioned 1")
         }
@@ -811,6 +794,77 @@ class AdbProvisioner(private val context: Context) : MethodChannel.MethodCallHan
         }
         emit("done", "Готово — планшет управляется приложением")
         return retry.trim()
+    }
+
+    /**
+     * Get rid of the accounts that block device owner, where it is safe to.
+     *
+     * Android refuses device owner while any account exists, and on the
+     * Unisoc tablets we buy that is not a user's Google account but one the
+     * ROM makes for itself — `sprd.com.android.account.phone`, meaning
+     * "contacts stored on the device", registered by com.android.contacts
+     * before anyone has touched the tablet. Skipping Google sign-in during
+     * setup does nothing about it, which is what makes the refusal baffling
+     * in the field: the operator did everything right and is still told
+     * there is an account.
+     *
+     * Only authenticators on [REMOVABLE_AUTHENTICATORS] are touched.
+     * Anything else — a real Google account above all — is named and left
+     * alone: removing the package behind it would take Play services with
+     * it, and whoever added an account can remove it in Settings.
+     *
+     * AccountManager purges accounts whose authenticator has gone only at
+     * boot, so this ends in a reboot and the operator has to come back for
+     * a second pass. There is no avoiding that: wireless debugging does not
+     * survive a restart either.
+     */
+    private fun clearBlockingAccounts() {
+        val dump = try {
+            shell("dumpsys account")
+        } catch (t: Throwable) {
+            // Advisory: the first command after an install is the likeliest
+            // to meet a half-dead stream, and a check meant to explain a
+            // future failure must not cause one.
+            emit("owner", "Проверку аккаунтов пропускаю: ${t.message}")
+            return
+        }
+
+        val types = ACCOUNT_RE.findAll(dump).map { it.groupValues[1] }.toSet()
+        if (types.isEmpty()) return
+
+        val owners = AUTHENTICATOR_RE.findAll(dump)
+            .associate { it.groupValues[1] to it.groupValues[2] }
+
+        val removable = mutableSetOf<String>()
+        val stuck = mutableListOf<String>()
+        for (type in types) {
+            val pkg = owners[type]
+            if (pkg != null && pkg in REMOVABLE_AUTHENTICATORS) removable.add(pkg)
+            else stuck.add(type)
+        }
+
+        if (stuck.isNotEmpty()) {
+            throw IllegalStateException(
+                "На планшете есть аккаунт: " + stuck.joinToString(", ") +
+                    ". Удалите его в Настройках → Аккаунты и повторите — с " +
+                    "аккаунтом Android не отдаёт права администратора.",
+            )
+        }
+
+        for (pkg in removable) {
+            emit("owner", "Убираю системный аккаунт ($pkg)")
+            shell("pm uninstall --user 0 $pkg")
+        }
+        emit("owner", "Перезагружаю планшет — аккаунты чистятся при старте")
+        try {
+            manager().openStream("shell:reboot").close()
+        } catch (_: Throwable) {
+        }
+        throw IllegalStateException(
+            "Системный аккаунт убран, планшет перезагружается. Включите на нём " +
+                "беспроводную отладку заново и нажмите «Подключить планшет» — " +
+                "установка продолжится с этого места.",
+        )
     }
 
     // ============================ Plumbing ==================================
@@ -831,6 +885,19 @@ class AdbProvisioner(private val context: Context) : MethodChannel.MethodCallHan
         private const val PAIRING_SERVICE = "_adb-tls-pairing._tcp."
         private const val CONNECT_SERVICE = "_adb-tls-connect._tcp."
         private const val OWNER_PACKAGE = "kz.smartvend.m102_tester"
+
+        private val ACCOUNT_RE = Regex("Account \\{name=[^,]*, type=([^}]+)\\}")
+        private val AUTHENTICATOR_RE =
+            Regex("AuthenticatorDescription \\{type=([^}]+)\\}, ComponentInfo\\{([^/]+)/")
+
+        /**
+         * Authenticator packages safe to remove in order to clear an account.
+         *
+         * Deliberately short. This one is the ROM's local contacts storage,
+         * which a vending tablet has no use for. Anything else, Google above
+         * all, is the operator's to deal with.
+         */
+        private val REMOVABLE_AUTHENTICATORS = setOf("com.android.contacts")
         /**
          * Every command we run answers in under a second when the link is
          * healthy — the APK no longer goes through here. Two minutes only
