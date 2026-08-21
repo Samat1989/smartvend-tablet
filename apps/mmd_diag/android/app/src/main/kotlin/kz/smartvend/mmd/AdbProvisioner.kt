@@ -18,6 +18,7 @@ import org.bouncycastle.cert.jcajce.JcaX509CertificateConverter
 import org.bouncycastle.cert.jcajce.JcaX509v3CertificateBuilder
 import org.bouncycastle.operator.jcajce.JcaContentSignerBuilder
 import java.io.File
+import java.io.IOException
 import java.math.BigInteger
 import java.security.KeyFactory
 import java.security.KeyPairGenerator
@@ -604,7 +605,7 @@ class AdbProvisioner(private val context: Context) : MethodChannel.MethodCallHan
     private fun shellOnce(command: String): String {
         val task = shellPool.submit<String> {
             manager().openStream("shell:$command").use { stream ->
-                stream.openInputStream().bufferedReader().use { it.readText() }
+                stream.readUntilClosed()
             }
         }
         return try {
@@ -619,6 +620,36 @@ class AdbProvisioner(private val context: Context) : MethodChannel.MethodCallHan
             Log.e(TAG, "shell failed: $command", cause)
             throw IllegalStateException(cause.message ?: cause.toString(), cause)
         }
+    }
+
+    /**
+     * Read a command's output to the end, treating the daemon hanging up as
+     * the end rather than as a failure.
+     *
+     * adbd closes the stream when the command finishes, and this library
+     * surfaces that as IOException("Stream closed.") instead of EOF. So a
+     * command that answers instantly — `dpm set-device-owner` above all —
+     * throws on the way out even though it worked, and the reply is thrown
+     * away with the exception. Everything that arrived before the close is
+     * the output; that is what we keep.
+     *
+     * Only IOException is swallowed, and only after the read has started:
+     * a stream that never opens still fails loudly.
+     */
+    private fun AdbStream.readUntilClosed(): String {
+        val text = StringBuilder()
+        try {
+            val reader = openInputStream().bufferedReader()
+            val buf = CharArray(4096)
+            while (true) {
+                val n = reader.read(buf)
+                if (n < 0) break
+                text.append(buf, 0, n)
+            }
+        } catch (e: IOException) {
+            Log.i(TAG, "stream ended: ${e.message}")
+        }
+        return text.toString()
     }
 
     private fun reconnectSameTarget(): Boolean {
@@ -671,7 +702,7 @@ class AdbProvisioner(private val context: Context) : MethodChannel.MethodCallHan
             emit("install", "Устанавливаю, это до минуты")
             // Deliberately not closing the output stream: pm answers on this
             // same stream, and closing our half takes the reply with it.
-            val reply = stream.openInputStream().bufferedReader().readText()
+            val reply = stream.readUntilClosed()
             if (!reply.contains("Success")) {
                 throw IllegalStateException("Установка не прошла: ${reply.trim()}")
             }
@@ -734,9 +765,6 @@ class AdbProvisioner(private val context: Context) : MethodChannel.MethodCallHan
         SecureRandom().nextBytes(buf)
         return buf.joinToString("") { "%02x".format(it) }
     }
-
-    private fun AdbStream.readAllText(): String =
-        openInputStream().bufferedReader().use { it.readText() }
 
     companion object {
         private const val TAG = "MmdAdb"
