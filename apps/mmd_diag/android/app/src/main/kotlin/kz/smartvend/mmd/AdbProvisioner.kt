@@ -433,6 +433,11 @@ class AdbProvisioner(private val context: Context) : MethodChannel.MethodCallHan
                     if (manager().connect(target, port)) {
                         connectedHost = target
                         connectedPort = port
+                        if (!linkIsUsable()) {
+                            emit("connecting", "Попытка $attempt: связь поднялась, но команды не идут")
+                            Thread.sleep(CONNECT_RETRY_DELAY_MS)
+                            continue
+                        }
                         return true
                     }
                     // connect() answers false as readily as it throws, and a
@@ -663,6 +668,25 @@ class AdbProvisioner(private val context: Context) : MethodChannel.MethodCallHan
             Log.i(TAG, "stream ended: ${e.message}")
         }
         return text.toString()
+    }
+
+    /**
+     * Prove the link carries commands, not just packets.
+     *
+     * connect() can succeed onto a stream that then answers nothing — the
+     * state screen spent thirty seconds on `getprop` before finding that
+     * out, which is the whole shell budget wasted on a link we could have
+     * tested in a second. Short timeout on purpose: a healthy tablet
+     * answers this instantly, and a slow answer here is not worth waiting
+     * for when reconnecting is cheap.
+     */
+    private fun linkIsUsable(): Boolean = try {
+        val task = shellPool.submit<String> {
+            manager().openStream("shell:echo ok").use { it.readUntilClosed() }
+        }
+        task.get(PROBE_TIMEOUT_MS, TimeUnit.MILLISECONDS).contains("ok")
+    } catch (t: Throwable) {
+        false
     }
 
     private fun reconnectSameTarget(): Boolean {
@@ -987,6 +1011,9 @@ class AdbProvisioner(private val context: Context) : MethodChannel.MethodCallHan
         private const val CONNECT_ATTEMPTS = 5
         private const val CONNECT_RETRY_DELAY_MS = 2_000L
         private const val DISCOVERY_TIMEOUT_MS = 6_000L
+
+        /** A live tablet answers `echo` at once; a dead stream never will. */
+        private const val PROBE_TIMEOUT_MS = 6_000L
         private const val RESOLVE_TIMEOUT_MS = 4_000L
 
         /** Beat after the first hit, so siblings land before we stop listening. */
