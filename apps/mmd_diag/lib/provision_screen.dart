@@ -41,6 +41,7 @@ class _ProvisionScreenState extends State<ProvisionScreen> {
   bool _manual = false;
   final _log = <String>[];
   final _hostPort = TextEditingController();
+  final _debugHostPort = TextEditingController();
   final _code = TextEditingController();
 
   @override
@@ -70,6 +71,7 @@ class _ProvisionScreenState extends State<ProvisionScreen> {
   @override
   void dispose() {
     _hostPort.dispose();
+    _debugHostPort.dispose();
     _code.dispose();
     super.dispose();
   }
@@ -97,6 +99,33 @@ class _ProvisionScreenState extends State<ProvisionScreen> {
         'host': raw.substring(0, at),
         'port': port,
         'code': _code.text.trim(),
+      });
+    } on PlatformException catch (e) {
+      _say('Ошибка: ${e.message}');
+    }
+  }
+
+  /// Connect to an address read off the tablet's own screen.
+  ///
+  /// Every automatic route to the debugging port goes through mDNS, and mDNS
+  /// is at the mercy of the network: on one Wi-Fi the tablet's
+  /// `_adb-tls-connect._tcp` record arrives in seconds, on another it never
+  /// arrives at all while the pairing record from the same tablet does. The
+  /// Wireless debugging screen prints the address and port in plain text, so
+  /// this path needs no discovery, no multicast and no cooperation from the
+  /// router.
+  Future<void> _connectDirect() async {
+    final raw = _debugHostPort.text.trim();
+    final at = raw.lastIndexOf(':');
+    final port = at < 1 ? null : int.tryParse(raw.substring(at + 1));
+    if (port == null) {
+      _say('Ошибка: нужен адрес вида 192.168.1.50:37021');
+      return;
+    }
+    try {
+      await _channel.invokeMethod('connectDirect', {
+        'host': raw.substring(0, at),
+        'port': port,
       });
     } on PlatformException catch (e) {
       _say('Ошибка: ${e.message}');
@@ -276,6 +305,30 @@ class _ProvisionScreenState extends State<ProvisionScreen> {
               onPressed: _busy ? null : _pairManual,
               icon: const Icon(Icons.link),
               label: const Text('Сопрячь по коду'),
+            ),
+            const Divider(height: 32),
+            const _Step(
+              n: 4,
+              title: 'Подключение по адресу',
+              body: 'Если сопряжение прошло, но подключиться не удаётся — '
+                  'возьмите «IP-адрес и порт» с самого верха экрана '
+                  'Беспроводной отладки. Порт там другой, не тот, что был '
+                  'у кода сопряжения.',
+            ),
+            TextField(
+              controller: _debugHostPort,
+              keyboardType: TextInputType.url,
+              decoration: const InputDecoration(
+                labelText: 'Адрес и порт отладки',
+                hintText: '192.168.1.50:37021',
+                border: OutlineInputBorder(),
+              ),
+            ),
+            const SizedBox(height: 8),
+            FilledButton.tonalIcon(
+              onPressed: _busy ? null : _connectDirect,
+              icon: const Icon(Icons.cable),
+              label: const Text('Подключиться по адресу'),
             ),
           ],
           if (_connected) ...[

@@ -125,6 +125,28 @@ class AdbProvisioner(private val context: Context) : MethodChannel.MethodCallHan
                 }
                 result.success(null)
             }
+            "connectDirect" -> {
+                val host = call.argument<String>("host")
+                val port = call.argument<Int>("port")
+                if (host == null || port == null) {
+                    result.error("args", "host и port обязательны", null)
+                } else {
+                    io.execute {
+                        try {
+                            emit("connecting", "Подключаюсь к $host:$port")
+                            if (manager().connect(host, port)) {
+                                emit("connected", "Подключено к планшету")
+                            } else {
+                                emit("error", "Планшет не принял подключение")
+                            }
+                        } catch (t: Throwable) {
+                            Log.e(TAG, "direct connect failed", t)
+                            emit("error", t.message ?: t.toString())
+                        }
+                    }
+                    result.success(null)
+                }
+            }
             "cancelPairing" -> {
                 stopDiscovery()
                 releaseMulticast()
