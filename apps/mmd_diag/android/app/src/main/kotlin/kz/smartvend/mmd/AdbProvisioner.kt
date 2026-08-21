@@ -733,27 +733,70 @@ class AdbProvisioner(private val context: Context) : MethodChannel.MethodCallHan
     /**
      * Hand the kiosk its device-owner rights.
      *
-     * Fails loudly on the two conditions that actually bite in the field, so
-     * the technician reads a fix rather than a stack trace: an account on the
-     * tablet, and a ROM that refuses once setup has been completed.
+     * Two obstacles, and they need telling apart because only one of them
+     * can be worked around.
+     *
+     * An account on the tablet is fatal. Android refuses device owner
+     * outright, and the only cure is removing the account — so we look
+     * first and say so, rather than letting dpm answer with a bare
+     * "Can't set package ... as device owner."
+     *
+     * A completed setup wizard is not fatal, but it is why this fails on
+     * anything newer than Android 11. Older builds only checked for
+     * accounts; newer ones also insist provisioning has not finished, which
+     * a tablet in a technician's hands always has. The flags saying so are
+     * ordinary settings, so we lower them, grant, and raise them again —
+     * in a finally, because a tablet left believing it is mid-setup would
+     * relaunch the wizard on the next boot.
      */
     private fun setDeviceOwner(component: String): String {
+        emit("owner", "Проверяю планшет")
+
+        val accounts = shell("dumpsys account")
+        val accountCount = accounts.lineSequence().count { it.contains("Account {") }
+        if (accountCount > 0) {
+            throw IllegalStateException(
+                "На планшете есть аккаунт ($accountCount). Удалите его в " +
+                    "Настройках → Аккаунты и повторите — с аккаунтом Android " +
+                    "не отдаёт права администратора.",
+            )
+        }
+
         emit("owner", "Выдаю права администратора")
-        val out = shell("dpm set-device-owner $component")
-        if (!out.contains("Success")) {
+        val direct = shell("dpm set-device-owner $component")
+        if (direct.contains("Success")) {
+            emit("done", "Готово — планшет управляется приложением")
+            return direct.trim()
+        }
+
+        // Newer ROMs refuse once the setup wizard has finished. Say what is
+        // being done: it changes system settings, briefly, and an installer
+        // watching the log deserves to know.
+        emit("owner", "Прошивка не отдаёт права после настройки — обхожу")
+        val retry = try {
+            shell("settings put secure user_setup_complete 0")
+            shell("settings put global device_provisioned 0")
+            shell("dpm set-device-owner $component")
+        } finally {
+            // Unconditionally: a tablet left thinking it is mid-setup would
+            // relaunch the wizard on the next boot, which is a far worse
+            // state than simply not having the rights.
+            shell("settings put secure user_setup_complete 1")
+            shell("settings put global device_provisioned 1")
+        }
+
+        if (!retry.contains("Success")) {
             val hint = when {
-                out.contains("accounts on the device") ->
-                    "На планшете есть аккаунт. Удалите его в Настройках и повторите."
-                out.contains("already set") ->
+                retry.contains("already set") ->
                     "Права уже выданы этому или другому приложению."
-                out.contains("several users") ->
+                retry.contains("several users") ->
                     "На планшете больше одного пользователя. Удалите лишних."
-                else -> out.trim()
+                else -> retry.trim().lineSequence().firstOrNull() ?: "неизвестная причина"
             }
             throw IllegalStateException(hint)
         }
         emit("done", "Готово — планшет управляется приложением")
-        return out.trim()
+        return retry.trim()
     }
 
     // ============================ Plumbing ==================================
