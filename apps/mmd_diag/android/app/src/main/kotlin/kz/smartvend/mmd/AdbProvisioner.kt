@@ -430,6 +430,12 @@ class AdbProvisioner(private val context: Context) : MethodChannel.MethodCallHan
                         connectedPort = port
                         return true
                     }
+                    // connect() answers false as readily as it throws, and a
+                    // silent false here was indistinguishable from having
+                    // found nothing at all — the log jumped straight from
+                    // "connecting" to "no debugging advertised", which sent
+                    // the search off after the wrong problem entirely.
+                    emit("connecting", "Попытка $attempt: планшет отклонил подключение")
                 } catch (t: Throwable) {
                     emit("connecting", "Попытка $attempt: ${t.message}")
                 }
