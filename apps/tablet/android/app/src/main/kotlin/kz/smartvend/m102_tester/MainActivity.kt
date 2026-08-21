@@ -88,8 +88,66 @@ class MainActivity : FlutterActivity() {
      */
     private var suppressLockUntilMs = 0L
 
-    /** Main-thread handler for the immersive ticker below. */
+    /** Main-thread handler for the immersive ticker and the watchdog. */
     private val uiHandler = Handler(Looper.getMainLooper())
+
+    /**
+     * Deadline before which the watchdog must stay quiet.
+     *
+     * Set whenever the operator deliberately leaves for Android — the
+     * service menu's exit, or the overlay-permission screen — because a
+     * watchdog that snatches the screen back once a second makes changing
+     * the Wi-Fi impossible.
+     *
+     * A deadline rather than a plain flag, so a service session someone
+     * walked away from cannot leave the machine open indefinitely.
+     * [onResume] clears it the moment the operator comes back; if they
+     * never do, it lapses on its own.
+     */
+    private var watchdogSuppressUntilMs = 0L
+
+    /** One overlay prompt per process, so a refusal does not become a loop. */
+    private var overlayAsked = false
+
+    /** Throttles watchdog logging; the tick itself runs once a second. */
+    private var watchdogAttempts = 0
+
+    /**
+     * When [dismissShadeIfNeeded] last fired.
+     *
+     * Closing the shade changes window focus, which calls
+     * [onWindowFocusChanged] again — and the first build of this went into
+     * a focus-change storm that wedged the main thread into an ANR within
+     * seconds. The broadcast is cheap; being asked to send it hundreds of
+     * times a second is not.
+     */
+    private var lastShadeDismissMs = 0L
+
+    /**
+     * Drags the app back to the front once a second while it is off screen
+     * — the fallback kiosk for tablets that have no device owner.
+     *
+     * With device owner this never starts, and should not: lock task
+     * refuses to let anything else take the foreground at all, which is a
+     * guarantee rather than a race. Without it the OS offers only screen
+     * pinning, which a customer can leave with back + overview, and this is
+     * the crude answer to that.
+     *
+     * Crude is the word. Android 10 blocks background activity starts, so
+     * every tick here is refused unless SYSTEM_ALERT_WINDOW has been
+     * granted — see [ensureOverlayPermission]. Even granted, it recovers
+     * *after* the escape instead of preventing it, leaving a second in
+     * which Settings is reachable. Provisioning device owner stops this
+     * whole path from running.
+     */
+    private val watchdogTicker = object : Runnable {
+        override fun run() {
+            val now = SystemClock.elapsedRealtime()
+            val quiet = now < watchdogSuppressUntilMs || now < suppressLockUntilMs
+            if (!quiet) bringSelfToFront()
+            uiHandler.postDelayed(this, WATCHDOG_TICK_MS)
+        }
+    }
 
     /**
      * Ticker that keeps the system bars shut.
@@ -194,6 +252,11 @@ class MainActivity : FlutterActivity() {
                     }
                     "exitToAndroid" -> {
                         suppressLockOnce = true
+                        // The operator asked to be let out; hold the
+                        // watchdog off until they come back, or until the
+                        // grace period lapses if they forget to.
+                        watchdogSuppressUntilMs =
+                            SystemClock.elapsedRealtime() + SERVICE_EXIT_GRACE_MS
                         try { stopLockTask() } catch (_: Throwable) {}
                         try {
                             startActivity(
@@ -333,6 +396,13 @@ class MainActivity : FlutterActivity() {
                 val intent = Intent(usbPermissionAction).setPackage(packageName)
                 val pi = PendingIntent.getBroadcast(this, 0, intent, flags)
                 Log.i(TAG_KIOSK, "Requesting USB permission for ${device.deviceName}")
+                // The system USB dialog is exactly the kind of thing
+                // dismissShadeIfNeeded would swat away, so claim the same
+                // grace window the installer uses before raising it.
+                suppressLockUntilMs = maxOf(
+                    suppressLockUntilMs,
+                    SystemClock.elapsedRealtime() + USB_PROMPT_GRACE_MS,
+                )
                 usbManager.requestPermission(device, pi)
                 return "requested"
             }
@@ -344,6 +414,7 @@ class MainActivity : FlutterActivity() {
     override fun onDestroy() {
         if (instance === this) instance = null
         stopImmersiveTicker()
+        stopWatchdog()
         try {
             unregisterReceiver(usbPermissionReceiver)
         } catch (_: Throwable) {
@@ -529,9 +600,16 @@ class MainActivity : FlutterActivity() {
 
     override fun onResume() {
         super.onResume()
+        // Back on screen: nothing to drag forward, and whatever suppression
+        // the operator earned by leaving has served its purpose. Cleared
+        // before ensureOverlayPermission, which may open a fresh window of
+        // its own — order matters, because that call sends us to Settings.
+        stopWatchdog()
+        watchdogSuppressUntilMs = 0
         applyImmersive()
         tryEnterLockTask()
         applyGestureExclusion()
+        ensureOverlayPermission()
     }
 
     override fun onPause() {
@@ -539,7 +617,82 @@ class MainActivity : FlutterActivity() {
         // running behind the APK-install dialog would poke the very bars
         // the installer needs.
         stopImmersiveTicker()
+        startWatchdogIfNeeded()
         super.onPause()
+    }
+
+    private fun isDeviceOwner(): Boolean {
+        val dpm = getSystemService(Context.DEVICE_POLICY_SERVICE) as? DevicePolicyManager
+        return dpm?.isDeviceOwnerApp(packageName) == true
+    }
+
+    /** Only ever armed on a tablet with no device owner — see [watchdogTicker]. */
+    private fun startWatchdogIfNeeded() {
+        if (isDeviceOwner()) return
+        watchdogAttempts = 0
+        uiHandler.removeCallbacks(watchdogTicker)
+        uiHandler.postDelayed(watchdogTicker, WATCHDOG_TICK_MS)
+        Log.i(TAG_KIOSK, "watchdog armed (no device owner)")
+    }
+
+    private fun stopWatchdog() {
+        uiHandler.removeCallbacks(watchdogTicker)
+    }
+
+    private fun bringSelfToFront() {
+        val intent = packageManager.getLaunchIntentForPackage(packageName) ?: return
+        intent.addFlags(
+            Intent.FLAG_ACTIVITY_REORDER_TO_FRONT or Intent.FLAG_ACTIVITY_NEW_TASK,
+        )
+        try {
+            startActivity(intent)
+        } catch (t: Throwable) {
+            // Logged for the first few ticks only: this runs once a second,
+            // and a blocked background start fails the same way every time.
+            if (watchdogAttempts < 3) {
+                Log.w(TAG_KIOSK, "watchdog start refused: " + t.message)
+            }
+        }
+        watchdogAttempts++
+    }
+
+    /**
+     * Ask for "display over other apps" — once per process, and only where
+     * there is no device owner to make it unnecessary.
+     *
+     * Without this permission [watchdogTicker] is inert: Android 10 refuses
+     * activity starts from an app with no visible window, and our
+     * `excludeFromRecents` closes the other way out, since that exemption
+     * wants a task on the Recents screen. SYSTEM_ALERT_WINDOW is what makes
+     * the watchdog work at all.
+     *
+     * The prompt is a system screen, so we have to leave for it — which
+     * trips both lock task and the very watchdog it is about to enable.
+     * Both get the same kind of grace window the APK installer uses.
+     */
+    private fun ensureOverlayPermission() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) return
+        if (overlayAsked || isDeviceOwner()) return
+        if (Settings.canDrawOverlays(this)) return
+        overlayAsked = true
+        val until = SystemClock.elapsedRealtime() + OVERLAY_PROMPT_GRACE_MS
+        watchdogSuppressUntilMs = until
+        suppressLockUntilMs = until
+        try {
+            stopLockTask()
+        } catch (_: Throwable) {
+        }
+        try {
+            startActivity(
+                Intent(
+                    Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                    Uri.parse("package:" + packageName),
+                ).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+            )
+            Log.i(TAG_KIOSK, "asking for SYSTEM_ALERT_WINDOW")
+        } catch (t: Throwable) {
+            Log.w(TAG_KIOSK, "overlay permission screen unavailable: " + t.message)
+        }
     }
 
     override fun onWindowFocusChanged(hasFocus: Boolean) {
@@ -547,6 +700,43 @@ class MainActivity : FlutterActivity() {
         if (hasFocus) {
             applyImmersive()
             applyGestureExclusion()
+        } else {
+            // Losing window focus while still resumed means something is
+            // covering us without replacing us — on a kiosk that is almost
+            // always the notification shade. onPause never fires for it, so
+            // the watchdog would sleep straight through the one escape route
+            // a customer is most likely to find.
+            dismissShadeIfNeeded()
+        }
+    }
+
+    /**
+     * Collapse whatever is covering the app, on tablets with no device
+     * owner.
+     *
+     * CLOSE_SYSTEM_DIALOGS is the only lever an ordinary app has here:
+     * StatusBarManager.collapsePanels() is hidden API and blocked, and an
+     * app cannot inject a back press. Android 12 closed this broadcast to
+     * non-system callers, but these are Android 11 tablets and it works —
+     * which is precisely why this is a stopgap for unprovisioned machines
+     * and not the plan. With device owner, lock task refuses to open the
+     * shade at all and none of this runs.
+     *
+     * The suppression window matters more than usual here, because the
+     * broadcast also dismisses legitimate system dialogs — the USB
+     * permission prompt above all, which the board needs to work.
+     */
+    private fun dismissShadeIfNeeded() {
+        if (isDeviceOwner()) return
+        val now = SystemClock.elapsedRealtime()
+        if (now < watchdogSuppressUntilMs || now < suppressLockUntilMs) return
+        if (now - lastShadeDismissMs < SHADE_DISMISS_MIN_GAP_MS) return
+        lastShadeDismissMs = now
+        try {
+            @Suppress("DEPRECATION")
+            sendBroadcast(Intent(Intent.ACTION_CLOSE_SYSTEM_DIALOGS))
+        } catch (t: Throwable) {
+            Log.w(TAG_KIOSK, "could not close system dialogs: " + t.message)
         }
     }
 
@@ -822,6 +1012,34 @@ class MainActivity : FlutterActivity() {
          * to be invisible on the CPU.
          */
         private const val IMMERSIVE_TICK_MS = 600L
+
+        /** Watchdog period. Once a second, as specified. */
+        private const val WATCHDOG_TICK_MS = 1000L
+
+        /**
+         * How long the service menu's exit buys the operator before the
+         * watchdog takes the screen back. Long enough to redo the Wi-Fi
+         * unhurried, short enough that a session someone walked away from
+         * does not leave the machine open for the rest of the day.
+         */
+        private const val SERVICE_EXIT_GRACE_MS = 30L * 60L * 1000L
+
+        /** Same idea for the overlay prompt, which is a much shorter errand. */
+        private const val OVERLAY_PROMPT_GRACE_MS = 2L * 60L * 1000L
+
+        /**
+         * How long the system USB-permission dialog is protected from
+         * [dismissShadeIfNeeded]. Generous: an operator has to read it and
+         * find the checkbox, and swatting it away costs a board connection.
+         */
+        private const val USB_PROMPT_GRACE_MS = 90L * 1000L
+
+        /**
+         * Floor on the gap between two shade dismissals. Closing the shade
+         * is itself a focus change, so without this the handler feeds
+         * itself — observed as an ANR seconds after launch.
+         */
+        private const val SHADE_DISMISS_MIN_GAP_MS = 1500L
 
         /**
          * Live activity, for [InstallReceiver] — an activity context is

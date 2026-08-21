@@ -15,6 +15,13 @@
          install silently; non-owners get a one-time user confirmation. -->
     <uses-permission
         android:name="android.permission.REQUEST_INSTALL_PACKAGES"/>
+    <!-- Lets the no-owner watchdog in MainActivity start an activity from
+         the background, which Android 10+ otherwise refuses. Needed only on
+         tablets that were never provisioned as device owner; with owner the
+         watchdog never runs and this permission goes unused. Granted by hand
+         from Settings, never silently. -->
+    <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW"/>
+
     <application
         android:label="Micromart"
         android:name="${applicationName}"
