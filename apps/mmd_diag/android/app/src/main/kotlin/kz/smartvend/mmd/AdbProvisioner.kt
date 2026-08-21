@@ -805,14 +805,7 @@ class AdbProvisioner(private val context: Context) : MethodChannel.MethodCallHan
      * relaunch the wizard on the next boot.
      */
     private fun setDeviceOwner(component: String): String {
-        val blocking = blockingAccounts()
-        if (blocking.isNotEmpty()) {
-            throw IllegalStateException(
-                "Мешает аккаунт: " + blocking.keys.joinToString(", ") +
-                    ". Нажмите «Убрать аккаунт», дождитесь перезагрузки и " +
-                    "подключитесь заново.",
-            )
-        }
+        clearAccountsInPlace()
 
         emit("owner", "Выдаю права администратора")
         val direct = shell("dpm set-device-owner $component")
@@ -821,7 +814,7 @@ class AdbProvisioner(private val context: Context) : MethodChannel.MethodCallHan
             return direct.trim()
         }
 
-        // Not always the cause, so not always tried: on both tablets
+        // Not always the cause, so not always tried: on every tablet
         // provisioned so far the account was the only obstacle and a
         // finished setup wizard did not matter. Reach for this only after
         // dpm has actually refused.
@@ -853,15 +846,8 @@ class AdbProvisioner(private val context: Context) : MethodChannel.MethodCallHan
     }
 
     /**
-     * Accounts currently standing between us and device owner, mapped to the
-     * package that registered each.
-     *
-     * Android refuses device owner while any account exists, and on the
-     * Unisoc tablets we buy that account is nobody's Google login: the ROM
-     * registers sprd.com.android.account.phone — "contacts stored on the
-     * device" — from com.android.contacts before the tablet is first
-     * switched on. Skipping Google sign-in during setup does nothing about
-     * it, so the operator does everything right and is still refused.
+     * Accounts standing between us and device owner, mapped to the package
+     * that registered each.
      *
      * A type with no known package maps to an empty string rather than being
      * dropped: an account we cannot attribute still blocks provisioning, and
@@ -883,53 +869,75 @@ class AdbProvisioner(private val context: Context) : MethodChannel.MethodCallHan
     }
 
     /**
-     * Remove the packages behind the ROM's own accounts, reporting what each
-     * removal actually said.
+     * Clear the ROM's own accounts and grant in the same breath — no reboot
+     * in between, because a reboot undoes the whole thing.
      *
-     * The first cut fired `pm uninstall` and threw the reply away, so a
-     * refusal was indistinguishable from success — the tablet rebooted, the
-     * account was still there, and the next pass removed it again. Forever.
+     * Android refuses device owner while any account exists, and on the
+     * Unisoc tablets we buy that account is nobody's Google login: the ROM
+     * registers `sprd.com.android.account.phone`, meaning "contacts stored
+     * on the device", before the tablet is first switched on. Skipping
+     * Google sign-in during setup does nothing about it.
      *
-     * Only packages on [REMOVABLE_AUTHENTICATORS] are touched. A real Google
-     * account is named and left alone: removing the package behind it would
-     * take Play services with it, and whoever added an account can remove it
-     * in Settings.
+     * The first version removed the package, rebooted, and expected
+     * AccountManager to purge at boot. It does purge — but this ROM restores
+     * both contacts packages during that same boot and re-creates the
+     * account, so every pass ended exactly where it started. A genuine loop,
+     * eighteen megabytes at a time.
+     *
+     * Removing the packages drops the account *immediately*, which is all we
+     * need: grant while it is gone and the rights survive everything that
+     * comes back afterwards. The tablet is left to restore its own contacts
+     * apps on the next boot, and by then it no longer matters.
+     *
+     * Both packages go, not just the one holding the authenticator: the
+     * account is created by com.android.providers.contacts (uid 10044) while
+     * the authenticator belongs to com.android.contacts (uid 10101).
+     * Removing only the second is why this took so long to see.
      */
-    private fun removeSystemAccounts(): String {
+    private fun clearAccountsInPlace() {
         val blocking = blockingAccounts()
-        if (blocking.isEmpty()) {
-            emit("done", "Аккаунтов нет — можно выдавать права")
-            return "clean"
-        }
+        if (blocking.isEmpty()) return
 
         val stuck = blocking.filterValues { it !in REMOVABLE_AUTHENTICATORS }
         if (stuck.isNotEmpty()) {
             throw IllegalStateException(
-                "Этот аккаунт убрать автоматически нельзя: " +
-                    stuck.keys.joinToString(", ") +
-                    ". Удалите его в Настройках → Аккаунты.",
+                "Мешает аккаунт: " + stuck.keys.joinToString(", ") +
+                    ". Убрать его автоматически нельзя — удалите в " +
+                    "Настройках → Аккаунты и повторите.",
             )
         }
 
-        for (pkg in blocking.values.toSet()) {
-            // Disable first. Uninstalling alone left the account in place on
-            // a Unisoc Android 13; disabling the authenticator before
-            // removing it is what made the boot-time purge notice.
-            val disabled = shell("pm disable-user --user 0 $pkg").trim()
-            emit("owner", "Отключаю $pkg: ${disabled.ifBlank { "нет ответа" }}")
+        for (pkg in CONTACTS_PACKAGES) {
+            shell("pm disable-user --user 0 $pkg")
             val removed = shell("pm uninstall --user 0 $pkg").trim()
-            emit("owner", "Удаляю $pkg: ${removed.ifBlank { "нет ответа" }}")
-            if (!removed.contains("Success")) {
-                throw IllegalStateException("Не удалось убрать $pkg: $removed")
-            }
+            emit("owner", "Убираю $pkg: ${removed.ifBlank { "нет ответа" }}")
         }
 
-        emit("owner", "Перезагружаю — аккаунты чистятся при старте")
-        try {
-            manager().openStream("shell:reboot").close()
-        } catch (_: Throwable) {
+        val left = blockingAccounts()
+        if (left.isNotEmpty()) {
+            throw IllegalStateException(
+                "Аккаунт не ушёл: " + left.keys.joinToString(", "),
+            )
         }
-        return "rebooting"
+        emit("owner", "Аккаунт убран, права выдаю сразу — до перезагрузки")
+    }
+
+    /**
+     * Remove the ROM's accounts and stop, for looking rather than fixing.
+     *
+     * Kept separate from granting so the state can be inspected in between,
+     * but it no longer reboots: on this ROM a reboot brings the packages and
+     * the account straight back, which is what made the old version loop.
+     */
+    private fun removeSystemAccounts(): String {
+        val before = blockingAccounts()
+        if (before.isEmpty()) {
+            emit("done", "Аккаунтов нет — можно выдавать права")
+            return "clean"
+        }
+        clearAccountsInPlace()
+        emit("done", "Аккаунтов нет. Выдавайте права, не перезагружая планшет.")
+        return "clean"
     }
 
     /** What the tablet looks like right now, in one screenful. */
@@ -1001,7 +1009,17 @@ class AdbProvisioner(private val context: Context) : MethodChannel.MethodCallHan
          * which a vending tablet has no use for. Anything else, Google above
          * all, is the operator's to deal with.
          */
-        private val REMOVABLE_AUTHENTICATORS = setOf("com.android.contacts")
+        private val REMOVABLE_AUTHENTICATORS =
+            setOf("com.android.contacts", "com.android.providers.contacts")
+
+        /**
+         * Removed together, because the account is created by the provider
+         * while the authenticator is declared by the app. Taking only the
+         * one named in dumpsys leaves the other to put the account straight
+         * back.
+         */
+        private val CONTACTS_PACKAGES =
+            listOf("com.android.contacts", "com.android.providers.contacts")
         /**
          * Every command we run answers in under a second when the link is
          * healthy — the APK no longer goes through here. Two minutes only

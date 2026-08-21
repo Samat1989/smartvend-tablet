@@ -205,12 +205,7 @@ class _ProvisionScreenState extends State<ProvisionScreen> {
   Future<void> _removeAccounts() async {
     setState(() => _busy = true);
     try {
-      final res = await _channel.invokeMethod<String>('removeAccounts');
-      if (res == 'rebooting') {
-        _say('Планшет перезагружается. Включите на нём беспроводную отладку '
-            'заново, подключитесь и нажмите «Выдать права».');
-        setState(() => _connected = false);
-      }
+      await _channel.invokeMethod<String>('removeAccounts');
     } on PlatformException catch (e) {
       _say('Ошибка: ${e.message}');
     } finally {
@@ -382,9 +377,9 @@ class _ProvisionScreenState extends State<ProvisionScreen> {
             const _Step(
               n: 4,
               title: 'Планшет подключён',
-              body: 'Шаги отдельные: если аккаунт пришлось убирать, планшет '
-                  'перезагрузится, и после повторного подключения останется '
-                  'только выдать права.',
+              body: 'Выдача прав сама уберёт системный аккаунт, если он '
+                  'мешает. Отдельная кнопка для него — только чтобы '
+                  'посмотреть, что происходит.',
             ),
             OutlinedButton.icon(
               onPressed: _busy ? null : _checkState,
@@ -401,7 +396,7 @@ class _ProvisionScreenState extends State<ProvisionScreen> {
             FilledButton.tonalIcon(
               onPressed: _busy ? null : _removeAccounts,
               icon: const Icon(Icons.person_remove),
-              label: const Text('2. Убрать аккаунт (если мешает)'),
+              label: const Text('2. Убрать аккаунт (не обязательно)'),
             ),
             const SizedBox(height: 8),
             FilledButton.icon(
