@@ -35,17 +35,37 @@ Account {name=Phone, type=sprd.com.android.account.phone}
 ```
 
 Это локальные контакты «на устройстве». Пользователь его не создавал, в
-Настройках → Аккаунты его не видно, и приезжает он с завода. Убирается вместе
-с поставщиком:
+Настройках → Аккаунты его не видно, приезжает он с завода.
 
-```bash
-adb shell pm uninstall --user 0 com.android.contacts
-adb reboot        # AccountManager чистит аккаунты не при удалении, а при старте
+**Создаёт его не тот пакет, что объявлен поставщиком.** `dumpsys account`
+показывает поставщика типа — `com.android.contacts`, uid 10101. Настоящего
+создателя видно только в `Accounts History`:
+
+```
+action_account_add, uid 10044   → com.android.providers.contacts
 ```
 
-Обратимо: `adb shell pm install-existing com.android.contacts`.
+Удалить надо оба, иначе оставшийся заведёт аккаунт заново:
 
-После перезагрузки планшет заново спросит разрешение на отладку — это нормально.
+```bash
+adb shell pm disable-user --user 0 com.android.contacts
+adb shell pm uninstall   --user 0 com.android.contacts
+adb shell pm disable-user --user 0 com.android.providers.contacts
+adb shell pm uninstall   --user 0 com.android.providers.contacts
+```
+
+**Перезагружаться после этого нельзя.** Прошивка восстанавливает оба пакета при
+загрузке и создаёт аккаунт заново — провижининг через перезагрузку
+зацикливается навсегда. Аккаунт исчезает сразу после удаления, поэтому права
+выдаются тем же заходом:
+
+```bash
+adb shell dumpsys account | grep -c "Account {"      # ждём 0, чистка асинхронная
+adb shell dpm set-device-owner kz.smartvend.m102_tester/.KioskAdminReceiver
+adb reboot
+```
+
+Всё, что вернётся после перезагрузки, выданным правам уже не мешает — проверено.
 
 ### 2. Иногда мешает завершённая первичная настройка
 
@@ -120,8 +140,12 @@ adb reboot
 этот путь стал основным для выездов.
 
 Телефон становится ADB-хостом: показывает QR сопряжения, планшет читает его
-камерой, дальше приложение само скачивает APK, ставит и выдаёт права. Транспорт
-— `libadb-android` (двойная лицензия GPL-3.0 / Apache-2.0, берём по Apache).
+камерой, дальше приложение само скачивает APK, ставит, убирает мешающий аккаунт
+и выдаёт права. Транспорт — `libadb-android` (двойная лицензия GPL-3.0 /
+Apache-2.0, берём по Apache).
+
+**Порядок для монтажника и все подводные камни —
+[apps/mmd_diag/docs/PROVISIONING.md](../../mmd_diag/docs/PROVISIONING.md).**
 
 Что стоило времени и не очевидно:
 
