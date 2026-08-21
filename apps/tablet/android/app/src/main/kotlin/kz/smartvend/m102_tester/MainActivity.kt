@@ -689,12 +689,30 @@ class MainActivity : FlutterActivity() {
                 Log.e(TAG_KIOSK, "setLockTaskFeatures failed", t)
             }
         }
-        // Fully disable the status bar — swipe-down does nothing, no
-        // notification panel, no quick settings. Survives even if the
-        // operator briefly leaves lock-task via «Выйти в Android».
+        // Hand the status bar back, deliberately.
+        //
+        // setStatusBarDisabled(true) reads like the strongest possible
+        // lockdown, and it does kill the shade — but it kills it by
+        // blanking the bar, not by removing it. SystemUI keeps ownership
+        // of the window, so the app's request to hide it is refused:
+        // dumpsys showed ITYPE_STATUS_BAR and ITYPE_NAVIGATION_BAR both
+        // requested mVisible=false while two opaque grey strips sat on
+        // screen, one empty and one holding a lone back arrow, with the
+        // catalog squeezed between them.
+        //
+        // Lock task already blocks the shade on its own:
+        // setLockTaskFeatures(0) clears LOCK_TASK_FEATURE_NOTIFICATIONS,
+        // and the pull-down is refused at the window manager rather than
+        // swallowed afterwards. Dropping the DPM flag returns inset
+        // control to us, so immersive can hide both bars outright — which
+        // is what we wanted from the beginning.
+        //
+        // The one thing given up is shade suppression *outside* lock task,
+        // i.e. after «Выйти в Android». That is a servicing operator with
+        // the PIN, and taking the shade away from them was never the point.
         try {
-            dpm.setStatusBarDisabled(admin, true)
-            Log.i(TAG_KIOSK, "setStatusBarDisabled(true) OK")
+            dpm.setStatusBarDisabled(admin, false)
+            Log.i(TAG_KIOSK, "setStatusBarDisabled(false) OK — lock task guards the shade")
         } catch (t: Throwable) {
             Log.e(TAG_KIOSK, "setStatusBarDisabled failed", t)
         }
