@@ -84,6 +84,34 @@
                     android:name="android.app.action.DEVICE_ADMIN_ENABLED"/>
             </intent-filter>
         </receiver>
+        <!-- Android 11+ provisioning hand-shake. ManagedProvisioning asks
+             the DPC which mode to provision and, afterwards, whether it
+             still needs anything from the operator. A DPC targeting API 30
+             or higher that cannot answer fails QR provisioning outright,
+             right after the code is scanned. Both are BIND_DEVICE_ADMIN so
+             only the system can start them. See ProvisioningActivities.kt. -->
+        <activity
+            android:name=".ProvisioningModeActivity"
+            android:permission="android.permission.BIND_DEVICE_ADMIN"
+            android:theme="@android:style/Theme.NoDisplay"
+            android:exported="true">
+            <intent-filter>
+                <action
+                    android:name="android.app.action.GET_PROVISIONING_MODE"/>
+                <category android:name="android.intent.category.DEFAULT"/>
+            </intent-filter>
+        </activity>
+        <activity
+            android:name=".PolicyComplianceActivity"
+            android:permission="android.permission.BIND_DEVICE_ADMIN"
+            android:theme="@android:style/Theme.NoDisplay"
+            android:exported="true">
+            <intent-filter>
+                <action
+                    android:name="android.app.action.ADMIN_POLICY_COMPLIANCE"/>
+                <category android:name="android.intent.category.DEFAULT"/>
+            </intent-filter>
+        </activity>
         <!-- Auto-relaunch on device boot (power restore). -->
         <receiver
             android:name=".BootReceiver"
