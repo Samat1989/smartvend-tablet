@@ -117,7 +117,7 @@ class AdbProvisioner(private val context: Context) : MethodChannel.MethodCallHan
             "reconnect" -> {
                 io.execute {
                     try {
-                        emit("discovering", "Ищу уже сопряжённый планшет")
+                        emit("discovering", "Ключ телефона ${keyFingerprint()} — ищу планшет")
                         acquireMulticast()
                         if (connectWithRetry(null)) {
                             emit("connected", "Подключено к планшету")
@@ -141,6 +141,7 @@ class AdbProvisioner(private val context: Context) : MethodChannel.MethodCallHan
                     io.execute {
                         try {
                             emit("connecting", "Подключаюсь к $host:$port")
+                            try { manager().disconnect() } catch (_: Throwable) {}
                             if (manager().connect(host, port)) {
                                 connectedHost = host
                                 connectedPort = port
@@ -255,7 +256,7 @@ class AdbProvisioner(private val context: Context) : MethodChannel.MethodCallHan
         // Exactly the format Android's pairing scanner expects. The T:ADB is
         // what tells it this is a debugging rendezvous and not a Wi-Fi network.
         val payload = "WIFI:T:ADB;S:$name;P:$password;;"
-        emit("qr", "Покажите QR планшету")
+        emit("qr", "Ключ телефона ${keyFingerprint()} — покажите QR планшету")
         beginDiscovery(name, password)
         result.success(mapOf("qr" to payload, "name" to name))
     }
@@ -425,6 +426,10 @@ class AdbProvisioner(private val context: Context) : MethodChannel.MethodCallHan
             } else {
                 emit("connecting", "Порт отладки $port, подключаюсь")
                 try {
+                    // A connection object left over from a dead session
+                    // refuses instantly rather than redialling, which reads
+                    // exactly like the tablet rejecting our key.
+                    try { manager().disconnect() } catch (_: Throwable) {}
                     if (manager().connect(target, port)) {
                         connectedHost = target
                         connectedPort = port
@@ -927,6 +932,24 @@ class AdbProvisioner(private val context: Context) : MethodChannel.MethodCallHan
     // ============================ Plumbing ==================================
 
     private fun manager(): AbsAdbConnectionManager = MmdAdbManager.getInstance(context)
+
+    /**
+     * Fingerprint of the ADB identity this phone presents.
+     *
+     * The tablet remembers a paired phone by this key, so if it ever changes
+     * every tablet in the fleet silently stops trusting us — and the symptom
+     * is an instant refusal that looks like a network fault. Logged on every
+     * connection attempt so a changed key is visible rather than deduced.
+     */
+    private fun keyFingerprint(): String = try {
+        // Read from the file we wrote rather than from the manager:
+        // getCertificate() is protected, and this is the same bytes.
+        val der = File(context.filesDir, "adb_cert").readBytes()
+        java.security.MessageDigest.getInstance("SHA-256").digest(der)
+            .take(4).joinToString("") { "%02x".format(it) }
+    } catch (t: Throwable) {
+        "?"
+    }
 
     private fun randomHex(bytes: Int): String {
         val buf = ByteArray(bytes)
