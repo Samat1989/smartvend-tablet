@@ -1,201 +1,201 @@
-# Fleet provisioning: getting a new tablet into device-owner kiosk mode
+# Выдача прав администратора планшету
 
-## Where this fits
+Новый планшет должен стать **device owner** для нашего приложения — только
+тогда Android отдаёт ему экран целиком: закрепление без диалога «Приложение
+закреплено», заблокированная шторка, спрятанные системные полосы,
+перезагрузка устройства по команде.
 
-Each new vending tablet needs to be **provisioned as device-owner** so
-our app can:
+Без этих прав приложение работает, но защищено обычным закреплением экрана, из
+которого покупатель выходит удержанием двух кнопок.
 
-- Silently `startLockTask` without the "App is pinned" dialog
-- Hide the navigation bar and status bar permanently
-- Reboot the whole device (used by the comms-watchdog escalation at
-  reconnect #10, see [`board_client.dart`](../lib/board/board_client.dart))
-- Set lock-task allowlist + features
+> Этот файл раньше был проектной запиской о трёх возможных путях. Теперь все три
+> опробованы на железе, и здесь записано, что из них вышло.
 
-Today this is a manual chore: factory reset → skip all accounts →
-enable USB debugging → `adb install` → `adb shell dpm set-device-owner
-kz.smartvend.m102_tester/.KioskAdminReceiver`. Works on one tablet but
-doesn't scale.
+## Два условия Android
 
-This doc captures three paths we considered and what we'd build to
-make on-site provisioning a one-minute operation. **None of this is
-implemented yet** — it's a forward-looking design note.
+Их проверяет система, а не канал связи. Ни USB, ни Wi-Fi, ни телефон-посредник
+их не обходят — отказ будет одинаковый.
 
----
+### 1. Ни одного аккаунта на планшете
 
-## Path 1 — Flutter app that speaks ADB-over-Wi-Fi
+С аккаунтом `dpm set-device-owner` отказывает всегда. В логе системы это видно
+дословно:
 
-**Idea:** a phone app that pretends to be the `adb` binary, connects
-to a paired tablet's `adbd` over TCP, and runs the provisioning
-commands itself.
-
-**Tech:**
-
-- Android 11+ Wireless ADB pairing: **TLS** + **SPAKE2** key exchange
-  with a 6-digit code shown on the tablet. RFC: see AOSP
-  `system/core/adb/daemon/auth.cpp`.
-- After pairing, plain ADB binary protocol over the TLS socket. Wire
-  format: <https://android.googlesource.com/platform/system/core/+/master/adb/protocol.txt>
-- Services we'd need:
-  - `host:devices` — list paired devices
-  - `sync:` — push the APK
-  - `shell:` — run `pm install -r /data/local/tmp/foo.apk` and `dpm
-    set-device-owner …`
-
-**Existing Dart libraries:**
-
-- `adb_kit` — Flutter ADB client. Maturity varies, last audit was
-  spotty on Android 11+ pairing.
-- We'd likely write the pairing handshake ourselves and reuse the
-  binary protocol from one of the open-source clients.
-
-**Effort:** **1–2 weeks** for stable pairing + shell + sync. Not a
-weekend project.
-
-**Critical gotcha:** even with a working ADB client, `dpm
-set-device-owner` **still requires no existing user accounts on the
-tablet**. The Android-side check is independent of who calls it.
-Phone-as-ADB-client does **not** bypass that — operator still has to
-factory-reset and skip account setup on every tablet. So this path
-solves only "skip the laptop", not "skip the factory reset".
-
-**Verdict:** technically feasible, lots of work, and doesn't actually
-remove the painful step.
-
----
-
-## Path 2 — QR Code Provisioning (**recommended**)
-
-Android's official mechanism for kiosk deployment. The Setup Wizard
-on a brand-new (or factory-reset) device has a hidden entry point
-that scans a QR code and uses its contents to fully provision the
-device-owner in one shot.
-
-### How the operator uses it
-
-1. Factory-reset tablet (or unbox a new one).
-2. On the Welcome screen, **tap any blank area 6 times** — opens the
-   QR scanner.
-3. Operator opens our companion app on their phone → it shows a QR
-   code → tablet's camera scans it.
-4. Tablet auto-connects to the configured Wi-Fi, downloads our APK
-   from the URL in the QR, verifies SHA-256, installs it as
-   device-owner, and finishes the setup wizard with our app in
-   foreground.
-
-**Total operator time per tablet: ~1 minute.** No laptop, no ADB, no
-dpm command, no account-skip dance.
-
-### QR payload format
-
-```json
-{
-  "android.app.extra.PROVISIONING_DEVICE_ADMIN_COMPONENT_NAME":
-    "kz.smartvend.m102_tester/.KioskAdminReceiver",
-  "android.app.extra.PROVISIONING_DEVICE_ADMIN_PACKAGE_DOWNLOAD_LOCATION":
-    "https://your-cdn/path/app-armeabi-v7a-release.apk",
-  "android.app.extra.PROVISIONING_DEVICE_ADMIN_SIGNATURE_CHECKSUM":
-    "<base64-of-SHA-256-of-APK>",
-  "android.app.extra.PROVISIONING_WIFI_SSID": "Office_WiFi",
-  "android.app.extra.PROVISIONING_WIFI_PASSWORD": "secret",
-  "android.app.extra.PROVISIONING_WIFI_SECURITY_TYPE": "WPA",
-  "android.app.extra.PROVISIONING_LOCALE": "ru_RU",
-  "android.app.extra.PROVISIONING_TIME_ZONE": "Asia/Almaty"
-}
+```
+DevicePolicyManager: Non test-only owner can't be installed with existing accounts.
 ```
 
-Official extras reference: `DevicePolicyManager` Javadoc, section
-"Provisioning Extras".
+**Пропустить вход в Google при первичной настройке недостаточно.** На
+планшетах Unisoc (проверено на `sp9832e_1h10_go2g`, Android 13) прошивка
+заводит собственный аккаунт:
 
-The checksum must be the **APK file's** SHA-256, NOT the signing-key
-hash. Compute with `sha256sum app-release.apk | xxd -r -p | base64`.
+```
+Account {name=Phone, type=sprd.com.android.account.phone}
+поставщик: com.android.contacts / com.sprd.contacts.account.PhoneAuthenticationService
+```
 
-### What we'd build
+Это локальные контакты «на устройстве». Пользователь его не создавал, в
+Настройках → Аккаунты его не видно, и приезжает он с завода. Убирается вместе
+с поставщиком:
 
-**`provision_qr/` — a Flutter project at the m109e repo root.**
+```bash
+adb shell pm uninstall --user 0 com.android.contacts
+adb reboot        # AccountManager чистит аккаунты не при удалении, а при старте
+```
 
-Screens:
+Обратимо: `adb shell pm install-existing com.android.contacts`.
 
-1. **APK source picker** — paste URL or pick latest from GitHub
-   Releases via API.
-2. **Wi-Fi credentials** — SSID + password + security type. Saved in
-   `shared_preferences` so the operator types them once per office.
-3. **Preview** — shows the JSON about to be encoded.
-4. **QR display** — fullscreen via `qr_flutter` (already in our
-   `pubspec.yaml` for the payment QR).
+После перезагрузки планшет заново спросит разрешение на отладку — это нормально.
 
-Auto-computed:
+### 2. Первичная настройка не должна быть завершена — на Android 12 и новее
 
-- SHA-256 of the APK: download the URL, hash, base64-encode. Cache
-  per URL so we don't re-download every render.
+До Android 11 включительно проверялись только аккаунты, поэтому команда
+проходила на уже настроенном планшете (так провизионирован K80). С Android 12
+добавилось требование, чтобы устройство ещё не считалось настроенным, — а
+планшет в руках монтажника настроен всегда.
 
-Stretch:
+Кто именно отказал, видно по трассировке:
 
-- Multiple "profiles" (test Wi-Fi vs prod, dev APK vs release).
-- "Send link" via QR or NFC of the *companion app itself* so a new
-  technician can install the provision-tool in 30 seconds.
+| класс | версия | что проверяет |
+|---|---|---|
+| `com.android.commands.dpm.Dpm` | Android 11 | только аккаунты |
+| `DevicePolicyManagerServiceShellCommand` | Android 12+ | плюс завершённость настройки |
 
-**Effort:** **1–2 hours.** Most of the work is UI; the QR payload
-is just a `Map<String, String>` JSON-encoded.
+Флаги завершённости — обычные системные настройки:
 
-### Pre-requisites we still need
+```bash
+adb shell settings put secure user_setup_complete 0
+adb shell settings put global device_provisioned 0
+adb shell dpm set-device-owner kz.smartvend.m102_tester/.KioskAdminReceiver
+adb shell settings put secure user_setup_complete 1
+adb shell settings put global device_provisioned 1
+```
 
-- A **publicly-reachable URL** for the APK. Options:
-  - GitHub Releases (free, fast, public — fine if our source is
-    private-ish but the APK is okay to share)
-  - Supabase Storage bucket (we already use Supabase for inventory)
-  - Self-hosted on the office's static IP
-- An **APK with the device-admin receiver already declared in the
-  manifest** — we have this (`KioskAdminReceiver`).
+**Возвращать флаги обязательно.** Планшет, оставленный в состоянии «настройка не
+закончена», при следующей загрузке запустит мастер заново — это хуже, чем
+отсутствие прав. В [apps/mmd_diag](../../mmd_diag/) возврат сделан в `finally`
+именно поэтому.
 
----
+Третье условие встречается реже: пользователь должен быть один. Второй
+пользователь блокирует выдачу так же, как аккаунт.
 
-## Path 3 — HTTP companion API on the kiosk (runtime ops only)
+## Перезагрузка — не церемония
 
-For **already-provisioned** tablets we can embed an HTTP server in
-our own app (via the `shelf` package) on a fixed port (say 8888).
-The operator's phone joins the same Wi-Fi, points a browser or
-companion app at `http://<tablet-ip>:8888/` and gets:
+Приложение читает свои права **один раз, в `onCreate`**
+([`MainActivity.kt`](../android/app/src/main/kotlin/kz/smartvend/m102_tester/MainActivity.kt),
+`configureDeviceOwnerKiosk`). Пока оно не запустится заново, планшет ведёт себя
+ровно как непровизиненный — и это читается как «ничего не произошло».
 
-- Force-reconnect the M102 board
-- Push a new APK (self-update via `PackageInstaller`)
-- View the bus log in real time
-- Trigger factory reset (device-owner only)
-- Reload catalog from Supabase
-- Read sale history / refund report
+## Три пути, и что из них вышло
 
-**Not a provisioning solution** — needs the app to already be
-running, which means device-owner is already set. But it's the right
-mechanism for everything *after* provisioning.
+### Кабелем — работает, основной способ
 
-**Effort:** ~1 day to set up the server, the route table, and a
-matching mobile UI. Token-auth via a shared secret stored in
-`DeviceStorage` (operator scans an in-app QR on the kiosk first time
-they connect).
+```bash
+adb install -r app-armeabi-v7a-release.apk
+adb shell dpm set-device-owner kz.smartvend.m102_tester/.KioskAdminReceiver
+adb reboot
+```
 
----
+Плюс, если требуется, обход из §2 и снятие аккаунта из §1.
 
-## Recommended sequence
+Прошлая редакция этого файла считала такой способ «не масштабируемым». На деле
+он остаётся самым надёжным: на Android 11 проходит вообще без подготовки, а на
+новых прошивках — с двумя дополнительными командами.
 
-1. **Now (one-off)**: keep doing the manual `adb shell dpm
-   set-device-owner` on each new tablet. There are only a few
-   right now.
-2. **Once there are ≥ 5 tablets**: build `provision_qr/` (Path 2).
-   Drops per-tablet time from ~15 min (factory reset + dev options
-   + ADB + dpm) to ~1 min (factory reset + 6 taps + scan).
-3. **Later, for ongoing fleet management**: build the HTTP companion
-   API (Path 3) so the operator's phone is the remote control for
-   every running tablet without needing a laptop on site.
+### С телефона по Wi-Fi — [apps/mmd_diag](../../mmd_diag/), реализовано
 
-Path 1 (Flutter ADB client) is **not recommended** — solves the
-small bit (the dpm command) and doesn't help with the big bit (the
-factory reset / no accounts requirement). The Android-mandated QR
-flow already handles both.
+Прошлая редакция оценивала это в 1–2 недели и не рекомендовала. Оценка по
+трудоёмкости оказалась верной, вывод — нет: **QR-провижининг не заработал**, и
+этот путь стал основным для выездов.
 
----
+Телефон становится ADB-хостом: показывает QR сопряжения, планшет читает его
+камерой, дальше приложение само скачивает APK, ставит и выдаёт права. Транспорт
+— `libadb-android` (двойная лицензия GPL-3.0 / Apache-2.0, берём по Apache).
 
-## References
+Что стоило времени и не очевидно:
 
-- [`02_M102_PASSWORD.md`](02_M102_PASSWORD.md) — the other "this isn't in the public docs" finding
-- [`MainActivity.kt`](../android/app/src/main/kotlin/kz/smartvend/m102_tester/MainActivity.kt) — current device-owner integration (`configureDeviceOwnerKiosk`, `restartApp`, `rebootDevice`)
-- [`KioskAdminReceiver.kt`](../android/app/src/main/kotlin/kz/smartvend/m102_tester/KioskAdminReceiver.kt) — the receiver component referenced in the QR payload above
-- AOSP — `frameworks/base/core/java/android/app/admin/DevicePolicyManager.java` (the EXTRA names this doc uses)
+- **QR показывает телефон, а сканирует планшет.** Не наоборот.
+- `setApi` должен описывать **планшет**, а не телефон: значение уходит в пакет
+  CONNECT и задаёт версию протокола. Android 13 → Android 11 роняло рукопожатие
+  с сообщением про сертификаты.
+- Без `WifiManager.MulticastLock` mDNS не находит ничего и не сообщает об этом.
+- Первой в поиске всегда приходит **своя** служба `adb-<серийник телефона>`;
+  без её отсева тулза подключается сама к себе.
+- Установка APK рвёт соединение — переподключаться нужно сразу после неё, а не
+  по факту отказа следующей команды.
+- Закрытие потока демоном библиотека сообщает исключением, а не концом файла:
+  быстрые команды вроде `dpm` теряли свой ответ вместе с ним.
+
+**Беспроводную отладку на планшете включает человек руками**, и она не
+переживает перезагрузку. Android требует доказательства, что провизионирующий
+держит устройство, — это же защищает чужие планшеты от того же приёма. Способ
+экономит ноутбук, а не визит.
+
+### QR при первичной настройке — не работает
+
+Официальный механизм Android и, по прошлой редакции, рекомендованный. На деле
+мастер обрывается с «что-то пошло не так», и причину установить не удалось.
+
+Проверено и **исключено**: содержимое QR (декодировано из PNG, совпадает с
+JSON), контрольная сумма (сходится с опубликованным APK), доступность ссылки,
+SSID, часы планшета, наличие `com.android.managedprovisioning`. Добавлены
+обработчики `GET_PROVISIONING_MODE` и `ADMIN_POLICY_COMPLIANCE`, обязательные
+для DPC с `targetSdk ≥ 30`, и подпись v1 — не помогло.
+
+Что в прошлой редакции было **написано неверно**:
+
+> The checksum must be the APK file's SHA-256, NOT the signing-key hash.
+
+Наоборот. В payload используется `PROVISIONING_DEVICE_ADMIN_SIGNATURE_CHECKSUM`
+— это URL-safe base64 от SHA-256 **сертификата подписи**, а не файла. Хеш файла
+живёт в другом extra, `..._PACKAGE_CHECKSUM`. Наш QR построен по подписи и
+сверку проходит.
+
+Если браться снова: сбросить планшет, попытаться, и **не перезагружая** пройти
+мастер до конца, включить отладку и снять `adb logcat -b all`. Буфер переживает
+мастер настройки, но не перезагрузку. На настроенном планшете попытку не
+повторить: shell не может включить отключённый `SetupWizardActivity`, а
+провижининг-интент требует системного разрешения `DISPATCH_PROVISIONING_MESSAGE`.
+
+## Если планшет заперся
+
+Планшет с правами owner, но **без привязки к аппарату**, до версии 1.1.34
+замыкался сам на себе: витрины нет — значит вход в сервисное меню недоступен,
+значит не выйти в Настройки и не включить отладку. С 1.1.34 тот же жест —
+**10 нажатий за 5 секунд** — работает и на экране привязки, по значку в шапке.
+
+На планшете со старой сборкой выход один: привязать его к аппарату, попасть на
+витрину и дальше как обычно.
+
+## Ограничение по разрядности
+
+В релизах выкладывается **только `armeabi-v7a`**. На 32-битном и на обычном
+64-битном планшете он ставится, на **чисто 64-битном** — нет:
+`INSTALL_FAILED_NO_MATCHING_ABIS`. То же ограничение у встроенного обновления.
+
+У новой партии проверять до закупки:
+
+```bash
+adb shell getprop ro.product.cpu.abi
+```
+
+## Как снять права
+
+```bash
+adb shell dpm remove-active-admin kz.smartvend.m102_tester/.KioskAdminReceiver
+```
+
+Работает **только для test-only приложений**, причём «тестовость» записывается в
+момент выдачи прав — пересобрать приложение задним числом не поможет. Для
+обычной сборки остаются два пути: приложение снимает права само через
+`clearDeviceOwnerApp`, либо заводской сброс.
+
+Заводской сброс снимает права всегда — после него планшет провизионируется
+заново.
+
+## Ссылки
+
+- [`MainActivity.kt`](../android/app/src/main/kotlin/kz/smartvend/m102_tester/MainActivity.kt) — `configureDeviceOwnerKiosk`, применение политик
+- [`KioskAdminReceiver.kt`](../android/app/src/main/kotlin/kz/smartvend/m102_tester/KioskAdminReceiver.kt) — компонент из команды `dpm`
+- [`apps/mmd_diag`](../../mmd_diag/) — провижининг с телефона
+- [`02_M102_PASSWORD.md`](02_M102_PASSWORD.md) — другая находка из разряда «этого нет в документации»
