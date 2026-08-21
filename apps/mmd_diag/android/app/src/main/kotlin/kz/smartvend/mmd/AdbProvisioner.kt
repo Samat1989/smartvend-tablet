@@ -913,10 +913,23 @@ class AdbProvisioner(private val context: Context) : MethodChannel.MethodCallHan
             emit("owner", "Убираю $pkg: ${removed.ifBlank { "нет ответа" }}")
         }
 
-        val left = blockingAccounts()
+        // AccountManager drops the account when it processes the
+        // package-change broadcast, not when pm returns. Checking once put
+        // the question a moment too early: the first press reported the
+        // account still there and the second, on an unchanged tablet,
+        // succeeded — which looks like flakiness and is really just a race.
+        var left = blockingAccounts()
+        var waited = 0L
+        while (left.isNotEmpty() && waited < ACCOUNT_PURGE_WAIT_MS) {
+            Thread.sleep(ACCOUNT_PURGE_POLL_MS)
+            waited += ACCOUNT_PURGE_POLL_MS
+            emit("owner", "Жду, пока аккаунт исчезнет (${waited / 1000} с)")
+            left = blockingAccounts()
+        }
         if (left.isNotEmpty()) {
             throw IllegalStateException(
-                "Аккаунт не ушёл: " + left.keys.joinToString(", "),
+                "Аккаунт не ушёл за ${ACCOUNT_PURGE_WAIT_MS / 1000} с: " +
+                    left.keys.joinToString(", "),
             )
         }
         emit("owner", "Аккаунт убран, права выдаю сразу — до перезагрузки")
@@ -1032,6 +1045,10 @@ class AdbProvisioner(private val context: Context) : MethodChannel.MethodCallHan
 
         /** A live tablet answers `echo` at once; a dead stream never will. */
         private const val PROBE_TIMEOUT_MS = 6_000L
+
+        /** How long to give AccountManager to notice the packages are gone. */
+        private const val ACCOUNT_PURGE_WAIT_MS = 15_000L
+        private const val ACCOUNT_PURGE_POLL_MS = 1_500L
         private const val RESOLVE_TIMEOUT_MS = 4_000L
 
         /** Beat after the first hit, so siblings land before we stop listening. */
