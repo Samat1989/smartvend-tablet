@@ -29,7 +29,9 @@ import java.security.spec.PKCS8EncodedKeySpec
 import java.util.Date
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executors
+import java.util.concurrent.ExecutionException
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.TimeoutException
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicReference
 
@@ -77,6 +79,10 @@ class AdbProvisioner(private val context: Context) : MethodChannel.MethodCallHan
      * network the tablet can answer on a different family than it paired on.
      */
     private var lastAddress: String? = null
+
+    /** Where we are currently connected, for [reconnectSameTarget]. */
+    private var connectedHost: String? = null
+    private var connectedPort: Int = 0
 
     /** Guards against a second pairing run while one is still hunting. */
     private val pairing = AtomicBoolean(false)
@@ -135,6 +141,8 @@ class AdbProvisioner(private val context: Context) : MethodChannel.MethodCallHan
                         try {
                             emit("connecting", "Подключаюсь к $host:$port")
                             if (manager().connect(host, port)) {
+                                connectedHost = host
+                                connectedPort = port
                                 emit("connected", "Подключено к планшету")
                             } else {
                                 emit("error", "Планшет не принял подключение")
@@ -414,7 +422,11 @@ class AdbProvisioner(private val context: Context) : MethodChannel.MethodCallHan
             } else {
                 emit("connecting", "Порт отладки $port, подключаюсь")
                 try {
-                    if (manager().connect(target, port)) return true
+                    if (manager().connect(target, port)) {
+                        connectedHost = target
+                        connectedPort = port
+                        return true
+                    }
                 } catch (t: Throwable) {
                     emit("connecting", "Попытка $attempt: ${t.message}")
                 }
@@ -569,7 +581,27 @@ class AdbProvisioner(private val context: Context) : MethodChannel.MethodCallHan
      * nothing to show. A stuck stream now surfaces as an error the
      * technician can act on instead of a screen that looks busy.
      */
-    private fun shell(command: String): String {
+    private fun shell(command: String): String = try {
+        shellOnce(command)
+    } catch (first: Throwable) {
+        // Installing an APK ends by closing a stream the daemon was still
+        // writing to, and that can take the whole connection down with it —
+        // which is why the very next command, granting device owner, used to
+        // die instantly. Rebuild and try once more before reporting failure.
+        emit("connecting", "Связь оборвалась, восстанавливаю")
+        if (!reconnectSameTarget()) throw first
+        shellOnce(command)
+    }
+
+    /**
+     * Run one shell command, refusing to wait forever — and reporting what
+     * actually went wrong.
+     *
+     * The first version wrapped every failure as "command did not respond",
+     * including failures that arrived in a quarter of a second. That turned a
+     * broken connection into an imaginary timeout and cost an evening.
+     */
+    private fun shellOnce(command: String): String {
         val task = shellPool.submit<String> {
             manager().openStream("shell:$command").use { stream ->
                 stream.openInputStream().bufferedReader().use { it.readText() }
@@ -577,9 +609,25 @@ class AdbProvisioner(private val context: Context) : MethodChannel.MethodCallHan
         }
         return try {
             task.get(SHELL_TIMEOUT_MS, TimeUnit.MILLISECONDS)
-        } catch (t: Throwable) {
+        } catch (e: TimeoutException) {
             task.cancel(true)
-            throw IllegalStateException("Команда не ответила: $command")
+            throw IllegalStateException(
+                "Команда не ответила за ${SHELL_TIMEOUT_MS / 1000} с: $command",
+            )
+        } catch (e: ExecutionException) {
+            val cause = e.cause ?: e
+            Log.e(TAG, "shell failed: $command", cause)
+            throw IllegalStateException(cause.message ?: cause.toString(), cause)
+        }
+    }
+
+    private fun reconnectSameTarget(): Boolean {
+        val host = connectedHost ?: return false
+        return try {
+            manager().connect(host, connectedPort)
+        } catch (t: Throwable) {
+            Log.e(TAG, "reconnect failed", t)
+            false
         }
     }
 
