@@ -735,13 +735,26 @@ class AdbProvisioner(private val context: Context) : MethodChannel.MethodCallHan
      * "yes".
      */
     private fun verifyOwner(): String {
-        val out = shell("dumpsys device_policy")
-        val ownerLine = out.lineSequence()
-            .dropWhile { !it.contains("Device Owner:") }
-            .take(4)
-            .joinToString(" ")
-        return if (ownerLine.contains(OWNER_PACKAGE)) "ok" else "no: ${ownerLine.trim()}"
+        val line = ownerLine()
+        return if (line.contains(OWNER_PACKAGE)) "ok" else "no: ${line.trim()}"
     }
+
+    /**
+     * The Device Owner block of `dumpsys device_policy`, and only it.
+     *
+     * Searching the whole dump for our package name reports success on a
+     * tablet that merely has us registered as an active admin — a leftover
+     * from an attempt that failed. That false positive told an operator the
+     * rights were granted while an account was still blocking them, which is
+     * the one combination Android does not allow.
+     */
+    private fun ownerLine(): String = shell("dumpsys device_policy")
+        .lineSequence()
+        .dropWhile { !it.contains("Device Owner:") }
+        .take(4)
+        .joinToString(" ")
+
+    private fun isDeviceOwner(): Boolean = ownerLine().contains(OWNER_PACKAGE)
 
     /**
      * Hand the kiosk its device-owner rights.
@@ -895,8 +908,7 @@ class AdbProvisioner(private val context: Context) : MethodChannel.MethodCallHan
         val android = shell("getprop ro.build.version.release").trim()
         val abi = shell("getprop ro.product.cpu.abi").trim()
         val accounts = blockingAccounts()
-        val policy = shell("dumpsys device_policy")
-        val owner = if (policy.contains(OWNER_PACKAGE)) "есть" else "нет"
+        val owner = if (isDeviceOwner()) "есть" else "нет"
         val setup = shell("settings get secure user_setup_complete").trim()
         return buildString {
             append("Android $android, $abi\n")
