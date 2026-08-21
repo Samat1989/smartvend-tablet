@@ -689,12 +689,30 @@ class AdbProvisioner(private val context: Context) : MethodChannel.MethodCallHan
         false
     }
 
+    /**
+     * Rebuild the link to where we already were, giving up rather than
+     * hanging.
+     *
+     * connect() blocks with no limit of its own. Called straight after an
+     * install — where the daemon may have just dropped us — an unbounded
+     * wait meant the install finished, said so, and then never returned:
+     * the progress bar spun on a job that was already done.
+     */
     private fun reconnectSameTarget(): Boolean {
         val host = connectedHost ?: return false
+        val task = shellPool.submit<Boolean> {
+            try {
+                manager().connect(host, connectedPort)
+            } catch (t: Throwable) {
+                Log.e(TAG, "reconnect failed", t)
+                false
+            }
+        }
         return try {
-            manager().connect(host, connectedPort)
+            task.get(RECONNECT_TIMEOUT_MS, TimeUnit.MILLISECONDS)
         } catch (t: Throwable) {
-            Log.e(TAG, "reconnect failed", t)
+            task.cancel(true)
+            emit("connecting", "Переподключиться не удалось")
             false
         }
     }
@@ -1049,6 +1067,9 @@ class AdbProvisioner(private val context: Context) : MethodChannel.MethodCallHan
         /** How long to give AccountManager to notice the packages are gone. */
         private const val ACCOUNT_PURGE_WAIT_MS = 15_000L
         private const val ACCOUNT_PURGE_POLL_MS = 1_500L
+
+        /** connect() has no timeout of its own; this is ours. */
+        private const val RECONNECT_TIMEOUT_MS = 15_000L
         private const val RESOLVE_TIMEOUT_MS = 4_000L
 
         /** Beat after the first hit, so siblings land before we stop listening. */
