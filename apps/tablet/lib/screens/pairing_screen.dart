@@ -6,6 +6,7 @@ import '../services/device_storage.dart';
 import '../services/strings.dart';
 import '../services/supabase_api.dart';
 import '../theme.dart';
+import 'service_pin_screen.dart';
 
 class PairingScreen extends StatefulWidget {
   const PairingScreen({super.key});
@@ -19,6 +20,36 @@ class _PairingScreenState extends State<PairingScreen> {
   final _secretCtrl = TextEditingController();
   final _api = SupabaseApi();
   bool _busy = false;
+
+  /// Taps on the logo, for the service-menu gesture below.
+  final List<DateTime> _serviceTaps = [];
+
+  /// Way into the service menu from an unpaired tablet.
+  ///
+  /// The storefront has this gesture on the shelf rail, and for a working
+  /// machine that is enough. It is not enough here: a tablet that has been
+  /// granted device owner but not yet bound to a machine never reaches the
+  /// storefront, and lock task will not let anything else take the screen.
+  /// Without an entry point on this screen such a tablet is sealed — no
+  /// settings, no wireless debugging, no way back in short of a factory
+  /// reset. Which is exactly what happened to the first one provisioned in
+  /// the field.
+  ///
+  /// Same 10-taps-in-5-seconds as the storefront, and the same PIN behind
+  /// it, so nothing is weakened: a customer cannot reach this screen at all,
+  /// and an installer already knows the gesture.
+  void _onServiceTap() {
+    final now = DateTime.now();
+    _serviceTaps
+      ..add(now)
+      ..removeWhere((t) => now.difference(t) > const Duration(seconds: 5));
+    if (_serviceTaps.length >= 10) {
+      _serviceTaps.clear();
+      Navigator.of(context).push(
+        MaterialPageRoute(builder: (_) => const ServicePinScreen()),
+      );
+    }
+  }
   String? _error;
 
   @override
@@ -98,8 +129,12 @@ class _PairingScreenState extends State<PairingScreen> {
                           gradient: signatureGradient,
                           shape: BoxShape.circle,
                         ),
-                        child: const Icon(Icons.point_of_sale,
-                            size: 44, color: Colors.white),
+                        child: GestureDetector(
+                          behavior: HitTestBehavior.opaque,
+                          onTap: _onServiceTap,
+                          child: const Icon(Icons.point_of_sale,
+                              size: 44, color: Colors.white),
+                        ),
                       ),
                       const SizedBox(height: 20),
                       Text(
