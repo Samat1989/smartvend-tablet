@@ -171,12 +171,15 @@ class _ProvisionScreenState extends State<ProvisionScreen> {
     }
   }
 
-  /// Download, push, install, and only then hand over the rights.
+  /// Download the APK and install it. Nothing else.
   ///
-  /// Owner comes last because `dpm set-device-owner` needs the admin receiver
-  /// to already exist on the device — and because a tablet that got the app
-  /// but not the rights can be finished later, while the reverse cannot.
-  Future<void> _installAndOwn() async {
+  /// The three steps below used to be one button, which meant a tablet that
+  /// needed its account cleared re-downloaded and re-installed eighteen
+  /// megabytes on every pass round the loop. They are separate now because
+  /// the process genuinely has more than one visit in it: clearing an
+  /// account costs a reboot, and a reboot costs the wireless-debugging
+  /// session.
+  Future<void> _install() async {
     setState(() => _busy = true);
     try {
       _say('Скачиваю приложение…');
@@ -188,33 +191,74 @@ class _ProvisionScreenState extends State<ProvisionScreen> {
       final file = File('${dir.path}/kiosk.apk');
       await file.writeAsBytes(res.bodyBytes);
       _say('Скачано ${(res.bodyBytes.length / 1048576).toStringAsFixed(1)} МБ');
-
       await _channel.invokeMethod('installApk', {'path': file.path});
+    } on PlatformException catch (e) {
+      _say('Ошибка: ${e.message}');
+    } catch (e) {
+      _say('Ошибка: $e');
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  /// Clear the ROM's own account, which ends in a reboot.
+  Future<void> _removeAccounts() async {
+    setState(() => _busy = true);
+    try {
+      final res = await _channel.invokeMethod<String>('removeAccounts');
+      if (res == 'rebooting') {
+        _say('Планшет перезагружается. Включите на нём беспроводную отладку '
+            'заново, подключитесь и нажмите «Выдать права».');
+        setState(() => _connected = false);
+      }
+    } on PlatformException catch (e) {
+      _say('Ошибка: ${e.message}');
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  /// Grant device owner to an app that is already installed.
+  ///
+  /// Separate from installing because after an account has been cleared this
+  /// is the only step still outstanding, and repeating the install to reach
+  /// it was what turned the process into a loop.
+  Future<void> _grantOwner() async {
+    setState(() => _busy = true);
+    try {
       await _channel.invokeMethod(
         'setDeviceOwner',
         {'component': _adminComponent},
       );
-
       // Read the policy back instead of trusting our own command: dpm
-      // printing Success is weaker evidence than the tablet naming the
-      // owner itself.
+      // printing Success is weaker evidence than the tablet naming the owner.
       final verdict = await _channel.invokeMethod<String>('verifyOwner');
       if (verdict != 'ok') {
         _say('Ошибка: права не подтвердились — $verdict');
         return;
       }
       _say('Права подтверждены планшетом');
-
-      // The kiosk reads its policy once, in onCreate. It was already running
-      // when the rights arrived, so until it starts again it behaves exactly
-      // like an unprovisioned tablet — which is what makes a technician
-      // think nothing happened.
+      // The kiosk reads its policy once, in onCreate. Until it starts again
+      // it behaves exactly like an unprovisioned tablet.
       await _channel.invokeMethod('reboot');
       _say('Готово. Планшет перезагружается сам, ждать не нужно.');
     } on PlatformException catch (e) {
       _say('Ошибка: ${e.message}');
-    } catch (e) {
-      _say('Ошибка: $e');
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  /// Ask the tablet what state it is in, rather than inferring it.
+  Future<void> _checkState() async {
+    setState(() => _busy = true);
+    try {
+      final res = await _channel.invokeMethod<String>('tabletState');
+      for (final line in (res ?? '').split('\n').reversed) {
+        _say(line);
+      }
+    } on PlatformException catch (e) {
+      _say('Ошибка: ${e.message}');
     } finally {
       if (mounted) setState(() => _busy = false);
     }
@@ -338,13 +382,32 @@ class _ProvisionScreenState extends State<ProvisionScreen> {
             const _Step(
               n: 4,
               title: 'Планшет подключён',
-              body: 'Приложение будет скачано, установлено, и ему выдадутся '
-                  'права администратора.',
+              body: 'Шаги отдельные: если аккаунт пришлось убирать, планшет '
+                  'перезагрузится, и после повторного подключения останется '
+                  'только выдать права.',
             ),
+            OutlinedButton.icon(
+              onPressed: _busy ? null : _checkState,
+              icon: const Icon(Icons.info_outline),
+              label: const Text('Состояние планшета'),
+            ),
+            const SizedBox(height: 8),
             FilledButton.icon(
-              onPressed: _busy ? null : _installAndOwn,
-              icon: const Icon(Icons.download_done),
-              label: const Text('Установить и выдать права'),
+              onPressed: _busy ? null : _install,
+              icon: const Icon(Icons.download),
+              label: const Text('1. Установить приложение'),
+            ),
+            const SizedBox(height: 8),
+            FilledButton.tonalIcon(
+              onPressed: _busy ? null : _removeAccounts,
+              icon: const Icon(Icons.person_remove),
+              label: const Text('2. Убрать аккаунт (если мешает)'),
+            ),
+            const SizedBox(height: 8),
+            FilledButton.icon(
+              onPressed: _busy ? null : _grantOwner,
+              icon: const Icon(Icons.admin_panel_settings),
+              label: const Text('3. Выдать права'),
             ),
           ],
           if (_busy) ...[

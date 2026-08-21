@@ -198,6 +198,8 @@ class AdbProvisioner(private val context: Context) : MethodChannel.MethodCallHan
                 }
             }
             "verifyOwner" -> runAsync(result) { verifyOwner() }
+            "removeAccounts" -> runAsync(result) { removeSystemAccounts() }
+            "tabletState" -> runAsync(result) { tabletState() }
             "reboot" -> runAsync(result) {
                 // Fire and forget: the tablet drops the connection as it goes
                 // down, so waiting for a reply would only ever time out.
@@ -755,8 +757,14 @@ class AdbProvisioner(private val context: Context) : MethodChannel.MethodCallHan
      * relaunch the wizard on the next boot.
      */
     private fun setDeviceOwner(component: String): String {
-        emit("owner", "Проверяю планшет")
-        clearBlockingAccounts()
+        val blocking = blockingAccounts()
+        if (blocking.isNotEmpty()) {
+            throw IllegalStateException(
+                "Мешает аккаунт: " + blocking.keys.joinToString(", ") +
+                    ". Нажмите «Убрать аккаунт», дождитесь перезагрузки и " +
+                    "подключитесь заново.",
+            )
+        }
 
         emit("owner", "Выдаю права администратора")
         val direct = shell("dpm set-device-owner $component")
@@ -797,74 +805,105 @@ class AdbProvisioner(private val context: Context) : MethodChannel.MethodCallHan
     }
 
     /**
-     * Get rid of the accounts that block device owner, where it is safe to.
+     * Accounts currently standing between us and device owner, mapped to the
+     * package that registered each.
      *
      * Android refuses device owner while any account exists, and on the
-     * Unisoc tablets we buy that is not a user's Google account but one the
-     * ROM makes for itself — `sprd.com.android.account.phone`, meaning
-     * "contacts stored on the device", registered by com.android.contacts
-     * before anyone has touched the tablet. Skipping Google sign-in during
-     * setup does nothing about it, which is what makes the refusal baffling
-     * in the field: the operator did everything right and is still told
-     * there is an account.
+     * Unisoc tablets we buy that account is nobody's Google login: the ROM
+     * registers sprd.com.android.account.phone — "contacts stored on the
+     * device" — from com.android.contacts before the tablet is first
+     * switched on. Skipping Google sign-in during setup does nothing about
+     * it, so the operator does everything right and is still refused.
      *
-     * Only authenticators on [REMOVABLE_AUTHENTICATORS] are touched.
-     * Anything else — a real Google account above all — is named and left
-     * alone: removing the package behind it would take Play services with
-     * it, and whoever added an account can remove it in Settings.
-     *
-     * AccountManager purges accounts whose authenticator has gone only at
-     * boot, so this ends in a reboot and the operator has to come back for
-     * a second pass. There is no avoiding that: wireless debugging does not
-     * survive a restart either.
+     * A type with no known package maps to an empty string rather than being
+     * dropped: an account we cannot attribute still blocks provisioning, and
+     * hiding it would make the refusal inexplicable.
      */
-    private fun clearBlockingAccounts() {
+    private fun blockingAccounts(): Map<String, String> {
         val dump = try {
             shell("dumpsys account")
         } catch (t: Throwable) {
-            // Advisory: the first command after an install is the likeliest
-            // to meet a half-dead stream, and a check meant to explain a
-            // future failure must not cause one.
             emit("owner", "Проверку аккаунтов пропускаю: ${t.message}")
-            return
+            return emptyMap()
         }
-
-        val types = ACCOUNT_RE.findAll(dump).map { it.groupValues[1] }.toSet()
-        if (types.isEmpty()) return
-
         val owners = AUTHENTICATOR_RE.findAll(dump)
             .associate { it.groupValues[1] to it.groupValues[2] }
+        return ACCOUNT_RE.findAll(dump)
+            .map { it.groupValues[1] }
+            .distinct()
+            .associateWith { owners[it] ?: "" }
+    }
 
-        val removable = mutableSetOf<String>()
-        val stuck = mutableListOf<String>()
-        for (type in types) {
-            val pkg = owners[type]
-            if (pkg != null && pkg in REMOVABLE_AUTHENTICATORS) removable.add(pkg)
-            else stuck.add(type)
+    /**
+     * Remove the packages behind the ROM's own accounts, reporting what each
+     * removal actually said.
+     *
+     * The first cut fired `pm uninstall` and threw the reply away, so a
+     * refusal was indistinguishable from success — the tablet rebooted, the
+     * account was still there, and the next pass removed it again. Forever.
+     *
+     * Only packages on [REMOVABLE_AUTHENTICATORS] are touched. A real Google
+     * account is named and left alone: removing the package behind it would
+     * take Play services with it, and whoever added an account can remove it
+     * in Settings.
+     */
+    private fun removeSystemAccounts(): String {
+        val blocking = blockingAccounts()
+        if (blocking.isEmpty()) {
+            emit("done", "Аккаунтов нет — можно выдавать права")
+            return "clean"
         }
 
+        val stuck = blocking.filterValues { it !in REMOVABLE_AUTHENTICATORS }
         if (stuck.isNotEmpty()) {
             throw IllegalStateException(
-                "На планшете есть аккаунт: " + stuck.joinToString(", ") +
-                    ". Удалите его в Настройках → Аккаунты и повторите — с " +
-                    "аккаунтом Android не отдаёт права администратора.",
+                "Этот аккаунт убрать автоматически нельзя: " +
+                    stuck.keys.joinToString(", ") +
+                    ". Удалите его в Настройках → Аккаунты.",
             )
         }
 
-        for (pkg in removable) {
-            emit("owner", "Убираю системный аккаунт ($pkg)")
-            shell("pm uninstall --user 0 $pkg")
+        for (pkg in blocking.values.toSet()) {
+            // Disable first. Uninstalling alone left the account in place on
+            // a Unisoc Android 13; disabling the authenticator before
+            // removing it is what made the boot-time purge notice.
+            val disabled = shell("pm disable-user --user 0 $pkg").trim()
+            emit("owner", "Отключаю $pkg: ${disabled.ifBlank { "нет ответа" }}")
+            val removed = shell("pm uninstall --user 0 $pkg").trim()
+            emit("owner", "Удаляю $pkg: ${removed.ifBlank { "нет ответа" }}")
+            if (!removed.contains("Success")) {
+                throw IllegalStateException("Не удалось убрать $pkg: $removed")
+            }
         }
-        emit("owner", "Перезагружаю планшет — аккаунты чистятся при старте")
+
+        emit("owner", "Перезагружаю — аккаунты чистятся при старте")
         try {
             manager().openStream("shell:reboot").close()
         } catch (_: Throwable) {
         }
-        throw IllegalStateException(
-            "Системный аккаунт убран, планшет перезагружается. Включите на нём " +
-                "беспроводную отладку заново и нажмите «Подключить планшет» — " +
-                "установка продолжится с этого места.",
-        )
+        return "rebooting"
+    }
+
+    /** What the tablet looks like right now, in one screenful. */
+    private fun tabletState(): String {
+        val android = shell("getprop ro.build.version.release").trim()
+        val abi = shell("getprop ro.product.cpu.abi").trim()
+        val accounts = blockingAccounts()
+        val policy = shell("dumpsys device_policy")
+        val owner = if (policy.contains(OWNER_PACKAGE)) "есть" else "нет"
+        val setup = shell("settings get secure user_setup_complete").trim()
+        return buildString {
+            append("Android $android, $abi\n")
+            append("Права администратора: $owner\n")
+            append(
+                if (accounts.isEmpty()) "Аккаунтов: нет"
+                else "Аккаунты: " + accounts.entries.joinToString(", ") {
+                    it.key + " (" + it.value.ifBlank { "поставщик неизвестен" } + ")"
+                },
+            )
+            append("\nПервичная настройка завершена: ")
+            append(if (setup == "1") "да" else "нет")
+        }
     }
 
     // ============================ Plumbing ==================================
