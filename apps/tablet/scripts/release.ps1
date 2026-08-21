@@ -93,13 +93,22 @@ if (-not $env:GH_TOKEN -and (Test-Path $tokenFile)) {
     }
 }
 
-# No `2>&1` here. gh writes auth status to stderr even when it succeeds, and
-# under Windows PowerShell 5.1 redirecting a native command's stderr wraps
-# each line in an ErrorRecord — which $ErrorActionPreference='Stop' then turns
-# into a fatal NativeCommandError on a perfectly good login. Send stderr to
-# the null device instead and judge by the exit code alone.
-gh auth status 2>$null | Out-Null
-if ($LASTEXITCODE -ne 0) {
+# gh writes auth status to stderr even when it succeeds, and under Windows
+# PowerShell 5.1 a native command's stderr can surface as an ErrorRecord —
+# which $ErrorActionPreference='Stop' then turns into a fatal
+# NativeCommandError on a perfectly good login.
+#
+# `2>$null` alone does not reliably prevent that: it suppresses the text but
+# the error record can still be raised, and this line has failed that way on
+# an account that `gh auth status` reports as fine. Drop the preference to
+# Continue for the call and judge by the exit code, which is the only part
+# that was ever meaningful.
+$prevEap = $ErrorActionPreference
+$ErrorActionPreference = 'Continue'
+gh auth status 2>&1 | Out-Null
+$ghExit = $LASTEXITCODE
+$ErrorActionPreference = $prevEap
+if ($ghExit -ne 0) {
     Fail "Not logged in to gh. Put a PAT in $tokenFile, or run: gh auth login"
 }
 
