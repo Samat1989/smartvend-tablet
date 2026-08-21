@@ -38,7 +38,10 @@ class _ProvisionScreenState extends State<ProvisionScreen> {
   String? _qr;
   bool _connected = false;
   bool _busy = false;
+  bool _manual = false;
   final _log = <String>[];
+  final _hostPort = TextEditingController();
+  final _code = TextEditingController();
 
   @override
   void initState() {
@@ -56,6 +59,42 @@ class _ProvisionScreenState extends State<ProvisionScreen> {
         });
       }
     });
+  }
+
+  @override
+  void dispose() {
+    _hostPort.dispose();
+    _code.dispose();
+    super.dispose();
+  }
+
+  /// Pair from what the tablet prints, when discovery has come up empty.
+  ///
+  /// The QR route needs mDNS, and mDNS has to survive multicast filtering,
+  /// OEM power management and whatever the shop router does to broadcast
+  /// traffic. The tablet's own "Pair device with pairing code" screen shows
+  /// an address and six digits, and this path needs nothing else.
+  Future<void> _pairManual() async {
+    final raw = _hostPort.text.trim();
+    final at = raw.lastIndexOf(':');
+    if (at < 1) {
+      _say('Ошибка: адрес нужен в виде 192.168.1.50:41234');
+      return;
+    }
+    final port = int.tryParse(raw.substring(at + 1));
+    if (port == null) {
+      _say('Ошибка: порт не разобран');
+      return;
+    }
+    try {
+      await _channel.invokeMethod('pairManual', {
+        'host': raw.substring(0, at),
+        'port': port,
+        'code': _code.text.trim(),
+      });
+    } on PlatformException catch (e) {
+      _say('Ошибка: ${e.message}');
+    }
   }
 
   void _say(String line) {
@@ -100,7 +139,23 @@ class _ProvisionScreenState extends State<ProvisionScreen> {
         'setDeviceOwner',
         {'component': _adminComponent},
       );
-      _say('Планшет готов. Перезагрузите его.');
+
+      // Read the policy back instead of trusting our own command: dpm
+      // printing Success is weaker evidence than the tablet naming the
+      // owner itself.
+      final verdict = await _channel.invokeMethod<String>('verifyOwner');
+      if (verdict != 'ok') {
+        _say('Ошибка: права не подтвердились — $verdict');
+        return;
+      }
+      _say('Права подтверждены планшетом');
+
+      // The kiosk reads its policy once, in onCreate. It was already running
+      // when the rights arrived, so until it starts again it behaves exactly
+      // like an unprovisioned tablet — which is what makes a technician
+      // think nothing happened.
+      await _channel.invokeMethod('reboot');
+      _say('Готово. Планшет перезагружается сам, ждать не нужно.');
     } on PlatformException catch (e) {
       _say('Ошибка: ${e.message}');
     } catch (e) {
@@ -150,6 +205,46 @@ class _ProvisionScreenState extends State<ProvisionScreen> {
                 color: Colors.white,
                 child: QrImageView(data: _qr!, size: 240),
               ),
+            ),
+          ],
+          const SizedBox(height: 8),
+          TextButton.icon(
+            onPressed: () => setState(() => _manual = !_manual),
+            icon: Icon(_manual ? Icons.expand_less : Icons.expand_more),
+            label: const Text('Не находит? Ввести код вручную'),
+          ),
+          if (_manual) ...[
+            const _Step(
+              n: 3,
+              title: 'Ручное сопряжение',
+              body: 'На планшете: Беспроводная отладка → Подключить с '
+                  'помощью кода сопряжения. Перепишите адрес с портом и '
+                  'шесть цифр.',
+            ),
+            TextField(
+              controller: _hostPort,
+              keyboardType: TextInputType.url,
+              decoration: const InputDecoration(
+                labelText: 'Адрес и порт',
+                hintText: '192.168.1.50:41234',
+                border: OutlineInputBorder(),
+              ),
+            ),
+            const SizedBox(height: 8),
+            TextField(
+              controller: _code,
+              keyboardType: TextInputType.number,
+              decoration: const InputDecoration(
+                labelText: 'Код сопряжения',
+                hintText: '123456',
+                border: OutlineInputBorder(),
+              ),
+            ),
+            const SizedBox(height: 8),
+            FilledButton.tonalIcon(
+              onPressed: _busy ? null : _pairManual,
+              icon: const Icon(Icons.link),
+              label: const Text('Сопрячь по коду'),
             ),
           ],
           if (_connected) ...[

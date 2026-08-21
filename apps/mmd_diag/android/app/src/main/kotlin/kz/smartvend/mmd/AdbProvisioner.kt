@@ -3,6 +3,7 @@ package kz.smartvend.mmd
 import android.content.Context
 import android.net.nsd.NsdManager
 import android.net.nsd.NsdServiceInfo
+import android.net.wifi.WifiManager
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
@@ -26,8 +27,11 @@ import java.security.cert.Certificate
 import java.security.cert.CertificateFactory
 import java.security.spec.PKCS8EncodedKeySpec
 import java.util.Date
+import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicReference
 
 /**
  * Turns this phone into an ADB host so a technician can provision a brand-new
@@ -54,6 +58,9 @@ import java.util.concurrent.atomic.AtomicBoolean
 class AdbProvisioner(private val context: Context) : MethodChannel.MethodCallHandler {
 
     private val io = Executors.newSingleThreadExecutor()
+
+    /** Separate from [io] so a wedged shell can be abandoned, not queued behind. */
+    private val shellPool = Executors.newCachedThreadPool()
     private val main = Handler(Looper.getMainLooper())
     private var events: EventChannel.EventSink? = null
 
@@ -64,6 +71,16 @@ class AdbProvisioner(private val context: Context) : MethodChannel.MethodCallHan
     /** Guards against a second pairing run while one is still hunting. */
     private val pairing = AtomicBoolean(false)
     private var discoveryListener: NsdManager.DiscoveryListener? = null
+
+    /**
+     * Held for the duration of a discovery run.
+     *
+     * Android drops multicast frames not addressed to the device unless a
+     * lock is held — a battery measure that silently makes mDNS discovery
+     * find nothing at all. The symptom is not an error but an empty search
+     * that runs forever, which is exactly how this failed the first time.
+     */
+    private var multicastLock: WifiManager.MulticastLock? = null
 
     val streamHandler = object : EventChannel.StreamHandler {
         override fun onListen(arguments: Any?, sink: EventChannel.EventSink?) {
@@ -82,8 +99,20 @@ class AdbProvisioner(private val context: Context) : MethodChannel.MethodCallHan
             "startPairing" -> startPairing(result)
             "cancelPairing" -> {
                 stopDiscovery()
+                releaseMulticast()
                 pairing.set(false)
                 result.success(null)
+            }
+            "pairManual" -> {
+                val host = call.argument<String>("host")
+                val port = call.argument<Int>("port")
+                val code = call.argument<String>("code")
+                if (host == null || port == null || code == null) {
+                    result.error("args", "host, port и code обязательны", null)
+                } else {
+                    pairManual(host, port, code)
+                    result.success(null)
+                }
             }
             "shell" -> {
                 val cmd = call.argument<String>("command")
@@ -108,6 +137,17 @@ class AdbProvisioner(private val context: Context) : MethodChannel.MethodCallHan
                 } else {
                     runAsync(result) { setDeviceOwner(component) }
                 }
+            }
+            "verifyOwner" -> runAsync(result) { verifyOwner() }
+            "reboot" -> runAsync(result) {
+                // Fire and forget: the tablet drops the connection as it goes
+                // down, so waiting for a reply would only ever time out.
+                try {
+                    manager().openStream("shell:reboot").close()
+                } catch (_: Throwable) {
+                }
+                emit("done", "Планшет перезагружается")
+                "rebooting"
             }
             "disconnect" -> runAsync(result) {
                 manager().disconnect()
@@ -161,12 +201,18 @@ class AdbProvisioner(private val context: Context) : MethodChannel.MethodCallHan
 
     private fun beginDiscovery(expectedName: String, password: String) {
         stopDiscovery()
+        acquireMulticast()
         val listener = object : NsdManager.DiscoveryListener {
             override fun onDiscoveryStarted(serviceType: String) {
                 emit("discovering", "Жду планшет в сети")
             }
 
             override fun onServiceFound(info: NsdServiceInfo) {
+                // Reported even when it is not ours: when this search comes
+                // up empty the only useful question is whether it saw
+                // anything at all, and the answer has to be visible on the
+                // phone, in a shop, with no logcat attached.
+                emit("scan", "Вижу: ${info.serviceName}")
                 // Every tablet in range that is pairing right now shows up
                 // here. The name from our QR is what tells ours apart — and
                 // it is why the name is random per run rather than fixed.
@@ -222,8 +268,7 @@ class AdbProvisioner(private val context: Context) : MethodChannel.MethodCallHan
             // The pairing port dies with the handshake; the debugging port is
             // advertised separately, so let the library rediscover it rather
             // than assuming the two are related.
-            val connected = manager().connectTls(context, CONNECT_TIMEOUT_MS)
-            if (connected) {
+            if (connectWithRetry(host)) {
                 emit("connected", "Подключено к планшету")
             } else {
                 emit("error", "Сопряжение прошло, но подключиться не удалось")
@@ -232,8 +277,214 @@ class AdbProvisioner(private val context: Context) : MethodChannel.MethodCallHan
             Log.e(TAG, "pairing failed", t)
             emit("error", t.message ?: t.toString())
         } finally {
+            releaseMulticast()
             pairing.set(false)
         }
+    }
+
+    private fun acquireMulticast() {
+        if (multicastLock != null) return
+        try {
+            val wifi = context.getSystemService(Context.WIFI_SERVICE) as WifiManager
+            multicastLock = wifi.createMulticastLock("mmd-adb-pairing").apply {
+                setReferenceCounted(false)
+                acquire()
+            }
+        } catch (t: Throwable) {
+            emit("error", "Не удалось включить multicast: ${t.message}")
+        }
+    }
+
+    private fun releaseMulticast() {
+        try {
+            multicastLock?.takeIf { it.isHeld }?.release()
+        } catch (_: Throwable) {
+            // Already gone; nothing to undo.
+        }
+        multicastLock = null
+    }
+
+    /**
+     * Pair from the numbers the tablet prints, skipping discovery entirely.
+     *
+     * The QR route depends on mDNS, and mDNS depends on a hostile stack of
+     * multicast filtering, OEM power management and whatever the shop's
+     * router does to broadcast traffic. "Pair device with pairing code" puts
+     * an address and six digits on the tablet's own screen, so this path
+     * needs none of it — worth having on a device someone drove to.
+     */
+    private fun pairManual(host: String, port: Int, code: String) {
+        io.execute {
+            try {
+                emit("pairing", "Сопряжение с $host:$port")
+                if (!manager().pair(host, port, code)) {
+                    emit("error", "Планшет отклонил код")
+                    return@execute
+                }
+                emit("paired", "Сопряжено, подключаюсь")
+                acquireMulticast()
+                val connected = connectWithRetry(host)
+                emit(
+                    if (connected) "connected" else "error",
+                    if (connected) "Подключено к планшету"
+                    else "Сопряжение прошло, но подключиться не удалось",
+                )
+            } catch (t: Throwable) {
+                Log.e(TAG, "manual pairing failed", t)
+                emit("error", t.message ?: t.toString())
+            } finally {
+                releaseMulticast()
+            }
+        }
+    }
+
+    /**
+     * Find the debugging port ourselves and connect to it.
+     *
+     * The library's own `connectTls` runs an mDNS search internally, and here
+     * that search reliably timed out — while the identical search we run for
+     * the pairing service, moments earlier, always succeeds. NsdManager does
+     * not take kindly to a discovery being started while another is still
+     * tearing down, and pairing has only just stopped one. Rather than race
+     * it, we reuse the discovery path already proven to work on this phone
+     * and hand the library a host and port it does not have to look for.
+     *
+     * Retried because adbd rebuilds its TLS listener the moment a new peer is
+     * trusted and re-advertises afterwards, so a first miss means little.
+     */
+    private fun connectWithRetry(host: String): Boolean {
+        // Let the pairing discovery finish dying before starting another.
+        Thread.sleep(SETTLE_MS)
+        for (attempt in 1..CONNECT_ATTEMPTS) {
+            val port = discoverDebugPort(host)
+            if (port == null) {
+                emit("connecting", "Попытка $attempt: порт отладки ещё не объявлен")
+            } else {
+                emit("connecting", "Порт отладки $port, подключаюсь")
+                try {
+                    if (manager().connect(host, port)) return true
+                } catch (t: Throwable) {
+                    emit("connecting", "Попытка $attempt: ${t.message}")
+                }
+            }
+            Thread.sleep(CONNECT_RETRY_DELAY_MS)
+        }
+        return false
+    }
+
+    /**
+     * Find the debugging port for [host], reporting everything seen on the
+     * way.
+     *
+     * Three things went wrong here before it worked, and all three produced
+     * the same useless "not found":
+     *
+     * Parallel resolves. NsdManager services one at a time and answers the
+     * rest with FAILURE_ALREADY_ACTIVE, so they are done serially now.
+     *
+     * Stopping at the first hit. The first record to arrive is always this
+     * phone's own adbd — it is on the same host, so it needs no network at
+     * all — and the tablet's arrives later. Waiting the full window instead
+     * of a beat after the first is what actually makes the tablet visible.
+     *
+     * Trusting a lone candidate. When nothing matched, the old code took
+     * "the only tablet" — which was this phone, advertising as
+     * `adb-<own serial>-XXXX`. It then tried to adb into itself, failed, and
+     * blamed the tablet. Anything on one of our own addresses is now
+     * discarded before it can be chosen.
+     */
+    private fun discoverDebugPort(host: String): Int? {
+        val found = mutableListOf<NsdServiceInfo>()
+        val listener = object : NsdManager.DiscoveryListener {
+            override fun onDiscoveryStarted(serviceType: String) = Unit
+            override fun onServiceLost(info: NsdServiceInfo) = Unit
+            override fun onDiscoveryStopped(serviceType: String) = Unit
+            override fun onStopDiscoveryFailed(serviceType: String, errorCode: Int) = Unit
+
+            override fun onStartDiscoveryFailed(serviceType: String, errorCode: Int) {
+                emit("connecting", "Поиск порта не запустился (код $errorCode)")
+            }
+
+            override fun onServiceFound(info: NsdServiceInfo) {
+                synchronized(found) { found.add(info) }
+            }
+        }
+
+        try {
+            nsd.discoverServices(CONNECT_SERVICE, NsdManager.PROTOCOL_DNS_SD, listener)
+            // The whole window, not until the first answer: ours comes first
+            // and the tablet's comes after.
+            Thread.sleep(DISCOVERY_TIMEOUT_MS)
+        } catch (t: Throwable) {
+            emit("connecting", "Поиск порта: ${t.message}")
+        } finally {
+            try {
+                nsd.stopServiceDiscovery(listener)
+            } catch (_: Throwable) {
+                // Never started, or already stopped.
+            }
+        }
+
+        val services = synchronized(found) { found.toList() }
+        if (services.isEmpty()) {
+            emit("connecting", "Планшет не объявляет отладку")
+            return null
+        }
+
+        val mine = localAddresses()
+        var fallback: Int? = null
+        var others = 0
+        // Serial on purpose: NsdManager resolves one at a time.
+        for (info in services) {
+            val resolved = resolveOnce(info) ?: continue
+            val (addr, port) = resolved
+            if (addr in mine) {
+                emit("connecting", "Пропускаю себя: ${info.serviceName}")
+                continue
+            }
+            emit("connecting", "Служба ${info.serviceName}: $addr:$port")
+            if (addr == host) return port
+            fallback = fallback ?: port
+            others++
+        }
+        if (others == 1 && fallback != null) {
+            emit("connecting", "Адрес не совпал с $host, но устройство одно — беру его")
+            return fallback
+        }
+        if (others > 1) emit("connecting", "Несколько устройств в отладке, ни одно не на $host")
+        else emit("connecting", "Кроме этого телефона в отладке никого")
+        return null
+    }
+
+    /** Every address this phone answers on, so we never adb into ourselves. */
+    private fun localAddresses(): Set<String> = try {
+        java.net.NetworkInterface.getNetworkInterfaces()
+            .asSequence()
+            .flatMap { it.inetAddresses.asSequence() }
+            .mapNotNull { it.hostAddress }
+            .toSet()
+    } catch (t: Throwable) {
+        emptySet()
+    }
+
+    /** Blocking resolve of a single service, with failures made visible. */
+    private fun resolveOnce(info: NsdServiceInfo): Pair<String, Int>? {
+        val latch = CountDownLatch(1)
+        val out = AtomicReference<Pair<String, Int>?>(null)
+        nsd.resolveService(info, object : NsdManager.ResolveListener {
+            override fun onResolveFailed(si: NsdServiceInfo, errorCode: Int) {
+                emit("connecting", "Не разобрал ${si.serviceName} (код $errorCode)")
+                latch.countDown()
+            }
+
+            override fun onServiceResolved(si: NsdServiceInfo) {
+                val addr = si.host?.hostAddress
+                if (addr != null) out.set(addr to si.port)
+                latch.countDown()
+            }
+        })
+        latch.await(RESOLVE_TIMEOUT_MS, TimeUnit.MILLISECONDS)
+        return out.get()
     }
 
     private fun stopDiscovery() {
@@ -249,34 +500,94 @@ class AdbProvisioner(private val context: Context) : MethodChannel.MethodCallHan
 
     // ============================ ADB services ==============================
 
+    /**
+     * Run one shell command, refusing to wait forever.
+     *
+     * The unbounded version wedged: `pm install` returned but the stream
+     * never reported EOF, and the app sat on "installing" for minutes with
+     * nothing to show. A stuck stream now surfaces as an error the
+     * technician can act on instead of a screen that looks busy.
+     */
     private fun shell(command: String): String {
-        manager().openStream("shell:$command").use { stream ->
-            return stream.readAllText()
+        val task = shellPool.submit<String> {
+            manager().openStream("shell:$command").use { stream ->
+                stream.openInputStream().bufferedReader().use { it.readText() }
+            }
+        }
+        return try {
+            task.get(SHELL_TIMEOUT_MS, TimeUnit.MILLISECONDS)
+        } catch (t: Throwable) {
+            task.cancel(true)
+            throw IllegalStateException("Команда не ответила: $command")
         }
     }
 
     /**
-     * Copy the APK across and install it.
+     * Stream the APK straight into `pm install`.
      *
-     * `exec:` rather than `sync:` on purpose: sync is a framed protocol with
-     * its own quirks, while exec is a raw pipe with no line-ending mangling —
-     * which for an APK is the whole requirement. Costs one temp file that we
-     * clean up after.
+     * The first version copied the file to /data/local/tmp and installed it
+     * with a second command. That is two long-running streams instead of
+     * one, and the second reliably hung: pm had finished, but the read never
+     * saw EOF. Handing pm the bytes directly — which is what `adb install`
+     * itself does — leaves a single stream whose reply arrives the moment
+     * the last byte lands, and leaves nothing behind on the tablet to clean
+     * up if we are interrupted.
+     *
+     * The byte count in the service string is not optional: it is how pm
+     * knows where the APK ends, since the stream stays open for its answer.
      */
     private fun installApk(apk: File): String {
         if (!apk.isFile) throw IllegalArgumentException("APK не найден: ${apk.path}")
-        emit("install", "Передаю APK (${apk.length() / 1024} КБ)")
-        manager().openStream("exec:cat > $REMOTE_APK").use { stream ->
-            apk.inputStream().use { input -> input.copyTo(stream.openOutputStream()) }
+        val size = apk.length()
+        emit("install", "Передаю APK (${size / 1024} КБ)")
+        manager().openStream("exec:pm install -r -g -S $size").use { stream ->
+            val out = stream.openOutputStream()
+            apk.inputStream().use { input ->
+                val buf = ByteArray(64 * 1024)
+                var sent = 0L
+                var lastPercent = 0
+                while (true) {
+                    val n = input.read(buf)
+                    if (n < 0) break
+                    out.write(buf, 0, n)
+                    sent += n
+                    val percent = (sent * 100 / size).toInt()
+                    if (percent >= lastPercent + 20) {
+                        lastPercent = percent
+                        emit("install", "Передано $percent%")
+                    }
+                }
+            }
+            out.flush()
+            emit("install", "Устанавливаю, это до минуты")
+            // Deliberately not closing the output stream: pm answers on this
+            // same stream, and closing our half takes the reply with it.
+            val reply = stream.openInputStream().bufferedReader().readText()
+            if (!reply.contains("Success")) {
+                throw IllegalStateException("Установка не прошла: ${reply.trim()}")
+            }
+            emit("installed", "Приложение установлено")
+            return reply.trim()
         }
-        emit("install", "Устанавливаю")
-        val out = shell("pm install -r -g $REMOTE_APK")
-        shell("rm -f $REMOTE_APK")
-        if (!out.contains("Success")) {
-            throw IllegalStateException("Установка не прошла: ${out.trim()}")
-        }
-        emit("installed", "Приложение установлено")
-        return out.trim()
+    }
+
+    /**
+     * Ask the tablet who its device owner is, rather than trusting that our
+     * own command worked.
+     *
+     * `dpm set-device-owner` printing Success is not quite proof: the
+     * policy is written by a different service than the one that enforces
+     * it, and a ROM that half-supports this would report the same thing.
+     * Reading the state back costs one command and turns "probably" into
+     * "yes".
+     */
+    private fun verifyOwner(): String {
+        val out = shell("dumpsys device_policy")
+        val ownerLine = out.lineSequence()
+            .dropWhile { !it.contains("Device Owner:") }
+            .take(4)
+            .joinToString(" ")
+        return if (ownerLine.contains(OWNER_PACKAGE)) "ok" else "no: ${ownerLine.trim()}"
     }
 
     /**
@@ -324,8 +635,20 @@ class AdbProvisioner(private val context: Context) : MethodChannel.MethodCallHan
         const val EVENTS = "kz.smartvend/adb_events"
 
         private const val PAIRING_SERVICE = "_adb-tls-pairing._tcp."
-        private const val REMOTE_APK = "/data/local/tmp/mmd-kiosk.apk"
-        private const val CONNECT_TIMEOUT_MS = 10_000L
+        private const val CONNECT_SERVICE = "_adb-tls-connect._tcp."
+        private const val OWNER_PACKAGE = "kz.smartvend.m102_tester"
+        /** Long enough for pm to unpack a Flutter APK on a slow tablet. */
+        private const val SHELL_TIMEOUT_MS = 120_000L
+        private const val CONNECT_ATTEMPTS = 5
+        private const val CONNECT_RETRY_DELAY_MS = 2_000L
+        private const val DISCOVERY_TIMEOUT_MS = 6_000L
+        private const val RESOLVE_TIMEOUT_MS = 4_000L
+
+        /** Beat after the first hit, so siblings land before we stop listening. */
+        private const val RESOLVE_GRACE_MS = 700L
+
+        /** Grace for the pairing discovery to unwind before another starts. */
+        private const val SETTLE_MS = 1_500L
     }
 }
 
@@ -342,7 +665,21 @@ class MmdAdbManager private constructor(context: Context) : AbsAdbConnectionMana
     private val certificate: Certificate
 
     init {
-        setApi(Build.VERSION.SDK_INT)
+        // The API level of the *tablet*, not of this phone.
+        //
+        // It decides the protocol version and max payload written into the
+        // CONNECT packet, and the library's own docs only sanction
+        // Build.VERSION.SDK_INT "if the daemon and the client are located in
+        // the same device". Ours never are. Announcing this phone's level
+        // (Android 13) to an Android 11 daemon made it drop the TLS
+        // handshake, which surfaced as "ADB pairing is required" — an error
+        // about certificates for a fault that had nothing to do with them.
+        //
+        // R rather than the tablet's true level on purpose: wireless
+        // debugging does not exist below it, so it is the floor for anything
+        // we can reach, and claiming lower than the daemon is the safe
+        // direction. Claiming higher is what broke.
+        setApi(Build.VERSION_CODES.R)
         val keyFile = File(context.filesDir, "adb_key")
         val certFile = File(context.filesDir, "adb_cert")
         if (keyFile.isFile && certFile.isFile) {
