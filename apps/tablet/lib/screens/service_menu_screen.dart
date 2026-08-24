@@ -182,48 +182,94 @@ class ServiceMenuScreen extends StatelessWidget {
     );
   }
 
+  /// Change the service PIN — typed twice, and the dialog will not close
+  /// until both boxes agree and the PIN passes [DeviceStorage.validatePin].
+  ///
+  /// The confirmation is not ceremony. This PIN is the only way back into
+  /// service mode, the tablet is device owner so there is no uninstalling
+  /// around it, and the field is obscured — a single typo committed here
+  /// would leave the operator standing at a cabinet they can no longer get
+  /// into. Same reason the first-run screen has always asked twice; this
+  /// entry point simply never did.
   Future<void> _changePin(BuildContext context) async {
     final s = context.read<Strings>();
     final ctrl = TextEditingController();
-    final ok = await showDialog<bool>(
+    final confirmCtrl = TextEditingController();
+    final pin = await showDialog<String>(
       context: context,
-      builder: (ctx) => AlertDialog(
-        title: Text(s.t('service_change_pin')),
-        content: TextField(
-          controller: ctrl,
-          autofocus: true,
-          obscureText: true,
-          keyboardType: TextInputType.number,
-          maxLength: 8,
-          inputFormatters: [FilteringTextInputFormatter.digitsOnly],
-          decoration: InputDecoration(labelText: s.t('enter_pin')),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(ctx).pop(false),
-            child: Text(s.t('payment_cancel')),
+      builder: (ctx) {
+        String? error;
+        return StatefulBuilder(
+          builder: (ctx, setLocal) => AlertDialog(
+            title: Text(s.t('service_change_pin')),
+            content: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  s.t('pin_change_hint'),
+                  style: const TextStyle(
+                      fontSize: 12, color: Colors.black54),
+                ),
+                const SizedBox(height: 12),
+                TextField(
+                  controller: ctrl,
+                  autofocus: true,
+                  obscureText: true,
+                  keyboardType: TextInputType.number,
+                  maxLength: 8,
+                  inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+                  decoration: InputDecoration(labelText: s.t('pin_new')),
+                ),
+                TextField(
+                  controller: confirmCtrl,
+                  obscureText: true,
+                  keyboardType: TextInputType.number,
+                  maxLength: 8,
+                  inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+                  decoration: InputDecoration(labelText: s.t('pin_repeat')),
+                ),
+                if (error != null) ...[
+                  const SizedBox(height: 4),
+                  Text(
+                    error!,
+                    style: const TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w600,
+                        color: Color(0xFFB3261E)),
+                  ),
+                ],
+              ],
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.of(ctx).pop(),
+                child: Text(s.t('btn_cancel')),
+              ),
+              FilledButton(
+                onPressed: () {
+                  final entered = ctrl.text.trim();
+                  final reason = DeviceStorage.validatePin(entered);
+                  if (reason != null) {
+                    setLocal(() => error = s
+                        .t(reason)
+                        .replaceAll('%n%', '${DeviceStorage.minPinLength}'));
+                    return;
+                  }
+                  if (entered != confirmCtrl.text.trim()) {
+                    setLocal(() => error = s.t('pin_mismatch'));
+                    return;
+                  }
+                  Navigator.of(ctx).pop(entered);
+                },
+                child: Text(s.t('btn_save')),
+              ),
+            ],
           ),
-          FilledButton(
-            onPressed: () => Navigator.of(ctx).pop(true),
-            child: Text(s.t('connect_btn')),
-          ),
-        ],
-      ),
+        );
+      },
     );
-    if (ok != true || !context.mounted) return;
-    final pin = ctrl.text.trim();
-    final reason = DeviceStorage.validatePin(pin);
-    if (reason != null) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-            content: Text(context
-                .read<Strings>()
-                .t(reason)
-                .replaceAll('%n%', '${DeviceStorage.minPinLength}')),
-            backgroundColor: Colors.redAccent),
-      );
-      return;
-    }
+    if (pin == null || !context.mounted) return;
     await context.read<DeviceStorage>().setServicePin(pin);
     if (!context.mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(

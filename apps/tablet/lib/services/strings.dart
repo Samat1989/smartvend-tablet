@@ -2288,5 +2288,22 @@ class Strings extends ChangeNotifier {
       'ky': 'Кулпу ачылды',
       'en': 'The lock is open',
     },
+    // Service mode — PIN change
+    'pin_new': {
+      'ru': 'Новый PIN',
+      'kk': 'Жаңа PIN',
+      'ky': 'Жаңы PIN',
+      'en': 'New PIN',
+    },
+    'pin_change_hint': {
+      'ru': 'Введите новый PIN дважды — так опечатка не запрёт вход в '
+          'сервисный режим.',
+      'kk': 'Жаңа PIN-ді екі рет енгізіңіз — сонда қате басу сервистік '
+          'режимге кіруді бөгемейді.',
+      'ky': 'Жаңы PIN\'ди эки жолу киргизиңиз — ошондо ката басуу тейлөө '
+          'режимине киргизбей койбойт.',
+      'en': 'Enter the new PIN twice — a typo then cannot lock you out '
+          'of service mode.',
+    },
   };
 }
