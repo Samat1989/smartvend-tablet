@@ -121,6 +121,7 @@ class _PaymentScreenState extends State<PaymentScreen> {
         secret: secret,
         priceTenge: total,
         name: names.isEmpty ? 'Order' : names,
+        terNumber: storage.terNumber,
       );
       if (!mounted) return;
       _request = req;
@@ -241,6 +242,10 @@ class _PaymentScreenState extends State<PaymentScreen> {
   Widget build(BuildContext context) {
     final s = context.watch<Strings>();
     final svc = context.watch<VendingService>();
+    // Which rail this cabinet pays on, chosen at pairing. Only three things
+    // on this screen differ: the amount's currency, the tab label and the
+    // logo in the middle of the QR.
+    final odengi = context.watch<DeviceStorage>().isOdengi;
     return Scaffold(
       backgroundColor: AppColors.iosBackground,
       body: SafeArea(
@@ -257,20 +262,27 @@ class _PaymentScreenState extends State<PaymentScreen> {
                       _PayHeader(
                         label: s.t('cart_total'),
                         total: svc.cartTotalTenge,
+                        currency: s.currency,
                       ),
                   const SizedBox(height: 20),
                   // Same 0.8 width factor as the QR card below so the
                   // tab pill visually anchors to the same column.
                   FractionallySizedBox(
                     widthFactor: 0.8,
-                    child: _KaspiTabPill(label: 'Kaspi QR'),
+                    child: _KaspiTabPill(
+                      label: odengi ? 'O!Деньги' : 'Kaspi QR',
+                    ),
                   ),
                   const SizedBox(height: 16),
                   // 80 % width — user asked the QR card itself to shrink
                   // ≈20 % so it doesn't dominate the payment screen.
                   FractionallySizedBox(
                     widthFactor: 0.8,
-                    child: _KaspiQrCard(state: _state, request: _request),
+                    child: _KaspiQrCard(
+                      state: _state,
+                      request: _request,
+                      odengi: odengi,
+                    ),
                   ),
                   const SizedBox(height: 24),
                   if (_state == _State.waiting && _startedAt != null)
@@ -331,10 +343,15 @@ class _PaymentScreenState extends State<PaymentScreen> {
 /// but moved to the outer Stack so its position is identical with the
 /// dispense screen (top:16, right:16, 44×44).
 class _PayHeader extends StatelessWidget {
-  const _PayHeader({required this.label, required this.total});
+  const _PayHeader({
+    required this.label,
+    required this.total,
+    required this.currency,
+  });
 
   final String label;
   final int total;
+  final String currency;
 
   @override
   Widget build(BuildContext context) {
@@ -352,7 +369,7 @@ class _PayHeader extends StatelessWidget {
         ),
         const SizedBox(height: 6),
         Text(
-          '$total ₸',
+          '$total $currency',
           style: const TextStyle(
             color: AppColors.iosBlack,
             fontSize: 48,
@@ -413,10 +430,15 @@ class _KaspiTabPill extends StatelessWidget {
 }
 
 class _KaspiQrCard extends StatelessWidget {
-  const _KaspiQrCard({required this.state, required this.request});
+  const _KaspiQrCard({
+    required this.state,
+    required this.request,
+    required this.odengi,
+  });
 
   final _State state;
   final PaymentRequest? request;
+  final bool odengi;
 
   @override
   Widget build(BuildContext context) {
@@ -432,17 +454,22 @@ class _KaspiQrCard extends StatelessWidget {
       // matches the user's "иконка внутри QR" ask.
       child: AspectRatio(
         aspectRatio: 1,
-        child: _QrBody(state: state, request: request),
+        child: _QrBody(state: state, request: request, odengi: odengi),
       ),
     );
   }
 }
 
 class _QrBody extends StatelessWidget {
-  const _QrBody({required this.state, required this.request});
+  const _QrBody({
+    required this.state,
+    required this.request,
+    required this.odengi,
+  });
 
   final _State state;
   final PaymentRequest? request;
+  final bool odengi;
 
   @override
   Widget build(BuildContext context) {
@@ -487,19 +514,20 @@ class _QrBody extends StatelessWidget {
           // typical reader fails to decode.
           errorCorrectionLevel: QrErrorCorrectLevel.H,
         ),
-        const _KaspiLogo(),
+        _QrLogo(odengi: odengi),
       ],
     );
   }
 }
 
-/// Centred Kaspi logo overlay rendered from `lib/static/logo_kaspi.png`.
-/// Wrapped in a white circle so the overlay reads as a sticker on
-/// top of the QR — H-level error correction (QrErrorCorrectLevel.H)
-/// masks out enough modules under the overlay that the code still
-/// decodes reliably from a phone camera.
-class _KaspiLogo extends StatelessWidget {
-  const _KaspiLogo();
+/// Centred mark of whoever is taking the money — Kaspi or O!Dengi. Wrapped
+/// in a white circle so the overlay reads as a sticker on top of the QR —
+/// H-level error correction (QrErrorCorrectLevel.H) masks out enough modules
+/// under the overlay that the code still decodes reliably from a phone camera.
+class _QrLogo extends StatelessWidget {
+  const _QrLogo({required this.odengi});
+
+  final bool odengi;
 
   @override
   Widget build(BuildContext context) {
@@ -517,13 +545,22 @@ class _KaspiLogo extends StatelessWidget {
           ),
         ],
       ),
-      padding: const EdgeInsets.all(4),
-      child: ClipOval(
-        child: Image.asset(
-          'lib/static/logo_kaspi.png',
-          fit: BoxFit.cover,
-        ),
-      ),
+      // Kaspi's mark fills its square, so it is cropped to the circle and
+      // sits tight against the edge. The O!Dengi wallet has square corners
+      // that the same crop would clip off, so it is fitted whole with more
+      // room around it instead.
+      padding: EdgeInsets.all(odengi ? 15 : 4),
+      child: odengi
+          ? Image.asset(
+              'lib/static/logo_odengi.png',
+              fit: BoxFit.contain,
+            )
+          : ClipOval(
+              child: Image.asset(
+                'lib/static/logo_kaspi.png',
+                fit: BoxFit.cover,
+              ),
+            ),
     );
   }
 }

@@ -289,7 +289,7 @@ class _CartItemCard extends StatelessWidget {
                   ),
                   const SizedBox(width: 8),
                   Text(
-                    '${product.priceTenge * quantity} ₸',
+                    '${product.priceTenge * quantity} ${context.watch<Strings>().currency}',
                     style: const TextStyle(
                       color: AppColors.iosOrange,
                       fontSize: 18,
@@ -464,7 +464,7 @@ class _BottomBar extends StatelessWidget {
               ActionPill(
                 icon: Icons.qr_code_2,
                 label: payLabel,
-                value: '$total ₸',
+                value: '$total ${context.watch<Strings>().currency}',
                 filled: true,
                 onTap: enabled ? () => _goToPayment(context) : null,
               ),

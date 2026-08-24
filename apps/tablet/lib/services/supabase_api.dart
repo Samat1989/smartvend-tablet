@@ -219,6 +219,7 @@ class SupabaseApi {
     String? layoutHash,
     String? layoutSavedAt,
     String? deviceId,
+    String? terNumber,
   }) async {
     try {
       final resp = await _rpc('device_ping', {
@@ -229,6 +230,9 @@ class SupabaseApi {
         'p_layout_hash': layoutHash,
         'p_layout_at': layoutSavedAt,
         'p_device_id': deviceId,
+        // Reported, never read back: the panel needs to show which rail a
+        // cabinet pays on, but the tablet is what decides it.
+        'p_ter_number': terNumber,
       });
       if (resp.statusCode < 200 || resp.statusCode >= 300) return null;
       return jsonDecode(resp.body) as Map<String, dynamic>?;

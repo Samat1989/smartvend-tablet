@@ -66,17 +66,23 @@ class PaymentService {
   /// Request a QR code for an amount. [priceTenge] is whole tenge — multiplied
   /// by 100 internally per the API spec ("Set price*100"). [name] becomes the
   /// receipt's order name and is truncated to 50 UTF-8 chars.
+  /// [terNumber] selects the payment channel: empty (the default) means
+  /// Kaspi QR and the field is not sent at all, so a Kazakh machine's
+  /// request body is exactly what it has always been. 'ODG' asks the gateway
+  /// for an O!Dengi QR instead (Kyrgyzstan).
   Future<PaymentRequest> createPayment({
     required String machid,
     required String secret,
     required int priceTenge,
     required String name,
+    String terNumber = '',
   }) async {
     if (priceTenge <= 0) {
       throw PaymentException('Сумма должна быть больше нуля');
     }
     final cleanSecret = secret.trim();
     final cleanMachid = machid.trim();
+    final cleanTer = terNumber.trim();
     final timestamp = _timestamp();
     final randstr = _randStr();
     final sign = _sign(cleanSecret, randstr, timestamp);
@@ -95,6 +101,11 @@ class PaymentService {
       'randstr': randstr,
       'timestamp': timestamp,
       'sign': sign,
+      // Left out entirely when empty rather than sent blank: the gateway
+      // reads an absent field as Kaspi, and omitting it keeps every existing
+      // Kazakh request byte-for-byte what it was. Deliberately not part of
+      // `sign` — the signature covers appkey/randstr/timestamp only (V2.3 §7).
+      if (cleanTer.isNotEmpty) 'terNumber': cleanTer,
     };
 
     _logRequest('createPayment', body, cleanSecret);

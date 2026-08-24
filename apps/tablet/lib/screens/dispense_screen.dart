@@ -735,7 +735,7 @@ class _RefundBanner extends StatelessWidget {
                 ),
                 const SizedBox(height: 4),
                 Text(
-                  '${s.t('refund_msg')} ($refundTenge ₸)',
+                  '${s.t('refund_msg')} ($refundTenge ${s.currency})',
                   style: const TextStyle(
                     color: AppColors.iosBlack,
                     fontSize: 13,

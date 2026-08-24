@@ -273,7 +273,7 @@ class ProductCard extends StatelessWidget {
                         fit: BoxFit.scaleDown,
                         alignment: Alignment.bottomRight,
                         child: Text(
-                          '${product.priceTenge} ₸',
+                          '${product.priceTenge} ${context.watch<Strings>().currency}',
                           maxLines: 1,
                           style: const TextStyle(
                             color: AppColors.iosOrange,

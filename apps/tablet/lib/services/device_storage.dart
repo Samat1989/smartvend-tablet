@@ -18,6 +18,13 @@ import 'kiosk_bridge.dart';
 class DeviceStorage extends ChangeNotifier {
   static const _kMachId = 'machid';
   static const _kSecret = 'secret';
+  // Payment channel of the cabinet, sent to the gateway as `terNumber` when
+  // asking for a QR. Empty = Kaspi QR (Kazakhstan) and the field is left out
+  // of the request entirely, so KZ machines keep the exact body they always
+  // sent. 'ODG' routes the QR to O!Dengi (Kyrgyzstan) and switches prices on
+  // screen to som. Set once at pairing: it describes where the cabinet
+  // stands, not something an operator flips day to day.
+  static const _kTerNumber = 'ter_number';
   static const _kServicePin = 'service_pin';
   static const _kLanguage = 'language';
   static const _kGridColumns = 'grid_columns';
@@ -74,6 +81,9 @@ class DeviceStorage extends ChangeNotifier {
   static const minGridColumns = 2;
   static const maxGridColumns = 3;
 
+  /// The only non-Kaspi channel the gateway knows so far: O!Dengi, Kyrgyzstan.
+  static const terNumberOdengi = 'ODG';
+
   /// Service-PIN policy.
   static const minPinLength = 4;
   static const maxPinAttempts = 10;
@@ -95,6 +105,21 @@ class DeviceStorage extends ChangeNotifier {
   bool get isReady => _ready;
   String? get machid => _prefs.getString(_kMachId);
   String? get secret => _secret;
+
+  /// Gateway `terNumber`. Empty means Kaspi QR — see [_kTerNumber].
+  String get terNumber => _prefs.getString(_kTerNumber) ?? '';
+  bool get isOdengi => terNumber == terNumberOdengi;
+
+  /// Currency sign for every price on this tablet. Follows the payment
+  /// channel: an O!Dengi cabinet stands in Kyrgyzstan and charges som.
+  ///
+  /// The som is a 'с' underlined, and Unicode does have a character for
+  /// exactly that — U+20C0 SOM SIGN. We do not use it: no font on either
+  /// the emulator or a real handset carries the glyph (checked across all
+  /// ~170 system fonts on both), so it comes out as a tofu box. A Cyrillic
+  /// 'с' plus U+0332 COMBINING LOW LINE draws the same mark out of Roboto,
+  /// which is the font the app already renders in.
+  String get currencySymbol => isOdengi ? 'с̲' : '₸';
   String get language => _prefs.getString(_kLanguage) ?? 'ru';
 
   // Clamped on read as well as on write: a tablet that stored 4 or 5
@@ -474,8 +499,13 @@ class DeviceStorage extends ChangeNotifier {
     }
   }
 
-  Future<void> savePairing({required String machid, required String secret}) async {
+  Future<void> savePairing({
+    required String machid,
+    required String secret,
+    String terNumber = '',
+  }) async {
     await _prefs.setString(_kMachId, machid.trim());
+    await _prefs.setString(_kTerNumber, terNumber.trim());
     _secret = secret.trim();
     try {
       await _secure.write(key: _kSecret, value: _secret);
@@ -487,6 +517,7 @@ class DeviceStorage extends ChangeNotifier {
 
   Future<void> clearPairing() async {
     await _prefs.remove(_kMachId);
+    await _prefs.remove(_kTerNumber);
     _secret = null;
     try {
       await _secure.delete(key: _kSecret);

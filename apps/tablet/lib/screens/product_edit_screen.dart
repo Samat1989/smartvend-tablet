@@ -180,7 +180,7 @@ class _ProductEditScreenState extends State<ProductEditScreen> {
                 style: const TextStyle(
                     fontSize: 16, fontWeight: FontWeight.w800)),
             const SizedBox(height: 6),
-            Text('Цена: $price ₸'),
+            Text('Цена: $price ${context.read<Strings>().currency}'),
             Text('Остаток: $stock шт'),
           ],
         ),
@@ -506,7 +506,7 @@ class _ProductEditScreenState extends State<ProductEditScreen> {
                   child: TextFormField(
                     controller: _priceCtrl,
                     decoration: InputDecoration(
-                      labelText: s.t('field_price'),
+                      labelText: '${s.t('field_price')}, ${s.currency}',
                       filled: true,
                       fillColor: Colors.white,
                       border: const OutlineInputBorder(),
@@ -1097,7 +1097,8 @@ class _BulkApplySheetState extends State<_BulkApplySheet> {
                   Expanded(
                     child: FilterChip(
                       selected: _applyPrice,
-                      label: Text('Цена ${widget.currentPrice} ₸'),
+                      label: Text(
+                          'Цена ${widget.currentPrice} ${context.read<Strings>().currency}'),
                       onSelected: (v) => setState(() => _applyPrice = v),
                     ),
                   ),
@@ -1211,7 +1212,7 @@ class _BulkApplySheetState extends State<_BulkApplySheet> {
                           ? 'M${target.slot.primaryMotorId} · '
                               '${target.shelfLabel}'
                           : 'M${target.slot.primaryMotorId} · '
-                              '${p!.priceTenge} ₸ · ×${p.stock}',
+                              '${p!.priceTenge} ${context.read<Strings>().currency} · ×${p.stock}',
                       style: const TextStyle(fontSize: 11),
                     ),
                   );

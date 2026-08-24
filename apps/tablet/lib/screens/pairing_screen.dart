@@ -21,6 +21,12 @@ class _PairingScreenState extends State<PairingScreen> {
   final _api = SupabaseApi();
   bool _busy = false;
 
+  /// Kyrgyz cabinet? Off — Kaspi QR and tenge, exactly as before. On — the
+  /// gateway is asked for an O!Dengi QR and every price switches to som.
+  /// The choice lives on this screen because it is a fact about where the
+  /// cabinet stands, settled once when the machine is bound to the tablet.
+  bool _odengi = false;
+
   /// Taps on the logo, for the service-menu gesture below.
   final List<DateTime> _serviceTaps = [];
 
@@ -93,7 +99,11 @@ class _PairingScreenState extends State<PairingScreen> {
       });
       return;
     }
-    await storage.savePairing(machid: machid, secret: secret);
+    await storage.savePairing(
+      machid: machid,
+      secret: secret,
+      terNumber: _odengi ? DeviceStorage.terNumberOdengi : '',
+    );
     // main.dart watches DeviceStorage and will swap to HomeScreen automatically.
   }
 
@@ -178,6 +188,35 @@ class _PairingScreenState extends State<PairingScreen> {
                           prefixIcon: const Icon(Icons.key,
                               color: AppColors.onSurfaceVariant),
                           fillColor: AppColors.surfaceContainerLow,
+                        ),
+                      ),
+                      const SizedBox(height: 14),
+                      Material(
+                        color: AppColors.surfaceContainerLow,
+                        borderRadius: BorderRadius.circular(12),
+                        child: CheckboxListTile(
+                          value: _odengi,
+                          onChanged: _busy
+                              ? null
+                              : (v) => setState(() => _odengi = v ?? false),
+                          controlAffinity: ListTileControlAffinity.leading,
+                          dense: true,
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(12),
+                          ),
+                          title: Text(
+                            s.t('odengi_label'),
+                            style: const TextStyle(
+                                fontSize: 13,
+                                fontWeight: FontWeight.w700,
+                                color: AppColors.onSurface),
+                          ),
+                          subtitle: Text(
+                            s.t('odengi_hint'),
+                            style: const TextStyle(
+                                fontSize: 11,
+                                color: AppColors.onSurfaceVariant),
+                          ),
                         ),
                       ),
                       if (_error != null) ...[
@@ -290,10 +329,9 @@ class _LangSwitcher extends StatelessWidget {
           textStyle: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold),
           padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
         ),
-        segments: const [
-          ButtonSegment(value: 'ru', label: Text('RU')),
-          ButtonSegment(value: 'kk', label: Text('KZ')),
-          ButtonSegment(value: 'en', label: Text('EN')),
+        segments: [
+          for (final code in s.languages)
+            ButtonSegment(value: code, label: Text(Strings.label(code))),
         ],
         selected: {s.lang},
         onSelectionChanged: (set) => s.setLang(set.first),

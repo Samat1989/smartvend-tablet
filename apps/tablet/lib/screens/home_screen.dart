@@ -827,16 +827,16 @@ class _MaintenanceOverlay extends StatelessWidget {
 class _LangChip extends StatelessWidget {
   const _LangChip();
 
-  // Storage / messages use ISO 'kk' for Kazakh — using 'kz' here makes
-  // Strings.setLang() silently reject the call (containsKey check fails).
-  static const _cycle = ['ru', 'kk', 'en'];
-
   @override
   Widget build(BuildContext context) {
     final s = context.watch<Strings>();
-    final i = _cycle.indexOf(s.lang);
-    final next = _cycle[(i + 1) % _cycle.length];
-    final display = s.lang == 'kk' ? 'KZ' : s.lang.toUpperCase();
+    // Cycles through whatever this cabinet offers — a Kyrgyz machine steps
+    // KG → EN → RU, a Kazakh one KZ → EN → RU. indexOf returns -1 for a
+    // language that is not on the list, which lands the next tap on the
+    // first entry: the right place to end up.
+    final cycle = s.languages;
+    final next = cycle[(cycle.indexOf(s.lang) + 1) % cycle.length];
+    final display = Strings.label(s.lang);
     return GestureDetector(
       behavior: HitTestBehavior.opaque,
       onTap: () => s.setLang(next),

@@ -126,7 +126,7 @@ class UpdateService {
             await getTemporaryDirectory())
         : await getTemporaryDirectory();
     final name = manual
-        ? 'micromart-${info.versionName}.apk'
+        ? 'microvend-${info.versionName}.apk'
         : 'update-${info.versionCode}.apk';
     final dest = File('${dir.path}/$name');
     if (await dest.exists()) await dest.delete();

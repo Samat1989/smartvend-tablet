@@ -201,6 +201,7 @@ class VendingService extends ChangeNotifier {
       // real verdict (its watchdog counts consecutive command failures).
       boardOk: board.isLyt ? null : board.isHealthy,
       appVersion: _appVersion,
+      terNumber: _storage.terNumber,
     );
     if (verdict == null) return;
 

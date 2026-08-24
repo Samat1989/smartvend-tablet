@@ -159,7 +159,7 @@ class _UpdateScreenState extends State<UpdateScreen> {
           _downloading = false;
           _installHint = null;
           _error = 'Установка не началась. Проверьте: Настройки → '
-              'Приложения → Micromart → «Установка неизвестных '
+              'Приложения → MicroVend → «Установка неизвестных '
               'приложений» (разрешить), затем повторите.';
         });
       });
@@ -173,7 +173,7 @@ class _UpdateScreenState extends State<UpdateScreen> {
         _error = noPermission
             ? 'Нет разрешения «Установка неизвестных приложений». '
                 'Система открыла нужную настройку — включите '
-                'переключатель для Micromart, вернитесь и нажмите '
+                'переключатель для MicroVend, вернитесь и нажмите '
                 '«Скачать и установить» ещё раз.'
             : e.toString();
       });

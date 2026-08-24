@@ -137,6 +137,7 @@ flutter:
   # is one line; the directory form silently taxes every build.
   assets:
     - lib/static/logo_kaspi.png
+    - lib/static/logo_odengi.png
 
   # An image asset can refer to one or more resolution-specific "variants", see
   # https://flutter.dev/to/resolution-aware-images

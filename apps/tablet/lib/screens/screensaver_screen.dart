@@ -477,7 +477,7 @@ class _ShowcaseCard extends StatelessWidget {
                   ),
                   const SizedBox(width: 10),
                   Text(
-                    '${product.priceTenge} ₸',
+                    '${product.priceTenge} ${context.watch<Strings>().currency}',
                     style: const TextStyle(
                       color: AppColors.iosOrange,
                       fontSize: 20,
