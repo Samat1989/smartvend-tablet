@@ -11,10 +11,10 @@ import '../theme.dart';
 /// Human label for a motor id. BarysVend positions decode to "Р2·К3"
 /// (both the canonical ряд×100+колонка ids and the legacy 11..100
 /// encoding); M102 channel numbers stay as-is.
-String _motorLabel(int id, {required bool isLyt}) {
+String _motorLabel(Strings s, int id, {required bool isLyt}) {
   if (!isLyt && id < 101) return '$id';
   final (r, c) = BoardClient.lytRowColFromMotorId(id);
-  return 'Р$r·К$c';
+  return s.t('le_rowcol').replaceAll('%r%', '$r').replaceAll('%c%', '$c');
 }
 
 /// Service-mode editor for the per-machine layout: shelves + slots +
@@ -69,37 +69,40 @@ class _LayoutEditorScreenState extends State<LayoutEditorScreen> {
   /// copy (JSON round-trip) is stored so further editing of the draft
   /// can't mutate the saved template.
   Future<void> _saveAsTemplate() async {
+    final s = context.read<Strings>();
     final messenger = ScaffoldMessenger.of(context);
     if (_draft.isEmpty) {
-      messenger.showSnackBar(const SnackBar(
-        content: Text('Раскладка пуста — нечего сохранять'),
+      messenger.showSnackBar(SnackBar(
+        content: Text(s.t('le_nothing_to_save')),
         backgroundColor: Colors.redAccent,
       ));
       return;
     }
     final ctrl = TextEditingController(
-        text: 'Шаблон ${_customTemplates.length + 1}');
+        text: s
+            .t('le_template_n')
+            .replaceAll('%n%', '${_customTemplates.length + 1}'));
     final name = await showDialog<String>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: const Text('Сохранить как шаблон'),
+        title: Text(s.t('le_save_as_template')),
         content: TextField(
           controller: ctrl,
           autofocus: true,
-          decoration: const InputDecoration(
-            labelText: 'Название шаблона',
-            hintText: 'например BarysVend кофейня',
-            border: OutlineInputBorder(),
+          decoration: InputDecoration(
+            labelText: s.t('le_template_name'),
+            hintText: s.t('le_template_name_hint'),
+            border: const OutlineInputBorder(),
           ),
         ),
         actions: [
           TextButton(
             onPressed: () => Navigator.of(ctx).pop(),
-            child: const Text('Отмена'),
+            child: Text(s.t('btn_cancel')),
           ),
           FilledButton(
             onPressed: () => Navigator.of(ctx).pop(ctrl.text.trim()),
-            child: const Text('Сохранить'),
+            child: Text(s.t('btn_save')),
           ),
         ],
       ),
@@ -111,16 +114,17 @@ class _LayoutEditorScreenState extends State<LayoutEditorScreen> {
       final ok = await showDialog<bool>(
         context: context,
         builder: (ctx) => AlertDialog(
-          title: const Text('Перезаписать шаблон?'),
-          content: Text('Шаблон «$name» уже существует.'),
+          title: Text(s.t('le_overwrite_template_q')),
+          content: Text(
+              s.t('le_template_exists').replaceAll('%name%', name)),
           actions: [
             TextButton(
               onPressed: () => Navigator.of(ctx).pop(false),
-              child: const Text('Отмена'),
+              child: Text(s.t('btn_cancel')),
             ),
             FilledButton(
               onPressed: () => Navigator.of(ctx).pop(true),
-              child: const Text('Перезаписать'),
+              child: Text(s.t('btn_overwrite')),
             ),
           ],
         ),
@@ -141,12 +145,12 @@ class _LayoutEditorScreenState extends State<LayoutEditorScreen> {
     });
     await _persistCustomTemplates();
     messenger.showSnackBar(SnackBar(
-      content: Text('Шаблон «$name» сохранён'),
+      content: Text(s.t('le_template_saved').replaceAll('%name%', name)),
       backgroundColor: Colors.green,
     ));
   }
 
-  static String _describeLayout(MachineLayout l) {
+  static String _describeLayout(Strings s, MachineLayout l) {
     var slots = 0;
     for (final sh in l.shelves) {
       slots += sh.slots.length;
@@ -157,10 +161,18 @@ class _LayoutEditorScreenState extends State<LayoutEditorScreen> {
         if (sl.isTwin) twins++;
       }
     }
-    final base = 'Полок: ${l.shelves.length} · ячеек: $slots';
+    final base = s
+        .t('le_describe')
+        .replaceAll('%shelves%', '${l.shelves.length}')
+        .replaceAll('%slots%', '$slots');
     // «Сдвоенных» — про две спирали на один товар. В микромаркете таких не
     // бывает, и счётчик там всегда 0, так что отдельная ветка не нужна.
-    return twins == 0 ? base : '$base · сдвоенных: $twins';
+    return twins == 0
+        ? base
+        : s
+            .t('le_describe_twins')
+            .replaceAll('%base%', base)
+            .replaceAll('%n%', '$twins');
   }
 
   Future<void> _save() async {
@@ -174,6 +186,7 @@ class _LayoutEditorScreenState extends State<LayoutEditorScreen> {
   /// and replaces `_draft` with a fresh copy. Labels and motor ids stay
   /// editable afterwards via the normal slot picker.
   Future<void> _pickTemplate() async {
+    final s = context.read<Strings>();
     // LayoutTemplate | CustomLayoutTemplate — the sheet returns either.
     final chosen = await showModalBottomSheet<Object>(
       context: context,
@@ -185,13 +198,13 @@ class _LayoutEditorScreenState extends State<LayoutEditorScreen> {
             child: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
-                const Padding(
-                  padding: EdgeInsets.fromLTRB(20, 16, 20, 4),
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(20, 16, 20, 4),
                   child: Align(
                     alignment: Alignment.centerLeft,
                     child: Text(
-                      'Шаблоны раскладки',
-                      style: TextStyle(
+                      s.t('le_templates_title'),
+                      style: const TextStyle(
                         color: Colors.white,
                         fontSize: 18,
                         fontWeight: FontWeight.w800,
@@ -199,24 +212,24 @@ class _LayoutEditorScreenState extends State<LayoutEditorScreen> {
                     ),
                   ),
                 ),
-                const Padding(
-                  padding: EdgeInsets.fromLTRB(20, 0, 20, 12),
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(20, 0, 20, 12),
                   child: Align(
                     alignment: Alignment.centerLeft,
                     child: Text(
-                      'Шаблон заменит текущую раскладку целиком. '
-                      'Подписи и моторы можно править после применения.',
-                      style: TextStyle(color: Colors.white60, fontSize: 12),
+                      s.t('le_templates_hint'),
+                      style: const TextStyle(
+                          color: Colors.white60, fontSize: 12),
                     ),
                   ),
                 ),
-                const Padding(
-                  padding: EdgeInsets.fromLTRB(20, 0, 20, 4),
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(20, 0, 20, 4),
                   child: Align(
                     alignment: Alignment.centerLeft,
                     child: Text(
-                      'ЗАВОДСКИЕ',
-                      style: TextStyle(
+                      s.t('le_factory_templates'),
+                      style: const TextStyle(
                         color: Colors.white54,
                         fontSize: 11,
                         fontWeight: FontWeight.bold,
@@ -229,25 +242,26 @@ class _LayoutEditorScreenState extends State<LayoutEditorScreen> {
                   ListTile(
                     leading:
                         const Icon(Icons.grid_view, color: Colors.white70),
-                    title: Text(tpl.name,
+                    title: Text(s.t(tpl.name),
                         style: const TextStyle(
                             color: Colors.white,
                             fontWeight: FontWeight.w700)),
                     subtitle: Text(
-                        '${tpl.description}\n${_describeLayout(tpl.build())}',
+                        '${s.t(tpl.description)}'
+                        '\n${_describeLayout(s, tpl.build())}',
                         style: const TextStyle(color: Colors.white60)),
                     isThreeLine: true,
                     onTap: () => Navigator.of(ctx).pop(tpl),
                   ),
                 if (_customTemplates.isNotEmpty) ...[
                   const Divider(color: Colors.white24, height: 16),
-                  const Padding(
-                    padding: EdgeInsets.fromLTRB(20, 0, 20, 4),
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(20, 0, 20, 4),
                     child: Align(
                       alignment: Alignment.centerLeft,
                       child: Text(
-                        'МОИ ШАБЛОНЫ',
-                        style: TextStyle(
+                        s.t('le_my_templates'),
+                        style: const TextStyle(
                           color: Colors.white54,
                           fontSize: 11,
                           fontWeight: FontWeight.bold,
@@ -264,29 +278,30 @@ class _LayoutEditorScreenState extends State<LayoutEditorScreen> {
                           style: const TextStyle(
                               color: Colors.white,
                               fontWeight: FontWeight.w700)),
-                      subtitle: Text(_describeLayout(t.layout),
+                      subtitle: Text(_describeLayout(s, t.layout),
                           style: const TextStyle(color: Colors.white60)),
                       trailing: IconButton(
                         icon: const Icon(Icons.delete_outline,
                             color: Colors.white54),
-                        tooltip: 'Удалить шаблон',
+                        tooltip: s.t('le_delete_template'),
                         onPressed: () async {
                           final ok = await showDialog<bool>(
                             context: ctx,
                             builder: (dctx) => AlertDialog(
-                              title: const Text('Удалить шаблон?'),
-                              content: Text('«${t.name}» будет удалён. '
-                                  'Текущая раскладка не изменится.'),
+                              title: Text(s.t('le_delete_template_q')),
+                              content: Text(s
+                                  .t('le_delete_template_body')
+                                  .replaceAll('%name%', t.name)),
                               actions: [
                                 TextButton(
                                   onPressed: () =>
                                       Navigator.of(dctx).pop(false),
-                                  child: const Text('Отмена'),
+                                  child: Text(s.t('btn_cancel')),
                                 ),
                                 FilledButton(
                                   onPressed: () =>
                                       Navigator.of(dctx).pop(true),
-                                  child: const Text('Удалить'),
+                                  child: Text(s.t('btn_delete')),
                                 ),
                               ],
                             ),
@@ -313,7 +328,9 @@ class _LayoutEditorScreenState extends State<LayoutEditorScreen> {
     final String name;
     final MachineLayout layout;
     if (chosen is LayoutTemplate) {
-      name = chosen.name;
+      // A built-in carries a Strings key here; an operator-saved one below
+      // carries the name they typed.
+      name = s.t(chosen.name);
       layout = chosen.build();
     } else if (chosen is CustomLayoutTemplate) {
       name = chosen.name;
@@ -328,18 +345,18 @@ class _LayoutEditorScreenState extends State<LayoutEditorScreen> {
       final ok = await showDialog<bool>(
         context: context,
         builder: (ctx) => AlertDialog(
-          title: const Text('Перезаписать раскладку?'),
-          content: Text(
-              'Текущая раскладка будет заменена на «$name». '
-              'Подписи и моторы можно будет править после применения.'),
+          title: Text(s.t('le_overwrite_layout_q')),
+          content: Text(s
+              .t('le_overwrite_layout_body')
+              .replaceAll('%name%', name)),
           actions: [
             TextButton(
               onPressed: () => Navigator.of(ctx).pop(false),
-              child: const Text('Отмена'),
+              child: Text(s.t('btn_cancel')),
             ),
             FilledButton(
               onPressed: () => Navigator.of(ctx).pop(true),
-              child: const Text('Применить'),
+              child: Text(s.t('btn_apply')),
             ),
           ],
         ),
@@ -354,7 +371,10 @@ class _LayoutEditorScreenState extends State<LayoutEditorScreen> {
   }
 
   void _addShelf() {
-    final nextLabel = 'Полка ${_draft.shelves.length + 1}';
+    final nextLabel = context
+        .read<Strings>()
+        .t('le_shelf_n')
+        .replaceAll('%n%', '${_draft.shelves.length + 1}');
     setState(() {
       _draft = _draft.copyWith(
         shelves: [..._draft.shelves, Shelf(label: nextLabel, slots: const [])],
@@ -368,7 +388,7 @@ class _LayoutEditorScreenState extends State<LayoutEditorScreen> {
     final picked = await showDialog<String>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: const Text('Название полки'),
+        title: Text(context.read<Strings>().t('le_shelf_name')),
         content: TextField(
           controller: ctrl,
           autofocus: true,
@@ -377,7 +397,7 @@ class _LayoutEditorScreenState extends State<LayoutEditorScreen> {
         actions: [
           TextButton(
             onPressed: () => Navigator.of(ctx).pop(),
-            child: const Text('Отмена'),
+            child: Text(context.read<Strings>().t('btn_cancel')),
           ),
           FilledButton(
             onPressed: () => Navigator.of(ctx).pop(ctrl.text.trim()),
@@ -472,6 +492,7 @@ class _LayoutEditorScreenState extends State<LayoutEditorScreen> {
   /// each cell carries the encoded id = ряд×10+колонка (11..100), so
   /// the operator picks a physical position, not an abstract channel.
   Future<Slot?> _openSlotPicker({Slot? initial}) async {
+    final s = context.read<Strings>();
     final board = context.read<BoardClient>();
     final isLyt = board.isLyt;
     // В микромаркете мотора нет — ячейка это номер, написанный на полке.
@@ -502,10 +523,10 @@ class _LayoutEditorScreenState extends State<LayoutEditorScreen> {
                   children: [
                     Row(
                       children: [
-                        const Expanded(
+                        Expanded(
                           child: Text(
-                            'Слот',
-                            style: TextStyle(
+                            s.t('le_slot'),
+                            style: const TextStyle(
                               fontSize: 18,
                               fontWeight: FontWeight.w800,
                             ),
@@ -517,8 +538,10 @@ class _LayoutEditorScreenState extends State<LayoutEditorScreen> {
                           TextButton.icon(
                             icon: const Icon(Icons.search),
                             label: Text(_scanning
-                                ? 'Сканирование $_scanProgress / 100…'
-                                : 'Сканировать моторы'),
+                                ? s
+                                    .t('le_scanning')
+                                    .replaceAll('%n%', '$_scanProgress')
+                                : s.t('le_scan_motors')),
                             onPressed: _scanning ? null : _scanAll,
                           ),
                       ],
@@ -527,22 +550,22 @@ class _LayoutEditorScreenState extends State<LayoutEditorScreen> {
                     TextField(
                       controller: labelCtrl,
                       decoration: InputDecoration(
-                        labelText: isMm ? 'Подпись ячейки' : 'Подпись слота',
-                        hintText: isMm ? 'необязательно' : 'например 001',
+                        labelText: s.t(
+                            isMm ? 'le_slot_label_mm' : 'le_slot_label'),
+                        hintText: s.t(
+                            isMm ? 'le_optional' : 'le_slot_label_hint'),
                         border: const OutlineInputBorder(),
                       ),
                     ),
                     const SizedBox(height: 8),
                     Text(
-                      isMm
-                          ? 'Выберите номер ячейки — тот, что написан на '
-                              'полке.  ${selected.length} выбрано.'
-                          : isLyt
-                              ? 'Задайте позицию мотора рядом и колонкой '
-                                  '(2+ позиции для сдвоенного слота).  '
-                                  '${selected.length} выбрано.'
-                              : 'Выберите motor id (1+ для сдвоенного слота).  '
-                                  '${selected.length} выбрано.',
+                      s
+                          .t(isMm
+                              ? 'le_pick_cell_hint'
+                              : isLyt
+                                  ? 'le_pick_lyt_hint'
+                                  : 'le_pick_motor_hint')
+                          .replaceAll('%n%', '${selected.length}'),
                       style: const TextStyle(
                           fontSize: 12, color: Colors.black54),
                     ),
@@ -560,9 +583,9 @@ class _LayoutEditorScreenState extends State<LayoutEditorScreen> {
                                 Expanded(
                                   child: DropdownButtonFormField<int>(
                                     initialValue: pickRow,
-                                    decoration: const InputDecoration(
-                                      labelText: 'Ряд (L)',
-                                      border: OutlineInputBorder(),
+                                    decoration: InputDecoration(
+                                      labelText: s.t('le_row_l'),
+                                      border: const OutlineInputBorder(),
                                     ),
                                     items: [
                                       for (var r = 1; r <= 10; r++)
@@ -577,9 +600,9 @@ class _LayoutEditorScreenState extends State<LayoutEditorScreen> {
                                 Expanded(
                                   child: DropdownButtonFormField<int>(
                                     initialValue: pickCol,
-                                    decoration: const InputDecoration(
-                                      labelText: 'Колонка (C)',
-                                      border: OutlineInputBorder(),
+                                    decoration: InputDecoration(
+                                      labelText: s.t('le_col_c'),
+                                      border: const OutlineInputBorder(),
                                     ),
                                     items: [
                                       for (var c = 1; c <= 14; c++)
@@ -593,7 +616,7 @@ class _LayoutEditorScreenState extends State<LayoutEditorScreen> {
                                 const SizedBox(width: 8),
                                 FilledButton.icon(
                                   icon: const Icon(Icons.add),
-                                  label: const Text('Добавить'),
+                                  label: Text(s.t('le_add')),
                                   onPressed: usedElsewhere.contains(
                                           BoardClient.lytMotorIdFor(
                                               pickRow, pickCol))
@@ -606,11 +629,11 @@ class _LayoutEditorScreenState extends State<LayoutEditorScreen> {
                             ),
                             if (usedElsewhere.contains(
                                 BoardClient.lytMotorIdFor(pickRow, pickCol)))
-                              const Padding(
-                                padding: EdgeInsets.only(top: 6),
+                              Padding(
+                                padding: const EdgeInsets.only(top: 6),
                                 child: Text(
-                                  'Эта позиция уже занята другим слотом',
-                                  style: TextStyle(
+                                  s.t('le_pos_taken'),
+                                  style: const TextStyle(
                                       fontSize: 11, color: Colors.redAccent),
                                 ),
                               ),
@@ -625,7 +648,8 @@ class _LayoutEditorScreenState extends State<LayoutEditorScreen> {
                                       ..sort())
                                       InputChip(
                                         label: Text(
-                                            _motorLabel(id, isLyt: true)),
+                                            _motorLabel(s, id,
+                                                isLyt: true)),
                                         onDeleted: () => setLocal(
                                             () => selected.remove(id)),
                                       ),
@@ -684,7 +708,7 @@ class _LayoutEditorScreenState extends State<LayoutEditorScreen> {
                       children: [
                         TextButton(
                           onPressed: () => Navigator.of(ctx).pop(),
-                          child: const Text('Отмена'),
+                          child: Text(s.t('btn_cancel')),
                         ),
                         const SizedBox(width: 8),
                         FilledButton(
@@ -701,7 +725,7 @@ class _LayoutEditorScreenState extends State<LayoutEditorScreen> {
                                     ),
                                   );
                                 },
-                          child: const Text('Сохранить слот'),
+                          child: Text(s.t('le_save_slot')),
                         ),
                       ],
                     ),
@@ -806,6 +830,7 @@ class _Toolbar extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final s = context.watch<Strings>();
     return Padding(
       padding: const EdgeInsets.fromLTRB(12, 4, 12, 10),
       child: Wrap(
@@ -817,18 +842,18 @@ class _Toolbar extends StatelessWidget {
           TextButton.icon(
             style: TextButton.styleFrom(foregroundColor: Colors.white),
             icon: const Icon(Icons.grid_view),
-            label: const Text('Выбрать шаблон'),
+            label: Text(s.t('le_pick_template')),
             onPressed: onPickTemplate,
           ),
           TextButton.icon(
             style: TextButton.styleFrom(foregroundColor: Colors.white),
             icon: const Icon(Icons.bookmark_add_outlined),
-            label: const Text('Сохранить как шаблон'),
+            label: Text(s.t('le_save_as_template')),
             onPressed: onSaveAsTemplate,
           ),
           FilledButton.icon(
             icon: const Icon(Icons.check),
-            label: const Text('Готово'),
+            label: Text(s.t('le_done')),
             onPressed: onDone,
           ),
         ],
@@ -856,6 +881,7 @@ class _ShelfRail extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final s = context.watch<Strings>();
     // Was a hard 180 dp, which on a narrow tablet left the slot grid too
     // thin to fit even one card. A quarter of the screen, clamped, keeps
     // both panes usable at any width.
@@ -908,7 +934,8 @@ class _ShelfRail extends StatelessWidget {
                                   ),
                                 ),
                                 Text(
-                                  '${shelves[i].slots.length} ячеек',
+                                  s.t('le_cells_n').replaceAll(
+                                      '%n%', '${shelves[i].slots.length}'),
                                   style: TextStyle(
                                     color:
                                         Colors.white.withValues(alpha: 0.45),
@@ -926,7 +953,7 @@ class _ShelfRail extends StatelessWidget {
                             constraints: const BoxConstraints(
                                 minWidth: 32, minHeight: 32),
                             padding: EdgeInsets.zero,
-                            tooltip: 'Переименовать или удалить полку',
+                            tooltip: s.t('le_shelf_menu'),
                             icon: Icon(Icons.more_vert,
                                 size: 18,
                                 color: Colors.white.withValues(alpha: 0.6)),
@@ -944,7 +971,7 @@ class _ShelfRail extends StatelessWidget {
             padding: const EdgeInsets.all(8),
             child: FilledButton.icon(
               icon: const Icon(Icons.add),
-              label: const Text('Полка'),
+              label: Text(s.t('le_shelf')),
               onPressed: onAdd,
             ),
           ),
@@ -962,7 +989,7 @@ class _ShelfRail extends StatelessWidget {
           children: [
             ListTile(
               leading: const Icon(Icons.edit),
-              title: const Text('Переименовать'),
+              title: Text(context.read<Strings>().t('le_rename')),
               onTap: () {
                 Navigator.of(ctx).pop();
                 onRename(i);
@@ -970,8 +997,8 @@ class _ShelfRail extends StatelessWidget {
             ),
             ListTile(
               leading: const Icon(Icons.delete, color: Colors.redAccent),
-              title: const Text('Удалить полку',
-                  style: TextStyle(color: Colors.redAccent)),
+              title: Text(context.read<Strings>().t('le_delete_shelf'),
+                  style: const TextStyle(color: Colors.redAccent)),
               onTap: () {
                 Navigator.of(ctx).pop();
                 onDelete(i);
@@ -1005,13 +1032,14 @@ class _SlotsPanel extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final s = context.watch<Strings>();
     if (shelf == null) {
-      return const Center(
+      return Center(
         child: Padding(
-          padding: EdgeInsets.all(24),
+          padding: const EdgeInsets.all(24),
           child: Text(
-            'Добавьте полку слева, чтобы начать раскладку',
-            style: TextStyle(color: Colors.white70),
+            s.t('le_add_shelf_first'),
+            style: const TextStyle(color: Colors.white70),
             textAlign: TextAlign.center,
           ),
         ),
@@ -1041,11 +1069,9 @@ class _SlotsPanel extends StatelessWidget {
                   ),
                   const SizedBox(height: 2),
                   Text(
-                    isMm
-                        ? 'Ячеек: ${slots.length} · нажмите на ячейку, '
-                            'чтобы изменить номер и подпись'
-                        : 'Ячеек: ${slots.length} · нажмите на ячейку, '
-                            'чтобы изменить подпись и моторы',
+                    s
+                        .t(isMm ? 'le_cells_hint_mm' : 'le_cells_hint')
+                        .replaceAll('%n%', '${slots.length}'),
                     style: const TextStyle(
                         color: Colors.white54, fontSize: 12),
                   ),
@@ -1053,7 +1079,7 @@ class _SlotsPanel extends StatelessWidget {
               );
               final addButton = FilledButton.icon(
                 icon: const Icon(Icons.add),
-                label: const Text('Добавить ячейку'),
+                label: Text(s.t('le_add_cell')),
                 onPressed: onAddSlot,
               );
               if (c.maxWidth < 460) {
@@ -1078,9 +1104,9 @@ class _SlotsPanel extends StatelessWidget {
           const SizedBox(height: 12),
           Expanded(
             child: slots.isEmpty
-                ? const Center(
-                    child: Text('Ячеек ещё нет — нажмите «Добавить ячейку»',
-                        style: TextStyle(color: Colors.white54)))
+                ? Center(
+                    child: Text(s.t('le_no_cells'),
+                        style: const TextStyle(color: Colors.white54)))
                 : GridView.builder(
                     gridDelegate:
                         const SliverGridDelegateWithMaxCrossAxisExtent(
@@ -1131,7 +1157,7 @@ class _SlotsPanel extends StatelessWidget {
                                       constraints: const BoxConstraints(
                                           minWidth: 36, minHeight: 36),
                                       padding: EdgeInsets.zero,
-                                      tooltip: 'Изменить ячейку',
+                                      tooltip: s.t('le_edit_cell'),
                                       icon: const Icon(Icons.edit_outlined,
                                           color: Colors.white70, size: 18),
                                       onPressed: () => onEditSlot(i),
@@ -1141,7 +1167,7 @@ class _SlotsPanel extends StatelessWidget {
                                       constraints: const BoxConstraints(
                                           minWidth: 36, minHeight: 36),
                                       padding: EdgeInsets.zero,
-                                      tooltip: 'Удалить ячейку',
+                                      tooltip: s.t('le_delete_cell'),
                                       icon: const Icon(Icons.delete_outline,
                                           color: Colors.white54, size: 18),
                                       onPressed: () => onDeleteSlot(i),
@@ -1166,8 +1192,8 @@ class _SlotsPanel extends StatelessWidget {
                                         ),
                                         // Was "TWIN" — meaningless to the
                                         // operator servicing the cabinet.
-                                        child: const Text('СДВОЕННАЯ',
-                                            style: TextStyle(
+                                        child: Text(s.t('le_twin'),
+                                            style: const TextStyle(
                                               color: AppColors.iosOrange,
                                               fontSize: 9,
                                               fontWeight: FontWeight.w900,
@@ -1177,11 +1203,13 @@ class _SlotsPanel extends StatelessWidget {
                                     Expanded(
                                       child: Text(
                                         isMm
-                                            ? 'ячейка '
-                                                '${sl.motorIds.join(", ")}'
+                                            ? s.t('le_cell_prefix').replaceAll(
+                                                '%ids%',
+                                                sl.motorIds.join(", "))
                                             : isLyt
                                                 ? sl.motorIds
-                                                    .map((m) => _motorLabel(m,
+                                                    .map((m) => _motorLabel(
+                                                        s, m,
                                                         isLyt: true))
                                                     .join(', ')
                                                 : 'motors: '
@@ -1288,22 +1316,21 @@ class _ScanLegend extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final s = context.watch<Strings>();
     if (isLyt) {
-      return const Text(
-        'Ряд (L) — полка сверху вниз, колонка (C) — мотор слева направо. '
-        'Если крутится не тот мотор — включите «Ряд↔колонка» во вкладке '
-        '«Плата».',
-        style: TextStyle(fontSize: 11, color: Colors.black54),
+      return Text(
+        s.t('le_legend_lyt'),
+        style: const TextStyle(fontSize: 11, color: Colors.black54),
       );
     }
     return Wrap(
       spacing: 12,
       runSpacing: 4,
-      children: const [
-        _LegendDot(color: Colors.green, text: 'AA — мотор подключён'),
-        _LegendDot(color: Colors.grey, text: 'BB — пусто / обрыв'),
-        _LegendDot(color: Colors.orange, text: 'CC — перегрузка'),
-        _LegendDot(color: AppColors.iosBlue, text: 'выбран'),
+      children: [
+        _LegendDot(color: Colors.green, text: s.t('le_legend_aa')),
+        _LegendDot(color: Colors.grey, text: s.t('le_legend_bb')),
+        _LegendDot(color: Colors.orange, text: s.t('le_legend_cc')),
+        _LegendDot(color: AppColors.iosBlue, text: s.t('le_legend_sel')),
       ],
     );
   }

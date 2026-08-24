@@ -153,7 +153,7 @@ class ServiceMenuScreen extends StatelessWidget {
                     // error screen still offers a retry.
                     _Tile(
                       icon: Icons.system_update,
-                      label: 'Обновление',
+                      label: s.t('service_update'),
                       color: Colors.deepOrange,
                       onTap: () => Navigator.of(context).push(
                         MaterialPageRoute(
@@ -215,7 +215,12 @@ class ServiceMenuScreen extends StatelessWidget {
     final reason = DeviceStorage.validatePin(pin);
     if (reason != null) {
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(reason), backgroundColor: Colors.redAccent),
+        SnackBar(
+            content: Text(context
+                .read<Strings>()
+                .t(reason)
+                .replaceAll('%n%', '${DeviceStorage.minPinLength}')),
+            backgroundColor: Colors.redAccent),
       );
       return;
     }

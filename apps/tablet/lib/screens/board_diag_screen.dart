@@ -100,6 +100,7 @@ class _BoardDiagScreenState extends State<BoardDiagScreen> {
   /// connect to it. Handles fleets of mixed tablets where the node number
   /// (or even name prefix) differs per model.
   Future<void> _autoDetect() async {
+    final s = context.read<Strings>();
     final board = context.read<BoardClient>();
     final storage = context.read<DeviceStorage>();
     final messenger = ScaffoldMessenger.of(context);
@@ -116,8 +117,8 @@ class _BoardDiagScreenState extends State<BoardDiagScreen> {
     setState(() => _detecting = false);
     messenger.showSnackBar(SnackBar(
       content: Text(found != null
-          ? 'Плата найдена: $found'
-          : 'Плата не найдена ни на одной ноде'),
+          ? s.t('diag_board_found').replaceAll('%path%', found)
+          : s.t('diag_board_not_found')),
       backgroundColor: found != null ? Colors.green : Colors.redAccent,
     ));
   }
@@ -138,6 +139,7 @@ class _BoardDiagScreenState extends State<BoardDiagScreen> {
   /// проверить связку планшет-плата до того, как появится UnlockScreen, и
   /// первое, чем пользуются на монтаже.
   Future<void> _lockTest() async {
+    final s = context.read<Strings>();
     final board = context.read<BoardClient>();
     final storage = context.read<DeviceStorage>();
     final messenger = ScaffoldMessenger.of(context);
@@ -147,25 +149,21 @@ class _BoardDiagScreenState extends State<BoardDiagScreen> {
     messenger.showSnackBar(SnackBar(
       duration: const Duration(seconds: 6),
       content: Text(ok
-          ? 'Плата приняла команду — замок открыт на $sec с'
-          : 'Плата не ответила OK. Проверьте кабель, скорость 115200 и что '
-              'прошита esp-serial — журнал ниже покажет, что ушло и что пришло'),
+          ? s.t('diag_lock_ok').replaceAll('%n%', '$sec')
+          : s.t('diag_lock_fail')),
       backgroundColor: ok ? Colors.green : Colors.redAccent,
     ));
   }
 
   Future<void> _lytTest() async {
+    final s = context.read<Strings>();
     final board = context.read<BoardClient>();
     final messenger = ScaffoldMessenger.of(context);
     final ok = await board.lytPing();
     if (!mounted) return;
     messenger.showSnackBar(SnackBar(
       duration: const Duration(seconds: 6),
-      content: Text(ok
-          ? 'Плата ответила — связь в обе стороны работает'
-          : 'Нет ответа. Проверьте линию и скорость; внешний FTDI 3.3 В '
-              'может не дочитывать уровень платы (~1.8 В) — надёжнее '
-              'родной UART планшета'),
+      content: Text(ok ? s.t('diag_lyt_ok') : s.t('diag_lyt_fail')),
       backgroundColor: ok ? Colors.green : Colors.redAccent,
     ));
   }
@@ -197,24 +195,22 @@ class _BoardDiagScreenState extends State<BoardDiagScreen> {
   /// они привязаны к номерам в inventory, а не к раскладке, — но соответствие
   /// «номер ↔ полка» пришлось бы восстанавливать.
   Future<void> _offerMicromarketLayout() async {
+    final s = context.read<Strings>();
     final svc = context.read<VendingService>();
     if (svc.layout.isNotEmpty) {
       final replace = await showDialog<bool>(
         context: context,
         builder: (ctx) => AlertDialog(
-          title: const Text('Раскладка микромаркета'),
-          content: const Text(
-            'Заменить текущую раскладку на 4 полки по 5 ячеек с нумерацией '
-            '1…20? Товары останутся привязаны к своим номерам.',
-          ),
+          title: Text(s.t('diag_mm_layout_title')),
+          content: Text(s.t('diag_mm_layout_body')),
           actions: [
             TextButton(
               onPressed: () => Navigator.of(ctx).pop(false),
-              child: const Text('Оставить'),
+              child: Text(s.t('btn_keep')),
             ),
             FilledButton(
               onPressed: () => Navigator.of(ctx).pop(true),
-              child: const Text('Заменить'),
+              child: Text(s.t('btn_replace')),
             ),
           ],
         ),
@@ -223,8 +219,8 @@ class _BoardDiagScreenState extends State<BoardDiagScreen> {
     }
     await svc.setLayout(LayoutTemplate.micromarket4x5.builder());
     if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-      content: Text('Применена раскладка микромаркета: 20 ячеек'),
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+      content: Text(s.t('diag_mm_layout_done')),
       backgroundColor: Colors.green,
     ));
   }
@@ -316,21 +312,15 @@ class _ProtocolCard extends StatelessWidget {
 
   /// One-line reminder of what each protocol implies, shown under the
   /// chips so the operator on-site doesn't need the doc open.
-  static const Map<BoardProtocol, String> _hints = {
-    BoardProtocol.m102:
-        'M102 / M109E — кадры 20 байт CRC-16, 9600 8N1, моторы 0..99',
-    BoardProtocol.lyt:
-        'BarysVend V27.2 (LiYuTai) — кадры AA..DD XOR, 115200 8N1, '
-            'адресация ряд/колонка, обычно порт ttyS1. Плата отвечает '
-            'только на выдачу — проверка связи кнопкой «Тест связи»',
-    BoardProtocol.micromarket:
-        'Микромаркет — вместо моторов электрозамок на релейном модуле по USB. '
-            'Текстовые команды PING / OPEN, 115200 8N1. После оплаты '
-            'открывается дверь, покупатель забирает товар сам',
-  };
+  static String _hint(Strings s, BoardProtocol p) => switch (p) {
+        BoardProtocol.m102 => s.t('diag_hint_m102'),
+        BoardProtocol.lyt => s.t('diag_hint_lyt'),
+        BoardProtocol.micromarket => s.t('diag_hint_micromarket'),
+      };
 
   @override
   Widget build(BuildContext context) {
+    final s = context.watch<Strings>();
     return Container(
       margin: const EdgeInsets.fromLTRB(12, 0, 12, 6),
       padding: const EdgeInsets.all(10),
@@ -341,9 +331,9 @@ class _ProtocolCard extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const Text(
-            'ТИП ПЛАТЫ / ПРОТОКОЛ',
-            style: TextStyle(
+          Text(
+            s.t('diag_board_protocol'),
+            style: const TextStyle(
               color: Colors.white70,
               fontSize: 11,
               fontWeight: FontWeight.bold,
@@ -374,7 +364,7 @@ class _ProtocolCard extends StatelessWidget {
           ),
           const SizedBox(height: 6),
           Text(
-            _hints[selected] ?? '',
+            _hint(s, selected),
             style: const TextStyle(color: Colors.white38, fontSize: 11),
           ),
           if (selected == BoardProtocol.micromarket)
@@ -382,10 +372,11 @@ class _ProtocolCard extends StatelessWidget {
               padding: const EdgeInsets.only(top: 6),
               child: Row(
                 children: [
-                  const Expanded(
+                  Expanded(
                     child: Text(
-                      'Время удержания замка',
-                      style: TextStyle(color: Colors.white, fontSize: 13),
+                      s.t('diag_lock_hold'),
+                      style: const TextStyle(
+                          color: Colors.white, fontSize: 13),
                     ),
                   ),
                   IconButton(
@@ -398,7 +389,7 @@ class _ProtocolCard extends StatelessWidget {
                   SizedBox(
                     width: 52,
                     child: Text(
-                      '$holdSeconds с',
+                      '$holdSeconds ${s.t('seconds_short')}',
                       textAlign: TextAlign.center,
                       style: const TextStyle(
                         color: Colors.amberAccent,
@@ -424,14 +415,13 @@ class _ProtocolCard extends StatelessWidget {
               value: swapRowCol,
               onChanged: onSwapChanged,
               activeThumbColor: Colors.amberAccent,
-              title: const Text(
-                'Ряд ↔ колонка местами',
-                style: TextStyle(color: Colors.white, fontSize: 13),
+              title: Text(
+                s.t('diag_swap_rowcol'),
+                style: const TextStyle(color: Colors.white, fontSize: 13),
               ),
-              subtitle: const Text(
-                'Включите, если крутится не тот мотор (перепутана '
-                'распиновка ряд/колонка)',
-                style: TextStyle(color: Colors.white38, fontSize: 11),
+              subtitle: Text(
+                s.t('diag_swap_rowcol_hint'),
+                style: const TextStyle(color: Colors.white38, fontSize: 11),
               ),
             ),
         ],
@@ -470,6 +460,7 @@ class _SerialModeCard extends StatelessWidget {
       ?selectedPath,
     }.toList()
       ..sort();
+    final s = context.watch<Strings>();
     return Container(
       margin: const EdgeInsets.fromLTRB(12, 0, 12, 6),
       padding: const EdgeInsets.all(10),
@@ -482,9 +473,9 @@ class _SerialModeCard extends StatelessWidget {
         children: [
           Row(
             children: [
-              const Text(
-                'ПОРТ ПЛАТЫ',
-                style: TextStyle(
+              Text(
+                s.t('diag_board_port'),
+                style: const TextStyle(
                   color: Colors.white70,
                   fontSize: 11,
                   fontWeight: FontWeight.bold,
@@ -503,9 +494,9 @@ class _SerialModeCard extends StatelessWidget {
                 TextButton.icon(
                   icon: const Icon(Icons.search,
                       size: 16, color: Colors.greenAccent),
-                  label: const Text('Автопоиск',
-                      style:
-                          TextStyle(color: Colors.greenAccent, fontSize: 12)),
+                  label: Text(s.t('diag_autodetect'),
+                      style: const TextStyle(
+                          color: Colors.greenAccent, fontSize: 12)),
                   onPressed: onAutoDetect,
                 ),
             ],
@@ -522,9 +513,9 @@ class _SerialModeCard extends StatelessWidget {
           ),
           if (paths.isEmpty) ...[
             const SizedBox(height: 6),
-            const Text(
-              'Нативные порты не найдены — нажмите «Автопоиск».',
-              style: TextStyle(color: Colors.white38, fontSize: 11),
+            Text(
+              s.t('diag_no_native_ports'),
+              style: const TextStyle(color: Colors.white38, fontSize: 11),
             ),
           ],
         ],
@@ -683,7 +674,7 @@ class _ControlsCard extends StatelessWidget {
             Expanded(
               child: FilledButton.icon(
                 icon: const Icon(Icons.lock_open),
-                label: const Text('Открыть замок'),
+                label: Text(s.t('diag_open_lock')),
                 style: FilledButton.styleFrom(
                   backgroundColor: Colors.teal,
                 ),
@@ -696,7 +687,7 @@ class _ControlsCard extends StatelessWidget {
             Expanded(
               child: FilledButton.icon(
                 icon: const Icon(Icons.network_check),
-                label: const Text('Тест связи (1·1)'),
+                label: Text(s.t('diag_lyt_test')),
                 style: FilledButton.styleFrom(
                   backgroundColor: Colors.teal,
                 ),

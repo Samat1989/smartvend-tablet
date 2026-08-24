@@ -3,6 +3,7 @@ import 'package:provider/provider.dart';
 
 import '../models/climate_config.dart';
 import '../services/climate_controller.dart';
+import '../services/strings.dart';
 
 /// Minimal climate screen — only mode + temperature setpoint are user-editable.
 /// All compressor safety constants are hardcoded from the factory algorithm
@@ -12,24 +13,25 @@ class ClimateScreen extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final s = context.watch<Strings>();
     return Scaffold(
-      appBar: AppBar(title: const Text('Климат')),
+      appBar: AppBar(title: Text(s.t('climate_title'))),
       body: Consumer<ClimateController>(
         builder: (context, ctrl, _) {
           return ListView(
             padding: const EdgeInsets.all(16),
             children: [
-              _statusCard(ctrl),
+              _statusCard(s, ctrl),
               const SizedBox(height: 16),
-              _modeCard(ctrl),
+              _modeCard(s, ctrl),
               const SizedBox(height: 16),
-              if (ctrl.config.mode != ClimateMode.off) _setpointCard(ctrl),
+              if (ctrl.config.mode != ClimateMode.off) _setpointCard(s, ctrl),
               const SizedBox(height: 16),
-              _lightCard(ctrl),
+              _lightCard(s, ctrl),
               const SizedBox(height: 16),
-              _glassHeaterCard(ctrl),
+              _glassHeaterCard(s, ctrl),
               const SizedBox(height: 16),
-              _detailsExpansion(ctrl),
+              _detailsExpansion(s, ctrl),
             ],
           );
         },
@@ -39,7 +41,7 @@ class ClimateScreen extends StatelessWidget {
 
   // ---------- status card ----------
 
-  Widget _statusCard(ClimateController ctrl) {
+  Widget _statusCard(Strings s, ClimateController ctrl) {
     final t = ctrl.temperatureC;
     final h = ctrl.humidityPercent;
     return Card(
@@ -70,25 +72,30 @@ class ClimateScreen extends StatelessWidget {
             ),
             const SizedBox(height: 4),
             Text(
-              ctrl.statusMessage,
+              ctrl.statusMessage(s),
               textAlign: TextAlign.center,
               style: const TextStyle(fontSize: 14, color: Colors.black87),
             ),
             const SizedBox(height: 12),
-            _phaseIndicator(ctrl.phase),
+            _phaseIndicator(s, ctrl.phase),
           ],
         ),
       ),
     );
   }
 
-  Widget _phaseIndicator(CompressorPhase phase) {
+  Widget _phaseIndicator(Strings s, CompressorPhase phase) {
     final (label, color, icon) = switch (phase) {
-      CompressorPhase.idle => ('Простой', Colors.grey, Icons.power_settings_new),
-      CompressorPhase.warmingFan => ('Продувка вентилятором', Colors.orange, Icons.air),
-      CompressorPhase.cooling => ('Компрессор работает', Colors.lightBlue, Icons.ac_unit),
-      CompressorPhase.resting => ('Принудительный отдых', Colors.purple, Icons.bedtime),
-      CompressorPhase.noProbe => ('Нет датчика температуры', Colors.red, Icons.error),
+      CompressorPhase.idle =>
+        (s.t('climate_phase_idle'), Colors.grey, Icons.power_settings_new),
+      CompressorPhase.warmingFan =>
+        (s.t('climate_phase_fan'), Colors.orange, Icons.air),
+      CompressorPhase.cooling =>
+        (s.t('climate_phase_cooling'), Colors.lightBlue, Icons.ac_unit),
+      CompressorPhase.resting =>
+        (s.t('climate_phase_rest'), Colors.purple, Icons.bedtime),
+      CompressorPhase.noProbe =>
+        (s.t('climate_phase_noprobe'), Colors.red, Icons.error),
     };
     return Row(
       mainAxisAlignment: MainAxisAlignment.center,
@@ -102,23 +109,25 @@ class ClimateScreen extends StatelessWidget {
 
   // ---------- mode + setpoint ----------
 
-  Widget _modeCard(ClimateController ctrl) {
+  Widget _modeCard(Strings s, ClimateController ctrl) {
     return Card(
       child: Padding(
         padding: const EdgeInsets.all(16),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            const Text('Режим',
-                style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600)),
+            Text(s.t('climate_mode_label'),
+                style: const TextStyle(
+                    fontSize: 16, fontWeight: FontWeight.w600)),
             const SizedBox(height: 8),
             SegmentedButton<ClimateMode>(
               segments: ClimateMode.values
-                  .map((m) => ButtonSegment(value: m, label: Text(m.label)))
+                  .map((m) =>
+                      ButtonSegment(value: m, label: Text(s.t(m.labelKey))))
                   .toList(),
               selected: {ctrl.config.mode},
-              onSelectionChanged: (s) =>
-                  ctrl.updateConfig(ctrl.config.copyWith(mode: s.first)),
+              onSelectionChanged: (sel) =>
+                  ctrl.updateConfig(ctrl.config.copyWith(mode: sel.first)),
             ),
           ],
         ),
@@ -126,7 +135,7 @@ class ClimateScreen extends StatelessWidget {
     );
   }
 
-  Widget _setpointCard(ClimateController ctrl) {
+  Widget _setpointCard(Strings s, ClimateController ctrl) {
     final cfg = ctrl.config;
     final isCooling = cfg.mode == ClimateMode.cooling;
     return Card(
@@ -138,7 +147,9 @@ class ClimateScreen extends StatelessWidget {
             Row(
               children: [
                 Text(
-                  isCooling ? 'Целевая температура (холод)' : 'Целевая температура (нагрев)',
+                  isCooling
+                      ? s.t('climate_setpoint_cool')
+                      : s.t('climate_setpoint_heat'),
                   style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
                 ),
                 const Spacer(),
@@ -167,11 +178,15 @@ class ClimateScreen extends StatelessWidget {
               );
             }),
             Text(
-              isCooling
-                  ? 'Компрессор включится при ${(cfg.setpointC + 4).toStringAsFixed(1)} °C, '
-                      'выключится при ${cfg.setpointC.toStringAsFixed(1)} °C.'
-                  : 'Нагрев включится при ${(cfg.setpointC - 4).toStringAsFixed(1)} °C, '
-                      'выключится при ${cfg.setpointC.toStringAsFixed(1)} °C.',
+              s
+                  .t(isCooling
+                      ? 'climate_setpoint_hint_cool'
+                      : 'climate_setpoint_hint_heat')
+                  .replaceAll(
+                      '%on%',
+                      (cfg.setpointC + (isCooling ? 4 : -4))
+                          .toStringAsFixed(1))
+                  .replaceAll('%off%', cfg.setpointC.toStringAsFixed(1)),
               style: const TextStyle(fontSize: 12, color: Colors.grey),
             ),
           ],
@@ -182,12 +197,13 @@ class ClimateScreen extends StatelessWidget {
 
   // ---------- light + curtain ----------
 
-  Widget _lightCard(ClimateController ctrl) {
+  Widget _lightCard(Strings s, ClimateController ctrl) {
     return Card(
       child: SwitchListTile(
-        title: const Text('Подсветка',
-            style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600)),
-        subtitle: const Text('LED-лента в витрине'),
+        title: Text(s.t('climate_ch_light'),
+            style: const TextStyle(
+                fontSize: 16, fontWeight: FontWeight.w600)),
+        subtitle: Text(s.t('climate_light_hint')),
         value: ctrl.config.lightAlwaysOn,
         onChanged: (v) =>
             ctrl.updateConfig(ctrl.config.copyWith(lightAlwaysOn: v)),
@@ -195,15 +211,15 @@ class ClimateScreen extends StatelessWidget {
     );
   }
 
-  Widget _glassHeaterCard(ClimateController ctrl) {
+  Widget _glassHeaterCard(Strings s, ClimateController ctrl) {
     return Card(
       child: SwitchListTile(
-        title: const Text('Подогрев стекла подключён',
-            style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600)),
-        subtitle: const Text(
-          'Выключите, если на этой машине реле есть, '
-          'а нагревателя физически нет',
-          style: TextStyle(fontSize: 12),
+        title: Text(s.t('climate_glass_title'),
+            style: const TextStyle(
+                fontSize: 16, fontWeight: FontWeight.w600)),
+        subtitle: Text(
+          s.t('climate_glass_hint'),
+          style: const TextStyle(fontSize: 12),
         ),
         value: ctrl.config.hasGlassHeater,
         onChanged: (v) =>
@@ -214,15 +230,16 @@ class ClimateScreen extends StatelessWidget {
 
   // ---------- details (collapsible) ----------
 
-  Widget _detailsExpansion(ClimateController ctrl) {
+  Widget _detailsExpansion(Strings s, ClimateController ctrl) {
     return Card(
       child: ExpansionTile(
         leading: const Icon(Icons.info_outline),
-        title: const Text('Подробнее',
-            style: TextStyle(fontSize: 14, fontWeight: FontWeight.w500)),
-        subtitle: const Text(
-          'Состояние реле, защита компрессора',
-          style: TextStyle(fontSize: 12),
+        title: Text(s.t('details_more'),
+            style: const TextStyle(
+                fontSize: 14, fontWeight: FontWeight.w500)),
+        subtitle: Text(
+          s.t('climate_details_hint'),
+          style: const TextStyle(fontSize: 12),
         ),
         children: [
           Padding(
@@ -230,24 +247,20 @@ class ClimateScreen extends StatelessWidget {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                _outputRow('Вентилятор', ctrl.fanOn),
-                _outputRow('Компрессор', ctrl.compressorOn),
-                _outputRow('Подогрев стекла', ctrl.glassHeaterOn),
-                _outputRow('Подсветка', ctrl.ledOn),
-                _outputRow('Нагревательный модуль', ctrl.heaterModuleOn),
+                _outputRow(s, DoChannel.fan, ctrl.fanOn),
+                _outputRow(s, DoChannel.compressor, ctrl.compressorOn),
+                _outputRow(s, DoChannel.glassHeater, ctrl.glassHeaterOn),
+                _outputRow(s, DoChannel.lightStrip, ctrl.ledOn),
+                _outputRow(s, DoChannel.heaterModule, ctrl.heaterModuleOn),
                 const Divider(height: 24),
-                const Text(
-                  'Защита компрессора (по заводскому алгоритму):',
-                  style: TextStyle(fontWeight: FontWeight.w600, fontSize: 12),
+                Text(
+                  s.t('climate_protect_title'),
+                  style: const TextStyle(
+                      fontWeight: FontWeight.w600, fontSize: 12),
                 ),
                 const SizedBox(height: 4),
-                const _BulletText('Гистерезис ±4°C — без частых пусков-остановок'),
-                const _BulletText(
-                    'Продувка вентилятором 5 мин при первом запуске, потом 2 мин'),
-                const _BulletText('Продувка перед нагревателем 2 мин'),
-                const _BulletText('При >60 мин непрерывной работы — отдых 5 мин'),
-                const _BulletText('При потере датчика — компрессор сразу ВЫКЛ'),
-                const _BulletText('Компрессор не стартует, если вентилятор выключен'),
+                for (var i = 1; i <= 6; i++)
+                  _BulletText(s.t('climate_protect_$i')),
               ],
             ),
           ),
@@ -256,7 +269,7 @@ class ClimateScreen extends StatelessWidget {
     );
   }
 
-  Widget _outputRow(String label, bool on) {
+  Widget _outputRow(Strings s, DoChannel channel, bool on) {
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 4),
       child: Row(
@@ -270,9 +283,9 @@ class ClimateScreen extends StatelessWidget {
             ),
           ),
           const SizedBox(width: 12),
-          Expanded(child: Text(label)),
+          Expanded(child: Text(s.t(channel.labelKey))),
           Text(
-            on ? 'ВКЛ' : 'выкл',
+            on ? s.t('climate_on') : s.t('climate_off'),
             style: TextStyle(
               color: on ? Colors.green.shade700 : Colors.grey,
               fontWeight: FontWeight.w600,

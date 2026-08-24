@@ -6,6 +6,7 @@ import 'package:flutter/foundation.dart';
 import '../board/board_client.dart';
 import '../models/climate_config.dart';
 import 'device_storage.dart';
+import 'strings.dart';
 
 void _clog(String msg) {
   developer.log(msg, name: 'Climate');
@@ -132,8 +133,18 @@ class ClimateController extends ChangeNotifier {
   DateTime? _compressorStartedAt;
   DateTime? _restStartedAt;
 
-  String _statusMessage = 'Ожидание';
-  String get statusMessage => _statusMessage;
+  // What the loop is doing, held as a `Strings` key plus the numbers to
+  // substitute rather than a finished sentence. A sentence built here would
+  // freeze in whatever language was active on the tick that produced it, and
+  // a controller has no business knowing the operator's language at all.
+  String _statusKey = 'climate_st_waiting';
+  Map<String, String> _statusArgs = const {};
+
+  String statusMessage(Strings s) {
+    var out = s.t(_statusKey);
+    _statusArgs.forEach((k, v) => out = out.replaceAll('%$k%', v));
+    return out;
+  }
 
   Timer? _tempTimer;
   Timer? _humidityTimer;
@@ -232,7 +243,7 @@ class ClimateController extends ChangeNotifier {
     _cancelTimers();
     await _allOff();
     _setPhase(CompressorPhase.idle);
-    _setMessage('Климат-контроль остановлен');
+    _setMessage('climate_st_stopped');
     notifyListeners();
   }
 
@@ -279,7 +290,7 @@ class ClimateController extends ChangeNotifier {
       if (_warmupEndsAt == null) return;
       final left = _warmupEndsAt!.difference(DateTime.now()).inSeconds;
       if (left <= 0) return;
-      _setMessage('Продувка перед компрессором: ещё $left с');
+      _setMessage('climate_st_prefan', {'n': '$left'});
       notifyListeners();
     });
   }
@@ -300,14 +311,14 @@ class ClimateController extends ChangeNotifier {
 
     if (!board.isConnected) {
       _clog('evaluate: board NOT connected — skipping');
-      _setMessage('Нет связи с платой');
+      _setMessage('climate_st_no_board');
       return;
     }
 
     if (_config.mode == ClimateMode.off) {
       await _allClimateOff();
       _setPhase(CompressorPhase.idle);
-      _setMessage('Климат отключён');
+      _setMessage('climate_st_off');
       return;
     }
 
@@ -315,7 +326,7 @@ class ClimateController extends ChangeNotifier {
       _clog('evaluate: no temperature reading');
       await _allClimateOff();
       _setPhase(CompressorPhase.noProbe);
-      _setMessage('Нет данных от датчика температуры');
+      _setMessage('climate_st_no_probe');
       return;
     }
 
@@ -340,8 +351,8 @@ class ClimateController extends ChangeNotifier {
           DateTime.now().difference(_restStartedAt!).inMinutes;
       if (restElapsed < _forcedRestMin) {
         await _allClimateOff();
-        _setMessage('Принудительный отдых: ещё '
-            '${_forcedRestMin - restElapsed} мин');
+        _setMessage('climate_st_forced_rest',
+            {'n': '${_forcedRestMin - restElapsed}'});
         return;
       }
       // Rest complete — re-arm.
@@ -359,8 +370,10 @@ class ClimateController extends ChangeNotifier {
       // Stop everything per factory M102_finish.
       await _allClimateOff();
       _setPhase(CompressorPhase.idle);
-      _setMessage('В норме: ${temp.toStringAsFixed(1)}°C '
-          '(уставка ${setpoint.toStringAsFixed(1)}°C)');
+      _setMessage('climate_st_normal', {
+        't': temp.toStringAsFixed(1),
+        'set': setpoint.toStringAsFixed(1),
+      });
       _spinupTicks = 0;
       _compressorStartedAt = null;
       return;
@@ -368,7 +381,8 @@ class ClimateController extends ChangeNotifier {
 
     if (!tooHot && _phase == CompressorPhase.idle) {
       // Inside hysteresis band, no cycle running — do nothing.
-      _setMessage('В пределах гистерезиса: ${temp.toStringAsFixed(1)}°C');
+      _setMessage(
+          'climate_st_hysteresis', {'t': temp.toStringAsFixed(1)});
       return;
     }
 
@@ -391,7 +405,7 @@ class ClimateController extends ChangeNotifier {
       _setPhase(CompressorPhase.warmingFan);
       _warmupEndsAt = DateTime.now()
           .add(Duration(seconds: spinupTarget * _tempPollSec));
-      _setMessage('Циркуляция воздуха перед компрессором');
+      _setMessage('climate_st_circulating');
       return;
     }
     if (!_compressorOn) {
@@ -411,13 +425,15 @@ class ClimateController extends ChangeNotifier {
         }
         _compressorStartedAt = DateTime.now();
         _setPhase(CompressorPhase.cooling);
-        _setMessage('Охлаждение: ${temp.toStringAsFixed(1)}°C → '
-            '${setpoint.toStringAsFixed(1)}°C');
+        _setMessage('climate_st_cooling', {
+          't': temp.toStringAsFixed(1),
+          'set': setpoint.toStringAsFixed(1),
+        });
       } else {
         final ticksLeft = spinupTarget - _spinupTicks;
         final secLeft = ticksLeft * _tempPollSec;
         _setPhase(CompressorPhase.warmingFan);
-        _setMessage('Циркуляция перед компрессором: ещё $secLeft с');
+        _setMessage('climate_st_prefan', {'n': '$secLeft'});
       }
     } else {
       // Compressor already running — check forced-rest threshold.
@@ -427,11 +443,15 @@ class ClimateController extends ChangeNotifier {
         await _allClimateOff();
         _restStartedAt = DateTime.now();
         _setPhase(CompressorPhase.resting);
-        _setMessage('Компрессор работал $workedMin мин — '
-            'принудительный отдых $_forcedRestMin мин');
+        _setMessage('climate_st_rest_after', {
+          'n': '$workedMin',
+          'rest': '$_forcedRestMin',
+        });
       } else {
-        _setMessage('Охлаждение: ${temp.toStringAsFixed(1)}°C → '
-            '${setpoint.toStringAsFixed(1)}°C');
+        _setMessage('climate_st_cooling', {
+          't': temp.toStringAsFixed(1),
+          'set': setpoint.toStringAsFixed(1),
+        });
       }
     }
   }
@@ -443,13 +463,15 @@ class ClimateController extends ChangeNotifier {
     if (warmEnough) {
       await _allClimateOff();
       _setPhase(CompressorPhase.idle);
-      _setMessage('Нагрев: норма ${temp.toStringAsFixed(1)}°C');
+      _setMessage(
+          'climate_st_heat_normal', {'t': temp.toStringAsFixed(1)});
       _spinupTicks = 0;
       return;
     }
 
     if (!tooCold && _phase == CompressorPhase.idle) {
-      _setMessage('В пределах гистерезиса: ${temp.toStringAsFixed(1)}°C');
+      _setMessage(
+          'climate_st_hysteresis', {'t': temp.toStringAsFixed(1)});
       return;
     }
 
@@ -463,7 +485,7 @@ class ClimateController extends ChangeNotifier {
 
     if (!_fanOn) {
       await _setDo(DoChannel.fan, true);
-      _setMessage('Запуск нагрева: вентилятор включён');
+      _setMessage('climate_st_heat_start');
       return;
     }
 
@@ -471,16 +493,20 @@ class ClimateController extends ChangeNotifier {
       _spinupTicks++;
       if (_spinupTicks > _heatingSpinupTicks) {
         await _setDo(DoChannel.heaterModule, true);
-        _setMessage('Нагрев: ${temp.toStringAsFixed(1)}°C → '
-            '${setpoint.toStringAsFixed(1)}°C');
+        _setMessage('climate_st_heating', {
+          't': temp.toStringAsFixed(1),
+          'set': setpoint.toStringAsFixed(1),
+        });
       } else {
         final ticksLeft = _heatingSpinupTicks - _spinupTicks;
-        _setMessage('Циркуляция перед нагревателем: '
-            'ещё ${ticksLeft * _tempPollSec} с');
+        _setMessage('climate_st_preheat',
+            {'n': '${ticksLeft * _tempPollSec}'});
       }
     } else {
-      _setMessage('Нагрев: ${temp.toStringAsFixed(1)}°C → '
-          '${setpoint.toStringAsFixed(1)}°C');
+      _setMessage('climate_st_heating', {
+        't': temp.toStringAsFixed(1),
+        'set': setpoint.toStringAsFixed(1),
+      });
     }
   }
 
@@ -554,8 +580,9 @@ class ClimateController extends ChangeNotifier {
     _phase = next;
   }
 
-  void _setMessage(String s) {
-    if (_statusMessage != s) _statusMessage = s;
+  void _setMessage(String key, [Map<String, String> args = const {}]) {
+    _statusKey = key;
+    _statusArgs = args;
   }
 
   @override

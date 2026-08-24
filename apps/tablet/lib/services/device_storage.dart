@@ -392,11 +392,13 @@ class DeviceStorage extends ChangeNotifier {
   bool verifyServicePin(String entered) =>
       servicePinIsSet && entered.trim() == _servicePin;
 
-  /// Returns null if [pin] is acceptable, or a human-readable reason why not.
+  /// Returns null if [pin] is acceptable, or a `Strings` key explaining why
+  /// not — the caller renders it, since storage has no business picking the
+  /// operator's language.
   static String? validatePin(String pin) {
     final p = pin.trim();
-    if (p.length < minPinLength) return 'Минимум $minPinLength цифры';
-    if (forbiddenPins.contains(p)) return 'Слишком простой PIN';
+    if (p.length < minPinLength) return 'pin_min_digits';
+    if (forbiddenPins.contains(p)) return 'pin_too_simple';
     return null;
   }
 

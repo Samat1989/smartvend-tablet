@@ -137,8 +137,8 @@ class _ProductEditScreenState extends State<ProductEditScreen> {
     // with nothing picked the form fails on a field the operator cannot see.
     // Checking here keeps the message about the thing that is actually wrong.
     if (_catalogProductId == null) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-        content: Text('Сначала выберите товар из каталога'),
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text(context.read<Strings>().t('pe_pick_catalog_first')),
         backgroundColor: Colors.redAccent,
       ));
       return;
@@ -165,12 +165,17 @@ class _ProductEditScreenState extends State<ProductEditScreen> {
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: const Text('Сохранить?'),
+        title: Text(context.read<Strings>().t('pe_save_q')),
         content: Column(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text('Слот ${_resolveSlotLabel()} · M${widget.motorId}',
+            Text(
+                context
+                    .read<Strings>()
+                    .t('pe_slot_line')
+                    .replaceAll('%slot%', _resolveSlotLabel())
+                    .replaceAll('%motor%', '${widget.motorId}'),
                 style: const TextStyle(
                     fontSize: 12,
                     fontWeight: FontWeight.w700,
@@ -180,18 +185,22 @@ class _ProductEditScreenState extends State<ProductEditScreen> {
                 style: const TextStyle(
                     fontSize: 16, fontWeight: FontWeight.w800)),
             const SizedBox(height: 6),
-            Text('Цена: $price ${context.read<Strings>().currency}'),
-            Text('Остаток: $stock шт'),
+            Text('${context.read<Strings>().t('field_price')}: '
+                '$price ${context.read<Strings>().currency}'),
+            Text(context
+                .read<Strings>()
+                .t('pe_stock_line')
+                .replaceAll('%n%', '$stock')),
           ],
         ),
         actions: [
           TextButton(
             onPressed: () => Navigator.of(ctx).pop(false),
-            child: const Text('Отмена'),
+            child: Text(context.read<Strings>().t('btn_cancel')),
           ),
           FilledButton(
             onPressed: () => Navigator.of(ctx).pop(true),
-            child: const Text('Сохранить'),
+            child: Text(context.read<Strings>().t('btn_save')),
           ),
         ],
       ),
@@ -391,18 +400,25 @@ class _ProductEditScreenState extends State<ProductEditScreen> {
           size: 40,
         ),
         title: Text(failedLabels.isEmpty
-            ? 'Применено к ${successLabels.length} слотам'
-            : 'Частично применено'),
+            ? context
+                .read<Strings>()
+                .t('pe_applied_to_n')
+                .replaceAll('%n%', '${successLabels.length}')
+            : context.read<Strings>().t('pe_applied_partial')),
         content: Column(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text('Товар: ${_nameCtrl.text.trim()}',
+            Text(
+                context
+                    .read<Strings>()
+                    .t('pe_product_line')
+                    .replaceAll('%name%', _nameCtrl.text.trim()),
                 style: const TextStyle(fontWeight: FontWeight.w700)),
             const SizedBox(height: 10),
             if (successLabels.isNotEmpty) ...[
-              const Text('✓ Сохранено в:',
-                  style: TextStyle(
+              Text(context.read<Strings>().t('pe_saved_to'),
+                  style: const TextStyle(
                       fontSize: 12,
                       fontWeight: FontWeight.w800,
                       color: Colors.green)),
@@ -414,8 +430,8 @@ class _ProductEditScreenState extends State<ProductEditScreen> {
               const SizedBox(height: 12),
             ],
             if (failedLabels.isNotEmpty) ...[
-              const Text('✕ Не сохранилось:',
-                  style: TextStyle(
+              Text(context.read<Strings>().t('pe_not_saved'),
+                  style: const TextStyle(
                       fontSize: 12,
                       fontWeight: FontWeight.w800,
                       color: Colors.red)),
@@ -499,7 +515,7 @@ class _ProductEditScreenState extends State<ProductEditScreen> {
                     : null,
               ),
             ),
-            _sectionLabel('ВИТРИНА'),
+            _sectionLabel(s.t('pe_storefront')),
             Row(
               children: [
                 Expanded(
@@ -555,7 +571,7 @@ class _ProductEditScreenState extends State<ProductEditScreen> {
             // motor wiring stay per-slot (those live in Motor Setup).
             OutlinedButton.icon(
               icon: const Icon(Icons.copy_all_outlined, size: 18),
-              label: const Text('Применить к другим слотам'),
+              label: Text(s.t('pe_apply_other')),
               style: OutlinedButton.styleFrom(
                 padding: const EdgeInsets.symmetric(vertical: 12),
               ),
@@ -564,10 +580,9 @@ class _ProductEditScreenState extends State<ProductEditScreen> {
                   : _openBulkApply,
             ),
             const SizedBox(height: 8),
-            const Text(
-              'Тип мотора и режим выдачи задаются в разделе '
-              '«Настройка моторов».',
-              style: TextStyle(fontSize: 11, color: Colors.black54),
+            Text(
+              s.t('pe_motor_hint'),
+              style: const TextStyle(fontSize: 11, color: Colors.black54),
             ),
             const SizedBox(height: 24),
             FilledButton.icon(
@@ -600,6 +615,7 @@ class _ProductEditScreenState extends State<ProductEditScreen> {
   ///               this state will create a draft `products` row
   ///               (admin can promote it later).
   Widget _catalogCard() {
+    final s = context.watch<Strings>();
     final linked = _catalogProductId != null;
     if (!linked) {
       return Material(
@@ -619,7 +635,7 @@ class _ProductEditScreenState extends State<ProductEditScreen> {
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Text(
-                        'Выбрать из каталога',
+                        s.t('pe_pick_catalog'),
                         style: TextStyle(
                           fontWeight: FontWeight.w700,
                           color: Colors.indigo.shade900,
@@ -627,7 +643,7 @@ class _ProductEditScreenState extends State<ProductEditScreen> {
                       ),
                       const SizedBox(height: 2),
                       Text(
-                        'Подтянуть фото и название из готового товара',
+                        s.t('pe_pick_catalog_hint'),
                         style: TextStyle(
                           fontSize: 12,
                           color: Colors.indigo.shade400,
@@ -688,7 +704,7 @@ class _ProductEditScreenState extends State<ProductEditScreen> {
                         color: Colors.green.shade700, size: 14),
                     const SizedBox(width: 4),
                     Text(
-                      'Из каталога',
+                      s.t('pe_from_catalog'),
                       style: TextStyle(
                         fontSize: 11,
                         fontWeight: FontWeight.w700,
@@ -710,12 +726,12 @@ class _ProductEditScreenState extends State<ProductEditScreen> {
             ),
           ),
           IconButton(
-            tooltip: 'Сменить',
+            tooltip: s.t('pe_change'),
             icon: const Icon(Icons.swap_horiz),
             onPressed: _openCatalogPicker,
           ),
           IconButton(
-            tooltip: 'Отвязать',
+            tooltip: s.t('pe_unlink'),
             icon: const Icon(Icons.link_off, color: Colors.redAccent),
             onPressed: _clearCatalogLink,
           ),
@@ -829,6 +845,7 @@ class _CatalogPickerSheetState extends State<_CatalogPickerSheet> {
 
   @override
   Widget build(BuildContext context) {
+    final s = context.watch<Strings>();
     return DraggableScrollableSheet(
       expand: false,
       initialChildSize: 0.85,
@@ -850,10 +867,10 @@ class _CatalogPickerSheetState extends State<_CatalogPickerSheet> {
               padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
               child: Row(
                 children: [
-                  const Expanded(
+                  Expanded(
                     child: Text(
-                      'Каталог товаров',
-                      style: TextStyle(
+                      s.t('pe_catalog_title'),
+                      style: const TextStyle(
                           fontSize: 18, fontWeight: FontWeight.w800),
                     ),
                   ),
@@ -872,7 +889,7 @@ class _CatalogPickerSheetState extends State<_CatalogPickerSheet> {
                 controller: _searchCtrl,
                 decoration: InputDecoration(
                   prefixIcon: const Icon(Icons.search),
-                  hintText: 'Поиск',
+                  hintText: s.t('pe_search'),
                   filled: true,
                   fillColor: Colors.grey.shade100,
                   border: OutlineInputBorder(
@@ -891,6 +908,7 @@ class _CatalogPickerSheetState extends State<_CatalogPickerSheet> {
   }
 
   Widget _buildBody(ScrollController scrollCtrl) {
+    final s = context.watch<Strings>();
     if (_error != null) {
       return Center(
         child: Padding(
@@ -913,7 +931,7 @@ class _CatalogPickerSheetState extends State<_CatalogPickerSheet> {
                   });
                   _load();
                 },
-                child: const Text('Повторить'),
+                child: Text(s.t('try_again')),
               ),
             ],
           ),
@@ -929,9 +947,9 @@ class _CatalogPickerSheetState extends State<_CatalogPickerSheet> {
         child: Padding(
           padding: const EdgeInsets.all(24),
           child: Text(
-            _searchCtrl.text.isEmpty
-                ? 'Каталог пуст. Добавьте товары в admin-панели.'
-                : 'Ничего не найдено',
+            s.t(_searchCtrl.text.isEmpty
+                ? 'pe_catalog_empty'
+                : 'pe_nothing_found'),
             textAlign: TextAlign.center,
             style: TextStyle(color: Colors.grey.shade600),
           ),
@@ -958,6 +976,7 @@ class _CatalogTile extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final s = context.watch<Strings>();
     return ListTile(
       contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
       leading: ClipRRect(
@@ -978,7 +997,8 @@ class _CatalogTile extends StatelessWidget {
         style: const TextStyle(fontWeight: FontWeight.w600),
       ),
       subtitle: product.volumeMl != null
-          ? Text('${product.volumeMl} мл',
+          ? Text(
+              s.t('pe_ml').replaceAll('%n%', '${product.volumeMl}'),
               style: TextStyle(color: Colors.grey.shade600, fontSize: 12))
           : null,
       trailing: const Icon(Icons.chevron_right),
@@ -1055,6 +1075,7 @@ class _BulkApplySheetState extends State<_BulkApplySheet> {
 
   @override
   Widget build(BuildContext context) {
+    final s = context.watch<Strings>();
     return DraggableScrollableSheet(
       expand: false,
       initialChildSize: 0.85,
@@ -1077,13 +1098,14 @@ class _BulkApplySheetState extends State<_BulkApplySheet> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  const Text('Применить к другим слотам',
-                      style: TextStyle(
+                  Text(s.t('pe_apply_other'),
+                      style: const TextStyle(
                           fontSize: 18, fontWeight: FontWeight.w800)),
                   const SizedBox(height: 4),
                   Text(
-                    'Скопирует «${widget.currentName}» на выбранные '
-                    'слоты с привязкой к каталогу.',
+                    s
+                        .t('pe_copy_hint')
+                        .replaceAll('%name%', widget.currentName),
                     style: const TextStyle(
                         fontSize: 12, color: Colors.black54),
                   ),
@@ -1097,8 +1119,8 @@ class _BulkApplySheetState extends State<_BulkApplySheet> {
                   Expanded(
                     child: FilterChip(
                       selected: _applyPrice,
-                      label: Text(
-                          'Цена ${widget.currentPrice} ${context.read<Strings>().currency}'),
+                      label: Text('${s.t('field_price')} '
+                          '${widget.currentPrice} ${s.currency}'),
                       onSelected: (v) => setState(() => _applyPrice = v),
                     ),
                   ),
@@ -1106,7 +1128,9 @@ class _BulkApplySheetState extends State<_BulkApplySheet> {
                   Expanded(
                     child: FilterChip(
                       selected: _applyStock,
-                      label: Text('Остаток ${widget.currentStock}'),
+                      label: Text(s
+                          .t('pe_stock_chip')
+                          .replaceAll('%n%', '${widget.currentStock}')),
                       onSelected: (v) => setState(() => _applyStock = v),
                     ),
                   ),
@@ -1118,7 +1142,9 @@ class _BulkApplySheetState extends State<_BulkApplySheet> {
               child: Row(
                 children: [
                   Text(
-                    'Выбрано: ${_selected.length}',
+                    s
+                        .t('pe_selected_n')
+                        .replaceAll('%n%', '${_selected.length}'),
                     style: const TextStyle(
                         fontWeight: FontWeight.w700, fontSize: 13),
                   ),
@@ -1132,9 +1158,9 @@ class _BulkApplySheetState extends State<_BulkApplySheet> {
                                 ..addAll(widget.candidates.map((t) => t.key));
                             }),
                     child: Text(
-                      _selected.length == widget.candidates.length
-                          ? 'Снять'
-                          : 'Все',
+                      s.t(_selected.length == widget.candidates.length
+                          ? 'pe_clear_sel'
+                          : 'pe_select_all'),
                     ),
                   ),
                 ],
@@ -1190,7 +1216,7 @@ class _BulkApplySheetState extends State<_BulkApplySheet> {
                         Expanded(
                           child: Text(
                             target.isEmpty
-                                ? 'Слот пуст'
+                                ? s.t('pe_slot_empty')
                                 : (p?.name ?? '—'),
                             maxLines: 1,
                             overflow: TextOverflow.ellipsis,
@@ -1212,7 +1238,7 @@ class _BulkApplySheetState extends State<_BulkApplySheet> {
                           ? 'M${target.slot.primaryMotorId} · '
                               '${target.shelfLabel}'
                           : 'M${target.slot.primaryMotorId} · '
-                              '${p!.priceTenge} ${context.read<Strings>().currency} · ×${p.stock}',
+                              '${p!.priceTenge} ${s.currency} · ×${p.stock}',
                       style: const TextStyle(fontSize: 11),
                     ),
                   );
@@ -1227,7 +1253,7 @@ class _BulkApplySheetState extends State<_BulkApplySheet> {
                     Expanded(
                       child: OutlinedButton(
                         onPressed: () => Navigator.of(context).pop(),
-                        child: const Text('Отмена'),
+                        child: Text(s.t('btn_cancel')),
                       ),
                     ),
                     const SizedBox(width: 12),
@@ -1235,7 +1261,9 @@ class _BulkApplySheetState extends State<_BulkApplySheet> {
                       flex: 2,
                       child: FilledButton.icon(
                         icon: const Icon(Icons.done_all, size: 18),
-                        label: Text('Применить (${_selected.length})'),
+                        label: Text(s
+                            .t('pe_apply_n')
+                            .replaceAll('%n%', '${_selected.length}')),
                         onPressed: _selected.isEmpty ||
                                 (!_applyPrice &&
                                     !_applyStock &&

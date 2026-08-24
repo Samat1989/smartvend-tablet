@@ -40,7 +40,10 @@ class _ServicePinScreenState extends State<ServicePinScreen> {
     final pin = _ctrl.text.trim();
     final reason = DeviceStorage.validatePin(pin);
     if (reason != null) {
-      setState(() => _error = reason);
+      setState(() => _error = context
+          .read<Strings>()
+          .t(reason)
+          .replaceAll('%n%', '${DeviceStorage.minPinLength}'));
       return;
     }
     if (pin != _confirmCtrl.text.trim()) {

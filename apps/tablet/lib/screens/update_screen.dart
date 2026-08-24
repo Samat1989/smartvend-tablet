@@ -3,8 +3,10 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:package_info_plus/package_info_plus.dart';
+import 'package:provider/provider.dart';
 
 import '../services/kiosk_bridge.dart';
+import '../services/strings.dart';
 import '../services/update_service.dart';
 
 /// Service-mode update tile destination.
@@ -65,38 +67,39 @@ class _UpdateScreenState extends State<UpdateScreen> {
     super.dispose();
   }
 
-  void _onInstallStatus(InstallStatus s) {
+  void _onInstallStatus(InstallStatus st) {
     if (!mounted) return;
-    if (s.isPendingUserAction) {
-      setState(() =>
-          _installHint = 'Подтвердите установку в системном диалоге');
+    final str = context.read<Strings>();
+    if (st.isPendingUserAction) {
+      setState(() => _installHint = str.t('upd_confirm_system_dialog'));
       return;
     }
-    if (s.isFailure) {
+    if (st.isFailure) {
       _stallTimer?.cancel();
       setState(() {
         _downloading = false;
         _installHint = null;
-        _error = _installFailureText(s);
+        _error = _installFailureText(str, st);
       });
     }
   }
 
-  static String _installFailureText(InstallStatus s) {
-    final base = switch (s.status) {
-      2 => 'Установка заблокирована системой',
-      3 => 'Установка отменена',
-      4 => 'Система отклонила APK',
-      5 => 'Конфликт с установленной версией (другая подпись?) — '
-          'переустановите приложение вручную',
-      6 => 'Недостаточно места на планшете',
-      7 => 'APK несовместим с этим устройством',
-      100 => 'Не удалось показать системный диалог установки',
-      _ => 'Установка не удалась',
-    };
-    return s.message.isEmpty
-        ? '$base (код ${s.status})'
-        : '$base (код ${s.status}): ${s.message}';
+  static String _installFailureText(Strings str, InstallStatus st) {
+    final base = str.t(switch (st.status) {
+      2 => 'upd_err_blocked',
+      3 => 'upd_err_aborted',
+      4 => 'upd_err_invalid',
+      5 => 'upd_err_conflict',
+      6 => 'upd_err_storage',
+      7 => 'upd_err_incompatible',
+      100 => 'upd_err_no_dialog',
+      _ => 'upd_err_generic',
+    });
+    return str
+        .t(st.message.isEmpty ? 'upd_err_code' : 'upd_err_code_msg')
+        .replaceAll('%base%', base)
+        .replaceAll('%code%', '${st.status}')
+        .replaceAll('%msg%', st.message);
   }
 
   Future<void> _check() async {
@@ -112,7 +115,7 @@ class _UpdateScreenState extends State<UpdateScreen> {
         _checking = false;
         if (info == null) {
           // No release with the right asset.
-          _error = 'Релизов с APK не найдено';
+          _error = context.read<Strings>().t('upd_no_releases');
         } else if (!info.isNewer) {
           _update = info; // shown as "up-to-date"
         } else {
@@ -158,9 +161,7 @@ class _UpdateScreenState extends State<UpdateScreen> {
         setState(() {
           _downloading = false;
           _installHint = null;
-          _error = 'Установка не началась. Проверьте: Настройки → '
-              'Приложения → MicroVend → «Установка неизвестных '
-              'приложений» (разрешить), затем повторите.';
+          _error = context.read<Strings>().t('upd_stalled');
         });
       });
     } catch (e) {
@@ -171,10 +172,7 @@ class _UpdateScreenState extends State<UpdateScreen> {
         _downloading = false;
         _installHint = null;
         _error = noPermission
-            ? 'Нет разрешения «Установка неизвестных приложений». '
-                'Система открыла нужную настройку — включите '
-                'переключатель для MicroVend, вернитесь и нажмите '
-                '«Скачать и установить» ещё раз.'
+            ? context.read<Strings>().t('upd_no_permission')
             : e.toString();
       });
     }
@@ -229,32 +227,35 @@ class _UpdateScreenState extends State<UpdateScreen> {
       await KioskBridge.openApk(path);
     } catch (e) {
       if (!mounted) return;
-      setState(() => _error = 'Не удалось открыть установщик: $e\n'
-          'Откройте файл вручную через файловый менеджер:\n$path');
+      final str = context.read<Strings>();
+      setState(() => _error =
+          '${str.t('upd_open_failed').replaceAll('%err%', '$e')}\n'
+          '${str.t('upd_open_manually')}\n$path');
     }
   }
 
   @override
   Widget build(BuildContext context) {
+    final s = context.watch<Strings>();
     return Scaffold(
-      appBar: AppBar(title: const Text('Обновление')),
+      appBar: AppBar(title: Text(s.t('service_update'))),
       body: ListView(
         padding: const EdgeInsets.all(16),
         children: [
-          _versionCard(),
+          _versionCard(s),
           const SizedBox(height: 16),
           if (_error != null) _errorCard(),
           if (_installHint != null) _installHintCard(),
-          if (_manualApkPath != null) _manualApkCard(),
-          if (_update != null) _updateCard(),
-          if (_downloading) _progressCard(),
-          if (_update == null && !_checking) _checkButton(),
+          if (_manualApkPath != null) _manualApkCard(s),
+          if (_update != null) _updateCard(s),
+          if (_downloading) _progressCard(s),
+          if (_update == null && !_checking) _checkButton(s),
         ],
       ),
     );
   }
 
-  Widget _versionCard() {
+  Widget _versionCard(Strings s) {
     final info = _info;
     return Card(
       child: Padding(
@@ -267,9 +268,9 @@ class _UpdateScreenState extends State<UpdateScreen> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  const Text(
-                    'Текущая версия',
-                    style: TextStyle(
+                  Text(
+                    s.t('upd_current_version'),
+                    style: const TextStyle(
                       fontSize: 11,
                       fontWeight: FontWeight.bold,
                       letterSpacing: 1.0,
@@ -304,7 +305,7 @@ class _UpdateScreenState extends State<UpdateScreen> {
     );
   }
 
-  Widget _checkButton() {
+  Widget _checkButton(Strings s) {
     return FilledButton.icon(
       icon: _checking
           ? const SizedBox(
@@ -316,7 +317,7 @@ class _UpdateScreenState extends State<UpdateScreen> {
               ),
             )
           : const Icon(Icons.cloud_sync),
-      label: Text(_checking ? 'Проверяем…' : 'Проверить обновление'),
+      label: Text(s.t(_checking ? 'upd_checking' : 'upd_check')),
       style: FilledButton.styleFrom(
         padding: const EdgeInsets.symmetric(vertical: 16),
       ),
@@ -324,7 +325,7 @@ class _UpdateScreenState extends State<UpdateScreen> {
     );
   }
 
-  Widget _updateCard() {
+  Widget _updateCard(Strings s) {
     final info = _update!;
     final isNewer = info.isNewer;
     return Card(
@@ -342,7 +343,7 @@ class _UpdateScreenState extends State<UpdateScreen> {
                 ),
                 const SizedBox(width: 8),
                 Text(
-                  isNewer ? 'Доступна новая версия' : 'У вас актуальная версия',
+                  s.t(isNewer ? 'upd_available' : 'upd_up_to_date'),
                   style: TextStyle(
                     fontWeight: FontWeight.w800,
                     color: isNewer ? Colors.green.shade900 : Colors.black87,
@@ -357,15 +358,18 @@ class _UpdateScreenState extends State<UpdateScreen> {
                   fontSize: 20, fontWeight: FontWeight.w900),
             ),
             Text(
-              'Размер: ${info.assetSizeHuman}  ·  тег ${info.tagName}',
+              s
+                  .t('upd_size_tag')
+                  .replaceAll('%size%', info.assetSizeHuman)
+                  .replaceAll('%tag%', info.tagName),
               style: const TextStyle(
                   fontSize: 12, color: Colors.black54),
             ),
             if (info.body.isNotEmpty) ...[
               const SizedBox(height: 12),
-              const Text(
-                'Изменения',
-                style: TextStyle(
+              Text(
+                s.t('upd_changes'),
+                style: const TextStyle(
                     fontSize: 11,
                     fontWeight: FontWeight.bold,
                     letterSpacing: 1.0,
@@ -390,7 +394,7 @@ class _UpdateScreenState extends State<UpdateScreen> {
             if (isNewer) ...[
               FilledButton.icon(
                 icon: const Icon(Icons.download),
-                label: const Text('Скачать и установить'),
+                label: Text(s.t('upd_download_install')),
                 style: FilledButton.styleFrom(
                   padding: const EdgeInsets.symmetric(vertical: 16),
                 ),
@@ -402,7 +406,7 @@ class _UpdateScreenState extends State<UpdateScreen> {
               // and go through the standard system installer instead.
               OutlinedButton.icon(
                 icon: const Icon(Icons.save_alt),
-                label: const Text('Скачать для ручной установки'),
+                label: Text(s.t('upd_download_manual')),
                 style: OutlinedButton.styleFrom(
                   padding: const EdgeInsets.symmetric(vertical: 14),
                 ),
@@ -411,7 +415,7 @@ class _UpdateScreenState extends State<UpdateScreen> {
             ] else
               OutlinedButton.icon(
                 icon: const Icon(Icons.refresh),
-                label: const Text('Проверить ещё раз'),
+                label: Text(s.t('upd_check_again')),
                 onPressed: () {
                   setState(() => _update = null);
                   _check();
@@ -423,7 +427,7 @@ class _UpdateScreenState extends State<UpdateScreen> {
     );
   }
 
-  Widget _progressCard() {
+  Widget _progressCard(Strings s) {
     final pct = _total > 0 ? (_received / _total) : null;
     return Card(
       child: Padding(
@@ -431,22 +435,24 @@ class _UpdateScreenState extends State<UpdateScreen> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            const Text('Загрузка…',
-                style: TextStyle(fontWeight: FontWeight.w800)),
+            Text(s.t('upd_downloading'),
+                style: const TextStyle(fontWeight: FontWeight.w800)),
             const SizedBox(height: 8),
             LinearProgressIndicator(value: pct),
             const SizedBox(height: 6),
             Text(
               _total > 0
                   ? '${(_received / 1024 / 1024).toStringAsFixed(1)} / '
-                      '${(_total / 1024 / 1024).toStringAsFixed(1)} МБ'
-                  : '${(_received / 1024 / 1024).toStringAsFixed(1)} МБ',
+                      '${(_total / 1024 / 1024).toStringAsFixed(1)} '
+                      '${s.t('upd_mb')}'
+                  : '${(_received / 1024 / 1024).toStringAsFixed(1)} '
+                      '${s.t('upd_mb')}',
               style: const TextStyle(fontSize: 11, color: Colors.black54),
             ),
             const SizedBox(height: 6),
-            const Text(
-              'Не выключайте планшет — приложение перезапустится автоматически.',
-              style: TextStyle(fontSize: 11, color: Colors.black54),
+            Text(
+              s.t('upd_dont_power_off'),
+              style: const TextStyle(fontSize: 11, color: Colors.black54),
             ),
           ],
         ),
@@ -454,7 +460,7 @@ class _UpdateScreenState extends State<UpdateScreen> {
     );
   }
 
-  Widget _manualApkCard() {
+  Widget _manualApkCard(Strings s) {
     return Card(
       color: Colors.green.shade50,
       child: Padding(
@@ -466,9 +472,9 @@ class _UpdateScreenState extends State<UpdateScreen> {
               children: [
                 Icon(Icons.file_present, color: Colors.green.shade700),
                 const SizedBox(width: 8),
-                const Text(
-                  'APK скачан',
-                  style: TextStyle(fontWeight: FontWeight.w800),
+                Text(
+                  s.t('upd_apk_downloaded'),
+                  style: const TextStyle(fontWeight: FontWeight.w800),
                 ),
               ],
             ),
@@ -478,16 +484,14 @@ class _UpdateScreenState extends State<UpdateScreen> {
               style: const TextStyle(fontSize: 11, fontFamily: 'monospace'),
             ),
             const SizedBox(height: 4),
-            const Text(
-              'Нажмите «Установить» — откроется системный установщик '
-              '(как при открытии файла из файлового менеджера). '
-              'Если не открылся — найдите файл по пути выше.',
-              style: TextStyle(fontSize: 11, color: Colors.black54),
+            Text(
+              s.t('upd_install_hint'),
+              style: const TextStyle(fontSize: 11, color: Colors.black54),
             ),
             const SizedBox(height: 10),
             FilledButton.icon(
               icon: const Icon(Icons.install_mobile),
-              label: const Text('Установить'),
+              label: Text(s.t('upd_install')),
               style: FilledButton.styleFrom(
                 backgroundColor: Colors.green.shade700,
                 padding: const EdgeInsets.symmetric(vertical: 14),

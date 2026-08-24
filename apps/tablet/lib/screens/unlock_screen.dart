@@ -93,6 +93,7 @@ class _UnlockScreenState extends State<UnlockScreen> {
   /// it". Shortfalls surface at stock-taking, which a trust-based micromarket
   /// needs anyway.
   Future<void> _recordSale(VendingService svc, DeviceStorage storage) async {
+    final openedLabel = context.read<Strings>().t('unlock_opened');
     final machid = storage.machid;
     final secret = storage.secret;
     final paymentId = svc.consumePaymentId();
@@ -115,7 +116,7 @@ class _UnlockScreenState extends State<UnlockScreen> {
               step: DispenseStepResult(
                 product: item.product,
                 outcome: DispenseOutcome.ok,
-                message: 'Замок открыт',
+                message: openedLabel,
               ),
             );
           }

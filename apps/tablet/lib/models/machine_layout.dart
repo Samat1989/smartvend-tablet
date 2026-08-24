@@ -137,6 +137,11 @@ class LayoutTemplate {
   final String description;
   final MachineLayout Function() builder;
 
+  // `name` and `description` on a built-in template hold `Strings` keys, not
+  // finished text. Operator-saved templates keep a plain typed-in name, and
+  // Strings.t() hands an unknown key straight back — so one `s.t(...)` at the
+  // call site renders both kinds correctly with no branch.
+
   MachineLayout build() => builder();
 
   /// Original kiosk wiring: 6 shelves × 6 slots, motor ids 99..44
@@ -145,8 +150,8 @@ class LayoutTemplate {
   /// a contiguous 1..36. Documented in `/c/m109e/docs/04_MOTOR_LAYOUT.md`.
   static const LayoutTemplate factory6x6 = LayoutTemplate(
     id: 'factory_6x6',
-    name: 'Заводская 6×6',
-    description: '6 полок × 6 слотов, моторы 99..44, ярлыки 001..006 / 011..016 / … / 051..056',
+    name: 'lt_factory6x6',
+    description: 'lt_factory6x6_desc',
     builder: _buildFactory6x6,
   );
 
@@ -155,8 +160,8 @@ class LayoutTemplate {
   /// (motors 89..40, ярлыки 11..60).
   static const LayoutTemplate mp2404_5_50 = LayoutTemplate(
     id: 'mp2404_5_50',
-    name: 'MP2404 (5 + 5×10)',
-    description: '1×5 сдвоенных слотов сверху + 5×10 обычных снизу',
+    name: 'lt_mp2404',
+    description: 'lt_mp2404_desc',
     builder: _buildMp2404,
   );
 
@@ -170,9 +175,8 @@ class LayoutTemplate {
   /// outside the template.
   static const LayoutTemplate barysvendV272 = LayoutTemplate(
     id: 'barysvend_v27_2',
-    name: 'BarysVend V27.2',
-    description: 'Ряд 1 — 5 широких (к1,3,5,7,9), ряды 2–6 — по 10; '
-        'подписи 1…55',
+    name: 'lt_barysvend',
+    description: 'lt_barysvend_desc',
     builder: _buildBarysvendV272,
   );
 
@@ -185,8 +189,8 @@ class LayoutTemplate {
   /// наклейки идут не подряд.
   static const LayoutTemplate micromarket4x5 = LayoutTemplate(
     id: 'micromarket_4x5',
-    name: 'Микромаркет 4×5',
-    description: '4 полки × 5 ячеек, сквозная нумерация 1…20',
+    name: 'lt_micromarket',
+    description: 'lt_micromarket_desc',
     builder: _buildMicromarket4x5,
   );
 

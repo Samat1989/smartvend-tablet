@@ -84,6 +84,7 @@ class _TesterScreenState extends State<TesterScreen> {
   }
 
   Future<void> _applyGlobalCurtainToAll(int curtain) async {
+    final s = context.read<Strings>();
     final svc = context.read<VendingService>();
     final storage = context.read<DeviceStorage>();
     final machid = storage.machid;
@@ -96,18 +97,19 @@ class _TesterScreenState extends State<TesterScreen> {
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: const Text('Применить ко всем слотам?'),
-        content: Text(
-            'Режим выдачи будет установлен на «${_curtainName(curtain)}» '
-            'для всех ${ids.length} слотов с товарами.'),
+        title: Text(s.t('curtain_apply_all_title')),
+        content: Text(s
+            .t('curtain_apply_all_body')
+            .replaceAll('%mode%', _curtainName(s, curtain))
+            .replaceAll('%n%', '${ids.length}')),
         actions: [
           TextButton(
             onPressed: () => Navigator.of(ctx).pop(false),
-            child: const Text('Отмена'),
+            child: Text(s.t('btn_cancel')),
           ),
           FilledButton(
             onPressed: () => Navigator.of(ctx).pop(true),
-            child: const Text('Применить'),
+            child: Text(s.t('btn_apply')),
           ),
         ],
       ),
@@ -124,16 +126,19 @@ class _TesterScreenState extends State<TesterScreen> {
     await svc.reload(silent: true);
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-      content: Text('Обновлено $n из ${ids.length} слотов'),
+      content: Text(s
+          .t('curtain_applied_n')
+          .replaceAll('%n%', '$n')
+          .replaceAll('%total%', '${ids.length}')),
       backgroundColor:
           n == ids.length ? Colors.green : Colors.orange,
     ));
   }
 
-  String _curtainName(int v) => switch (v) {
-        0 => 'Без проверки',
-        1 => 'С датчиком',
-        2 => 'Приоритет',
+  String _curtainName(Strings s, int v) => switch (v) {
+        0 => s.t('curtain_off'),
+        1 => s.t('curtain_standard'),
+        2 => s.t('curtain_priority'),
         _ => '?',
       };
 
@@ -190,6 +195,7 @@ class _EmptyLayoutHint extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final s = context.watch<Strings>();
     return Center(
       child: Padding(
         padding: const EdgeInsets.all(32),
@@ -199,23 +205,22 @@ class _EmptyLayoutHint extends StatelessWidget {
             const Icon(Icons.grid_off,
                 size: 56, color: AppColors.onSurfaceVariant),
             const SizedBox(height: 16),
-            const Text('Раскладка не настроена',
-                style: TextStyle(
+            Text(s.t('layout_not_set'),
+                style: const TextStyle(
                     fontSize: 18,
                     fontWeight: FontWeight.w700,
                     color: AppColors.onSurface)),
             const SizedBox(height: 8),
-            const Text(
-              'Откройте редактор раскладки, выберите шаблон '
-              '(«Заводская 6×6» или «MP2404») и возвращайтесь сюда.',
+            Text(
+              s.t('tester_no_layout_hint'),
               textAlign: TextAlign.center,
-              style: TextStyle(
+              style: const TextStyle(
                   fontSize: 13, color: AppColors.onSurfaceVariant),
             ),
             const SizedBox(height: 16),
             FilledButton.icon(
               icon: const Icon(Icons.dashboard_customize),
-              label: const Text('Открыть редактор'),
+              label: Text(s.t('open_layout_editor')),
               onPressed: () => Navigator.of(context).push(
                 MaterialPageRoute(
                   builder: (_) => const LayoutEditorScreen(),
@@ -261,7 +266,7 @@ class _GlobalCurtainBar extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Text(
-            'РЕЖИМ ВЫДАЧИ — ОБЩИЙ',
+            s.t('tester_curtain_global'),
             style: const TextStyle(
                 fontSize: 10,
                 fontWeight: FontWeight.bold,
@@ -283,16 +288,16 @@ class _GlobalCurtainBar extends StatelessWidget {
           const SizedBox(height: 8),
           Row(
             children: [
-              const Expanded(
+              Expanded(
                 child: Text(
-                  'Действует на новые тесты. Кнопкой ниже — записать на все слоты.',
-                  style: TextStyle(
+                  s.t('tester_curtain_hint'),
+                  style: const TextStyle(
                       fontSize: 11, color: AppColors.onSurfaceVariant),
                 ),
               ),
               TextButton.icon(
                 icon: const Icon(Icons.done_all, size: 16),
-                label: const Text('Применить ко всем'),
+                label: Text(s.t('tester_apply_all')),
                 onPressed: disabled ? null : onApplyToAll,
               ),
             ],
@@ -402,6 +407,7 @@ class _SlotRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final s = context.watch<Strings>();
     final motorsLabel = slot.motorIds.map((m) => 'M$m').join('+');
 
     final Color border;
@@ -521,12 +527,12 @@ class _SlotRow extends StatelessWidget {
                         height: 14,
                         child: CircularProgressIndicator(strokeWidth: 2),
                       )
-                    : const Text('Тест'),
+                    : Text(s.t('tester_run')),
               ),
               const SizedBox(width: 6),
               OutlinedButton.icon(
                 icon: const Icon(Icons.sensors, size: 14),
-                label: const Text('+датчик'),
+                label: Text(s.t('tester_run_sensor')),
                 style: OutlinedButton.styleFrom(
                   visualDensity: VisualDensity.compact,
                   padding: const EdgeInsets.symmetric(

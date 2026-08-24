@@ -1,25 +1,29 @@
 /// Output channel mapping on the M102 board (DO command 0x08).
 /// Fixed by the factory firmware — do not change.
 enum DoChannel {
-  fan(0, 'Вентилятор'),
-  compressor(1, 'Компрессор'),
-  glassHeater(2, 'Подогрев стекла'),
-  lightStrip(3, 'Подсветка'),
-  heaterModule(4, 'Нагревательный модуль');
+  fan(0, 'climate_ch_fan'),
+  compressor(1, 'climate_ch_compressor'),
+  glassHeater(2, 'climate_ch_glass'),
+  lightStrip(3, 'climate_ch_light'),
+  heaterModule(4, 'climate_ch_heater');
 
   final int id;
-  final String label;
-  const DoChannel(this.id, this.label);
+
+  /// Key into `Strings`, not a finished label: a model has no business
+  /// knowing which language the operator is reading.
+  final String labelKey;
+  const DoChannel(this.id, this.labelKey);
 }
 
 enum ClimateMode {
-  off('Выкл'),
-  cooling('Холодильник'),
-  heating('Нагрев'),
+  off('climate_mode_off'),
+  cooling('climate_mode_cooling'),
+  heating('climate_mode_heating'),
   ;
 
-  final String label;
-  const ClimateMode(this.label);
+  /// Key into `Strings` — see [DoChannel.labelKey].
+  final String labelKey;
+  const ClimateMode(this.labelKey);
 }
 
 /// User-facing climate configuration. Only mode + setpoint are exposed —
