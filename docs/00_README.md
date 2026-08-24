@@ -14,6 +14,7 @@
 | [`known-issues.md`](known-issues.md) | **Открытые дефекты** — разобранные, но пока не исправленные проблемы, и принятые по ним решения |
 | [`apps/tablet/docs/03_FLEET_PROVISIONING.md`](../apps/tablet/docs/03_FLEET_PROVISIONING.md) | **Права администратора планшету** — два условия Android, три способа выдачи, что делать, если планшет заперся |
 | [`tablet-micromarket.md`](tablet-micromarket.md) | **Микромаркет на планшете** — то же приложение, вместо моторов замок на USB-реле |
+| [`odengi-payment-kg.md`](odengi-payment-kg.md) | **O!Деньги (Кыргызстан)** — как один гейт выдаёт киргизский QR вместо Kaspi, где живёт переключатель, что он ещё меняет |
 | [`esp-screen-micromarket.md`](esp-screen-micromarket.md) | Микромаркет с экраном на ESP32 — **отложенный** вариант, разбор для истории |
 
 Базовый референс протокола: [`../api_docsM109E.txt`](../api_docsM109E.txt) (заводская инструкция M102).

@@ -357,6 +357,22 @@ function PayChannelBadge({ status }) {
   );
 }
 
+const TENGE = '₸';
+// The som is a 'с' with a bar under it. U+20C0 SOM SIGN exists for exactly
+// that and is deliberately NOT used: no system font on the tablets or the
+// handsets we checked carries the glyph, so it renders as a tofu box. A
+// Cyrillic 'с' plus U+0332 COMBINING LOW LINE draws the same mark out of
+// fonts that are actually installed. Same call as the tablet's
+// DeviceStorage.currencySymbol — keep the two in step.
+const SOM = 'с̲';
+
+// What a machine charges in. Follows the payment channel its tablet reported,
+// not the owner's interface language: a Kyrgyz cabinet takes som whether the
+// panel is being read in Russian or English. Unmarked machines take Kaspi.
+function currencyOf(market) {
+  return market?.status?.ter_number === 'ODG' ? SOM : TENGE;
+}
+
 function DeviceStatusDot({ status, kind, withLabel = false }) {
   const { t, i18n } = useTranslation();
 
@@ -1570,8 +1586,23 @@ export default function Admin() {
   // Filtering (market + time/period) now happens server-side in fetchSales();
   // render exactly what was loaded.
   const filteredSales = sales;
+  const currencyForMachine = React.useCallback(
+    (id) => currencyOf(markets.find((m) => String(m.id) === String(id))),
+    [markets],
+  );
 
-  const totalSalesAmount = filteredSales.reduce((sum, s) => sum + (s.amount || 0), 0);
+  // Grouped by currency, not summed flat. With the machine filter on "all" an
+  // owner can have Kazakh and Kyrgyz cabinets in the same list, and adding
+  // tenge to som would print a number that means nothing. One currency (the
+  // ordinary case) renders exactly as a single total always did.
+  const salesTotals = React.useMemo(() => {
+    const byCurrency = new Map();
+    for (const s of filteredSales) {
+      const cur = currencyForMachine(s.micromarket_id);
+      byCurrency.set(cur, (byCurrency.get(cur) ?? 0) + (s.amount || 0));
+    }
+    return [...byCurrency.entries()].map(([currency, amount]) => ({ currency, amount }));
+  }, [filteredSales, currencyForMachine]);
 
   return (
     <div className="min-h-screen bg-slate-200 text-slate-900 p-3 md:p-6 font-lexend">
@@ -1849,6 +1880,7 @@ export default function Admin() {
                   categories={categories}
                   stockLabel={t('stock_label')}
                   priceLabel={t('price_label')}
+                  currency={currencyOf(selectedMarket)}
                   onEdit={(p) => setEditingProduct(p)}
                   onDelete={(p) => deleteProduct(p.id)}
                 />
@@ -1859,6 +1891,7 @@ export default function Admin() {
                   categories={categories}
                   stockLabel={t('stock_label')}
                   priceLabel={t('price_label')}
+                  currency={currencyOf(selectedMarket)}
                   onEdit={(p) => setEditingProduct(p)}
                   onDelete={(p) => deleteProduct(p.id)}
                 />
@@ -1926,7 +1959,16 @@ export default function Admin() {
               <div className="grid grid-cols-2 sm:grid-cols-3 gap-4">
                 <div className="bg-white border border-slate-200 rounded-2xl p-4 shadow-sm">
                   <div className="text-[10px] font-black text-slate-500 uppercase tracking-widest mb-1">{t('revenue')}</div>
-                  <div className="text-2xl font-black text-primary">{totalSalesAmount} <span className="text-sm">₸</span></div>
+                  <div className="text-2xl font-black text-primary">
+                    {salesTotals.length === 0
+                      ? <>0 <span className="text-sm">{currencyOf(null)}</span></>
+                      : salesTotals.map(({ currency, amount }, i) => (
+                          <span key={currency}>
+                            {i > 0 && <span className="text-slate-300"> · </span>}
+                            {amount} <span className="text-sm">{currency}</span>
+                          </span>
+                        ))}
+                  </div>
                 </div>
                 <div className="bg-white border border-slate-200 rounded-2xl p-4 shadow-sm">
                   <div className="text-[10px] font-black text-slate-500 uppercase tracking-widest mb-1">{t('orders')}</div>
@@ -1978,11 +2020,11 @@ export default function Admin() {
                         </div>
                         <div className="flex items-center gap-3 shrink-0">
                           <div className="text-right">
-                            <div className="text-xl font-black text-primary">{sale.amount} ₸</div>
+                            <div className="text-xl font-black text-primary">{sale.amount} {currencyForMachine(sale.micromarket_id)}</div>
                             {failedItems.length > 0 && (
                               <div className="mt-1 inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-rose-50 text-rose-600 text-[10px] font-black uppercase tracking-wider">
                                 <AlertTriangle size={11} />
-                                {t('refund_due')}: {refundTotal} ₸
+                                {t('refund_due')}: {refundTotal} {currencyForMachine(sale.micromarket_id)}
                               </div>
                             )}
                           </div>
@@ -2018,7 +2060,7 @@ export default function Admin() {
                                 )}
                               </div>
                             </div>
-                            <span className={`font-black ml-4 ${failed ? 'text-rose-500 line-through opacity-70' : 'text-slate-800'}`}>{item.price * item.quantity} ₸</span>
+                            <span className={`font-black ml-4 ${failed ? 'text-rose-500 line-through opacity-70' : 'text-slate-800'}`}>{item.price * item.quantity} {currencyForMachine(sale.micromarket_id)}</span>
                           </div>
                           );
                         })}
@@ -2121,7 +2163,7 @@ export default function Admin() {
 
               <div className="flex gap-4">
                 <div className="flex-1">
-                  <label className="text-xs font-bold text-slate-700 ml-2 mb-1 block">{t('price_kzt')}</label>
+                  <label className="text-xs font-bold text-slate-700 ml-2 mb-1 block">{t('price_label')} ({currencyOf(selectedMarket)})</label>
                   <input
                     type="number"
                     className="w-full p-2.5 border-2 border-slate-300 focus:border-primary focus:outline-none rounded-xl font-bold text-slate-900 bg-white"
@@ -3396,7 +3438,7 @@ function CatalogTab({
 // "Не привязано" section at the bottom.
 // Flat product list for open-shelf (static) micromarkets — no motors/slots.
 // Add is handled by the header button; rows support edit + delete.
-function StaticInventoryList({ products, categories, priceLabel, onEdit, onDelete }) {
+function StaticInventoryList({ products, categories, priceLabel, currency, onEdit, onDelete }) {
   const { t } = useTranslation();
   if (!products || products.length === 0) {
     return (
@@ -3436,7 +3478,7 @@ function StaticInventoryList({ products, categories, priceLabel, onEdit, onDelet
             </div>
             <div className="text-right px-2 sm:px-4 shrink-0">
               <span className="hidden sm:block text-[9px] font-black text-slate-500 uppercase tracking-tighter">{priceLabel}</span>
-              <p className="text-base font-black text-primary tabular-nums">{p.price} ₸</p>
+              <p className="text-base font-black text-primary tabular-nums">{p.price} {currency}</p>
             </div>
             <div className="flex items-center gap-1 shrink-0">
               <button onClick={(e) => { e.stopPropagation(); onEdit(p); }} className="p-2.5 bg-white border border-slate-300 text-slate-600 rounded-lg hover:bg-primary hover:border-primary hover:text-white transition-all"><Pencil size={14} /></button>
@@ -3449,7 +3491,7 @@ function StaticInventoryList({ products, categories, priceLabel, onEdit, onDelet
   );
 }
 
-function InventoryByLayout({ products, layout, categories, stockLabel, priceLabel, onEdit, onDelete }) {
+function InventoryByLayout({ products, layout, categories, stockLabel, priceLabel, currency, onEdit, onDelete }) {
   const { t } = useTranslation();
   const productByMotor = new Map();
   for (const p of products) {
@@ -3490,6 +3532,7 @@ function InventoryByLayout({ products, layout, categories, stockLabel, priceLabe
                   category={p ? categories.find(c => c.id === p.category_id)?.name_ru : null}
                   stockLabel={stockLabel}
                   priceLabel={priceLabel}
+                  currency={currency}
                   onEdit={p ? () => onEdit(p) : null}
                   onDelete={p ? () => onDelete(p) : null}
                 />
@@ -3556,7 +3599,7 @@ function InventoryByLayout({ products, layout, categories, stockLabel, priceLabe
   );
 }
 
-function InventoryRow({ slot, product, category, stockLabel, priceLabel, onEdit, onDelete }) {
+function InventoryRow({ slot, product, category, stockLabel, priceLabel, currency, onEdit, onDelete }) {
   const { t } = useTranslation();
   // Slot identification: label ("001") + the linked motor index
   // (e.g. "M99" or "M99+M95" for twin spirals).
@@ -3609,7 +3652,7 @@ function InventoryRow({ slot, product, category, stockLabel, priceLabel, onEdit,
                 <span className={`text-[10px] font-black px-1.5 py-0.5 rounded tabular-nums ${lowStock ? 'bg-red-100 text-red-700' : 'bg-emerald-100 text-emerald-700'}`}>
                   ×{product.stock ?? 0}
                 </span>
-                <span className="text-sm font-black text-primary tabular-nums">{product.price} ₸</span>
+                <span className="text-sm font-black text-primary tabular-nums">{product.price} {currency}</span>
                 <span className="text-[9px] uppercase font-black text-slate-500 tracking-wider truncate">
                   {category || t('no_category')}
                 </span>
@@ -3637,7 +3680,7 @@ function InventoryRow({ slot, product, category, stockLabel, priceLabel, onEdit,
           {empty ? (
             <p className="text-base font-black text-slate-300">—</p>
           ) : (
-            <p className="text-base font-black text-primary tabular-nums">{product.price} ₸</p>
+            <p className="text-base font-black text-primary tabular-nums">{product.price} {currency}</p>
           )}
         </div>
 
