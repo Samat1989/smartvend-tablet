@@ -1586,23 +1586,25 @@ export default function Admin() {
   // Filtering (market + time/period) now happens server-side in fetchSales();
   // render exactly what was loaded.
   const filteredSales = sales;
-  const currencyForMachine = React.useCallback(
-    (id) => currencyOf(markets.find((m) => String(m.id) === String(id))),
-    [markets],
-  );
+  // Plain functions, not useMemo/useCallback on purpose: this sits BELOW the
+  // `if (!session)` early return above, so a hook here would run on some
+  // renders and not others — React counts them and throws. Both are cheap
+  // (a find over the machine list, one pass over the loaded sales page).
+  const currencyForMachine = (id) =>
+    currencyOf(markets.find((m) => String(m.id) === String(id)));
 
   // Grouped by currency, not summed flat. With the machine filter on "all" an
   // owner can have Kazakh and Kyrgyz cabinets in the same list, and adding
   // tenge to som would print a number that means nothing. One currency (the
   // ordinary case) renders exactly as a single total always did.
-  const salesTotals = React.useMemo(() => {
+  const salesTotals = (() => {
     const byCurrency = new Map();
     for (const s of filteredSales) {
       const cur = currencyForMachine(s.micromarket_id);
       byCurrency.set(cur, (byCurrency.get(cur) ?? 0) + (s.amount || 0));
     }
     return [...byCurrency.entries()].map(([currency, amount]) => ({ currency, amount }));
-  }, [filteredSales, currencyForMachine]);
+  })();
 
   return (
     <div className="min-h-screen bg-slate-200 text-slate-900 p-3 md:p-6 font-lexend">
