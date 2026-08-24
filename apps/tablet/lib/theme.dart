@@ -40,6 +40,12 @@ class AppColors {
   /// instantly recognisable to KZ customers.
   static const kaspi = Color(0xFFF14635);
 
+  /// O!Dengi magenta, the same mark KG customers tap in their wallet app.
+  /// Sampled straight out of `lib/static/logo_odengi.png` (the dominant
+  /// pixel, 11 484 of them) rather than eyeballed — next to Kaspi's red it
+  /// is the pink that tells the two brands apart at arm's length.
+  static const odengi = Color(0xFFF0047F);
+
   // --- MicroMart palette (iOS-style, from Figma "Menu - Nothing Selected") ---
   // The customer-facing kiosk screens use this set; service-mode screens
   // continue to use the warmer Kinetic Gourmet tokens above so the two

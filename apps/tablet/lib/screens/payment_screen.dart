@@ -265,13 +265,12 @@ class _PaymentScreenState extends State<PaymentScreen> {
                         currency: s.currency,
                       ),
                   const SizedBox(height: 20),
-                  // Same 0.8 width factor as the QR card below so the
-                  // tab pill visually anchors to the same column.
-                  FractionallySizedBox(
-                    widthFactor: 0.8,
-                    child: _KaspiTabPill(
-                      label: odengi ? 'O!Деньги' : 'Kaspi QR',
-                    ),
+                  // Sized to its own text, not to the QR below it: 'O!' is
+                  // two characters, and stretched across the card it read as
+                  // a button rather than as the name of who takes the money.
+                  _PayTabPill(
+                    label: odengi ? 'O!' : 'Kaspi QR',
+                    color: odengi ? AppColors.odengi : AppColors.kaspi,
                   ),
                   const SizedBox(height: 16),
                   // 80 % width — user asked the QR card itself to shrink
@@ -383,13 +382,14 @@ class _PayHeader extends StatelessWidget {
   }
 }
 
-/// Active "Kaspi QR" tab pill. Single option (Halyk QR was dropped
-/// per request) — kept as a pill so the visual rhythm of the Figma
-/// "Pay" frame stays intact.
-class _KaspiTabPill extends StatelessWidget {
-  const _KaspiTabPill({required this.label});
+/// Names the rail taking the money, in that rail's own brand colour.
+/// A single option (Halyk QR was dropped per request) — kept as a pill so
+/// the visual rhythm of the Figma "Pay" frame stays intact.
+class _PayTabPill extends StatelessWidget {
+  const _PayTabPill({required this.label, required this.color});
 
   final String label;
+  final Color color;
 
   @override
   Widget build(BuildContext context) {
@@ -407,20 +407,27 @@ class _KaspiTabPill extends StatelessWidget {
         ],
       ),
       child: Material(
-        color: const Color(0xFFF14635),
+        color: color,
         borderRadius: BorderRadius.circular(1000),
-        child: Container(
+        child: SizedBox(
           height: 44,
-          width: double.infinity, // fill the FractionallySizedBox slot
-          padding: const EdgeInsets.symmetric(horizontal: 28),
-          alignment: Alignment.center,
-          child: Text(
-            label,
-            style: const TextStyle(
-              color: Colors.white,
-              fontSize: 16,
-              fontWeight: FontWeight.w700,
-              letterSpacing: -0.2,
+          // Center with widthFactor 1 — not Container(alignment:), which
+          // grows to whatever width it is offered and is what kept this
+          // pill as wide as the QR card. widthFactor makes it hug the text
+          // while the missing heightFactor still centres it in the 44.
+          child: Center(
+            widthFactor: 1,
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 28),
+              child: Text(
+                label,
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontSize: 16,
+                  fontWeight: FontWeight.w700,
+                  letterSpacing: -0.2,
+                ),
+              ),
             ),
           ),
         ),

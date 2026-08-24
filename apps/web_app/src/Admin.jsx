@@ -340,6 +340,23 @@ function kindLabel(kind, t) {
   return t('badge_vending');
 }
 
+// Which payment rail the cabinet reported on its last heartbeat. Only drawn
+// when it is not the default: an unmarked machine takes Kaspi, which is every
+// machine in Kazakhstan and needs no badge. The tablet is what chooses this
+// (a tick at pairing) — the panel only repeats what the tablet said, so a
+// machine that was re-paired without the tick loses the badge after one beat.
+function PayChannelBadge({ status }) {
+  if (status?.ter_number !== 'ODG') return null;
+  return (
+    <span
+      className="text-[9px] font-black uppercase tracking-wider px-2 py-1 rounded-lg shrink-0 bg-sky-100 text-sky-700"
+      title="O!Деньги · Кыргызстан · сом"
+    >
+      O!
+    </span>
+  );
+}
+
 function DeviceStatusDot({ status, kind, withLabel = false }) {
   const { t, i18n } = useTranslation();
 
@@ -1176,7 +1193,7 @@ export default function Admin() {
       // out and would flip machines offline at random.
       const [marketsRes, statusRes] = await Promise.all([
         supabase.from('micromarkets').select('id, name, layout_json, kind, qr_token'),
-        supabase.from('device_status_view').select('machid, last_seen_at, board_ok, online'),
+        supabase.from('device_status_view').select('machid, last_seen_at, board_ok, online, ter_number'),
       ]);
       if (marketsRes.error) throw marketsRes.error;
       const byId = new Map(
@@ -1686,6 +1703,7 @@ export default function Admin() {
                         <span className={`text-[9px] font-black uppercase tracking-wider px-2 py-1 rounded-lg shrink-0 ${kindTint(m.kind)}`}>
                           {kindLabel(m.kind, t)}
                         </span>
+                        <PayChannelBadge status={m.status} />
                       </>
                     );
                     return (
