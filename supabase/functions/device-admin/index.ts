@@ -77,7 +77,7 @@ Deno.serve(async (req) => {
       // why this read has to happen here under service_role.
       const { data: beats } = await supabase
         .from("device_status_view")
-        .select("machid, last_seen_at, board_ok, online");
+        .select("machid, last_seen_at, board_ok, online, ter_number");
       const beatById = new Map((beats ?? []).map((b) => [b.machid, b]));
 
       // Resolve owner_id → email. listUsers is one call; joining auth.users

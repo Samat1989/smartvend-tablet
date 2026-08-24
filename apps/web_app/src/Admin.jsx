@@ -3030,6 +3030,7 @@ function UsersTab({
           <span className={`text-[9px] font-black uppercase tracking-wider px-2 py-1 rounded-lg ${kindTint(m.kind)}`}>
             {kindLabel(m.kind, t)}
           </span>
+          <PayChannelBadge status={m.heartbeat} />
         </div>
       </div>
       <div className="hidden sm:flex items-center gap-3 shrink-0">
@@ -3037,6 +3038,7 @@ function UsersTab({
         <span className={`text-[9px] font-black uppercase tracking-wider px-2 py-1 rounded-lg ${kindTint(m.kind)}`}>
           {kindLabel(m.kind, t)}
         </span>
+        <PayChannelBadge status={m.heartbeat} />
       </div>
       <div className="flex gap-1.5 shrink-0">
         <button
