@@ -18,6 +18,46 @@ class InstallStatus {
   bool get isFailure => status > 0;
 }
 
+/// What this particular tablet's firmware and provisioning allow.
+///
+/// Read once from the native side, which probes for the RY firmware by
+/// asking whether `persist.sys.navbar.disabled` exists at all. The service
+/// menu uses this to grey out actions that would otherwise be buttons that
+/// silently do nothing on a tablet from a different supplier.
+class KioskCapabilities {
+  const KioskCapabilities({
+    required this.vendorBars,
+    required this.vendorReboot,
+    required this.deviceOwner,
+    required this.firmware,
+  });
+
+  /// Firmware owns the system bars — «Показать навбар» is meaningful.
+  final bool vendorBars;
+
+  /// Firmware reboots on request, no permission needed.
+  final bool vendorReboot;
+
+  /// App is provisioned as device owner: silent lock task, DPM reboot.
+  final bool deviceOwner;
+
+  /// `Build.DISPLAY`, shown in diagnostics so a technician can say which
+  /// tablet is in front of them without opening Settings.
+  final String firmware;
+
+  /// Nothing works and nothing is claimed — the state before the first
+  /// answer arrives, and the answer itself on a plain tablet with no owner.
+  static const unknown = KioskCapabilities(
+    vendorBars: false,
+    vendorReboot: false,
+    deviceOwner: false,
+    firmware: '',
+  );
+
+  /// Whether [KioskBridge.rebootDevice] has any path to take.
+  bool get canReboot => deviceOwner || vendorReboot;
+}
+
 /// Thin wrapper over the native kiosk MethodChannel exposed by
 /// `MainActivity`. The Android side handles lock-task / immersive
 /// mode automatically — the only thing the Flutter side needs to
@@ -103,13 +143,84 @@ class KioskBridge {
     await _channel.invokeMethod<void>('restartApp');
   }
 
-  /// Hard reboot the whole Android device via DevicePolicyManager.
-  /// Requires the app to be device-owner — same provisioning we
-  /// already need for the silent kiosk pinning. If we aren't owner,
-  /// throws `PlatformException(code: 'not_device_owner')` which
-  /// callers handle by falling back to [restartApp] or just logging.
+  /// Hard reboot the whole Android device. The native side tries
+  /// DevicePolicyManager first and falls back to the RY firmware's
+  /// `android.intent.action.shouhj.REBOOT` broadcast, which needs no
+  /// permission at all — the same call the factory app makes for its
+  /// nightly maintenance restart. Throws
+  /// `PlatformException(code: 'reboot_failed')` only when neither path
+  /// exists, which is a tablet that is neither owned nor RY firmware;
+  /// callers fall back to [restartApp] or just log.
   static Future<void> rebootDevice() async {
     await _channel.invokeMethod<void>('rebootDevice');
+  }
+
+  /// Ask the native side what this tablet can do. Cached after the first
+  /// answer — a ROM does not change under a running app, and the probe
+  /// forks a `getprop` process.
+  ///
+  /// Never throws: an older build with no such method, or a non-Android
+  /// host, both resolve to [KioskCapabilities.unknown], which disables the
+  /// firmware-specific tiles rather than offering them on a guess.
+  static KioskCapabilities? _caps;
+
+  static Future<KioskCapabilities> capabilities() async {
+    final cached = _caps;
+    if (cached != null) return cached;
+    try {
+      final raw = await _channel
+          .invokeMapMethod<String, dynamic>('firmwareCapabilities');
+      final caps = raw == null
+          ? KioskCapabilities.unknown
+          : KioskCapabilities(
+              vendorBars: raw['vendorBars'] == true,
+              vendorReboot: raw['vendorReboot'] == true,
+              deviceOwner: raw['deviceOwner'] == true,
+              firmware: raw['firmware'] as String? ?? '',
+            );
+      _caps = caps;
+      return caps;
+    } catch (e) {
+      debugPrint('[KioskBridge] capabilities unavailable: $e');
+      _caps = KioskCapabilities.unknown;
+      return KioskCapabilities.unknown;
+    }
+  }
+
+  /// Hand the device back: drop device-owner status.
+  ///
+  /// `adb shell dpm remove-active-admin` refuses to touch a non-test-only
+  /// owner, so for a release build this is the only way out short of a
+  /// factory reset. Needed whenever a tablet changes machines or is retired
+  /// — while the app owns the device it cannot even be uninstalled.
+  ///
+  /// Irreversible from the tablet's side: getting the rights back means adb
+  /// or mmd_diag again, on a device with no accounts. Throws
+  /// `PlatformException(code: 'not_device_owner')` when there was nothing
+  /// to clear.
+  static Future<void> clearDeviceOwner() async {
+    await _channel.invokeMethod<void>('clearDeviceOwner');
+    // The cached answer just became wrong in the one way that matters.
+    _caps = null;
+  }
+
+  /// Give the operator the Android navigation and status bars back for a
+  /// single servicing session, then reboot into them.
+  ///
+  /// On SHENGMA/RY tablets the bars are not the app's to hide: the
+  /// framework decides at display init from `persist.sys.navbar.disabled`
+  /// and `persist.sys.statusbar.disabled`, so no amount of immersive can
+  /// touch them. This flips both properties on and reboots.
+  ///
+  /// The loan expires by itself. Every start of [MainActivity] re-sends
+  /// STATUSBAR_OFF, so the reboot *after* this one comes back to a bare
+  /// kiosk with nobody having to remember to switch it off — exactly how
+  /// the factory app's own «показать навбар» setting behaves.
+  ///
+  /// Returns as the device is going down; there is no success to observe.
+  /// A no-op on tablets whose ROM has no such handler.
+  static Future<void> showNavBarAndReboot() async {
+    await _channel.invokeMethod<void>('showNavBarAndReboot');
   }
 
   /// Install the APK at [path] via PackageInstaller. Device-owner

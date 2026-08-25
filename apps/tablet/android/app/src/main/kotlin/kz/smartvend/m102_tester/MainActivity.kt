@@ -5,7 +5,6 @@ import android.app.AlarmManager
 import android.app.PendingIntent
 import android.app.admin.DevicePolicyManager
 import android.content.BroadcastReceiver
-import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
@@ -49,13 +48,59 @@ import kotlin.system.exitProcess
  *    out of the app.
  *  • Show on lock screen + turn screen on — handled in the manifest, this
  *    keeps the activity visible when the device wakes from boot or sleep.
- *  • Best-effort lock task ("screen pinning"). On a non-rooted device this
- *    only sticks if the app was provisioned as a device-owner OR the
- *    operator manually pinned via Recents → "pin this app". We attempt
- *    [startLockTask] on resume; the call is a no-op if the OS hasn't
- *    granted that permission, so it never crashes.
+ *  • Lock task, device-owner only. We attempt [startLockTask] on resume when
+ *    — and only when — the app owns the device, which gives the silent
+ *    LOCKED mode. Without owner Android offers PINNED instead, and PINNED
+ *    hands the customer a navigation bar plus a notice explaining how to
+ *    escape with it; see [tryEnterLockTask].
+ *  • On SHENGMA/RY firmware the system bars are not ours to hide at all —
+ *    two framework properties decide, and the app only nudges them for the
+ *    next boot. See docs/05_SYSTEM_BARS_AND_AUTOSTART.md.
  */
 private const val TAG_KIOSK = "SmartvendKiosk"
+
+/**
+ * Broadcasts the SHENGMA "RY" (锐翊) firmware listens for, lifted verbatim
+ * from the factory app's `ApiSmRySystem`. They are handled inside
+ * system_server — `cmd package query-receivers` finds no app receiver —
+ * so any app can send them: no permission, no root, no device owner.
+ *
+ * STATUSBAR_ON / STATUSBAR_OFF flip two framework properties read by
+ * `services.jar` when a display initialises:
+ *
+ *     persist.sys.navbar.disabled      navigation bar
+ *     persist.sys.statusbar.disabled   status bar
+ *
+ * Both take effect **only on the next boot** — sending the broadcast
+ * changes nothing on the running system. That single fact is what makes
+ * the factory "show nav bar" toggle behave the way it does, and it is the
+ * whole design of [MainActivity.showNavBarAndReboot].
+ *
+ * On any other tablet (K80 and friends) nobody is listening and the
+ * sendBroadcast is a silent no-op — which is why every caller treats these
+ * as a best-effort layer, never as the only path.
+ */
+private const val ACTION_VENDOR_STATUSBAR_ON =
+    "android.intent.action.shouhj.STATUSBAR_ON"
+private const val ACTION_VENDOR_STATUSBAR_OFF =
+    "android.intent.action.shouhj.STATUSBAR_OFF"
+private const val ACTION_VENDOR_REBOOT =
+    "android.intent.action.shouhj.REBOOT"
+
+/**
+ * The property whose existence tells us the RY firmware is underneath.
+ *
+ * We probe this rather than matching `Build.DISPLAY` against "SHENGMA",
+ * because it tests the thing we actually depend on: a framework that reads
+ * this property when a display initialises. A rebranded build of the same
+ * ROM still answers; an unrelated tablet that happens to carry a similar
+ * name does not.
+ *
+ * Defined even on a freshly wiped tablet — a factory-reset unit reads back
+ * `false`, not empty — so this is safe to probe before anything has ever
+ * written to it.
+ */
+private const val PROP_NAVBAR_DISABLED = "persist.sys.navbar.disabled"
 
 class MainActivity : FlutterActivity() {
 
@@ -88,29 +133,8 @@ class MainActivity : FlutterActivity() {
      */
     private var suppressLockUntilMs = 0L
 
-    /** Main-thread handler for the immersive ticker and the watchdog. */
+    /** Main-thread handler for the immersive ticker. */
     private val uiHandler = Handler(Looper.getMainLooper())
-
-    /**
-     * Deadline before which the watchdog must stay quiet.
-     *
-     * Set whenever the operator deliberately leaves for Android — the
-     * service menu's exit, or the overlay-permission screen — because a
-     * watchdog that snatches the screen back once a second makes changing
-     * the Wi-Fi impossible.
-     *
-     * A deadline rather than a plain flag, so a service session someone
-     * walked away from cannot leave the machine open indefinitely.
-     * [onResume] clears it the moment the operator comes back; if they
-     * never do, it lapses on its own.
-     */
-    private var watchdogSuppressUntilMs = 0L
-
-    /** One overlay prompt per process, so a refusal does not become a loop. */
-    private var overlayAsked = false
-
-    /** Throttles watchdog logging; the tick itself runs once a second. */
-    private var watchdogAttempts = 0
 
     /**
      * When [dismissShadeIfNeeded] last fired.
@@ -123,31 +147,25 @@ class MainActivity : FlutterActivity() {
      */
     private var lastShadeDismissMs = 0L
 
-    /**
-     * Drags the app back to the front once a second while it is off screen
-     * — the fallback kiosk for tablets that have no device owner.
+    /*
+     * There used to be a watchdog here: a once-a-second tick that dragged
+     * the app back to the front whenever it was off screen, as a fallback
+     * kiosk for tablets with no device owner.
      *
-     * With device owner this never starts, and should not: lock task
-     * refuses to let anything else take the foreground at all, which is a
-     * guarantee rather than a race. Without it the OS offers only screen
-     * pinning, which a customer can leave with back + overview, and this is
-     * the crude answer to that.
+     * It is gone, and the reason is the same one that killed screen pinning
+     * a few lines below. On SHENGMA/RY firmware the system bars are removed
+     * by the framework itself, so a customer has no Home, no Overview and no
+     * Back to leave with — there is nothing for a watchdog to recover from.
+     * What it did instead was make the tablet unserviceable: an operator who
+     * reached Settings was thrown out of it every second or two, and the only
+     * cure was force-stopping the app over adb.
      *
-     * Crude is the word. Android 10 blocks background activity starts, so
-     * every tick here is refused unless SYSTEM_ALERT_WINDOW has been
-     * granted — see [ensureOverlayPermission]. Even granted, it recovers
-     * *after* the escape instead of preventing it, leaving a second in
-     * which Settings is reachable. Provisioning device owner stops this
-     * whole path from running.
+     * It also dragged [ensureOverlayPermission] along with it — a first-run
+     * detour into a Settings screen that existed solely to make these ticks
+     * land. The SYSTEM_ALERT_WINDOW *permission* stays in the manifest, since
+     * that is what lets BootReceiver start us at boot, but nothing asks the
+     * operator for the app-op any more.
      */
-    private val watchdogTicker = object : Runnable {
-        override fun run() {
-            val now = SystemClock.elapsedRealtime()
-            val quiet = now < watchdogSuppressUntilMs || now < suppressLockUntilMs
-            if (!quiet) bringSelfToFront()
-            uiHandler.postDelayed(this, WATCHDOG_TICK_MS)
-        }
-    }
 
     /**
      * Ticker that keeps the system bars shut.
@@ -251,12 +269,11 @@ class MainActivity : FlutterActivity() {
                         }
                     }
                     "exitToAndroid" -> {
+                        // The operator asked to be let out. Nothing chases
+                        // them any more, so this is simply: stop locking,
+                        // open Settings, stay out of the way until they
+                        // bring us back.
                         suppressLockOnce = true
-                        // The operator asked to be let out; hold the
-                        // watchdog off until they come back, or until the
-                        // grace period lapses if they forget to.
-                        watchdogSuppressUntilMs =
-                            SystemClock.elapsedRealtime() + SERVICE_EXIT_GRACE_MS
                         try { stopLockTask() } catch (_: Throwable) {}
                         try {
                             startActivity(
@@ -277,9 +294,45 @@ class MainActivity : FlutterActivity() {
                         scheduleRelaunchAndKill()
                     }
                     "rebootDevice" -> {
-                        // Whole-tablet reboot via DevicePolicyManager.
-                        // Requires the app to be device-owner (which we
-                        // already need for the silent kiosk pinning).
+                        // Whole-tablet reboot: device owner first, then the
+                        // RY firmware broadcast for tablets we never owned.
+                        if (rebootTablet()) {
+                            result.success(null)
+                        } else {
+                            result.error(
+                                "reboot_failed",
+                                "Neither device owner nor vendor reboot available",
+                                null,
+                            )
+                        }
+                    }
+                    "showNavBarAndReboot" -> {
+                        // Service-mode escape hatch: bars for one session.
+                        // The vendor check happens first and synchronously,
+                        // so a tablet that cannot do this says so instead of
+                        // pretending; past that point we answer before the
+                        // reboot, since the Dart side gets no second chance
+                        // once the screen goes black.
+                        if (showNavBarAndReboot()) {
+                            result.success(null)
+                        } else {
+                            result.error(
+                                "unsupported_firmware",
+                                "System bars are not controlled by this firmware",
+                                null,
+                            )
+                        }
+                    }
+                    "clearDeviceOwner" -> {
+                        // Hand the device back. `dpm remove-active-admin`
+                        // refuses to touch a non-test-only owner, so for a
+                        // release build this is the only way out short of a
+                        // factory reset — and a factory reset costs the Wi-Fi,
+                        // the developer options and the adb key along with it.
+                        //
+                        // Needed whenever a tablet changes machines or goes
+                        // back to the shelf: without it the package cannot
+                        // even be uninstalled.
                         val dpm = getSystemService(Context.DEVICE_POLICY_SERVICE)
                             as? DevicePolicyManager
                         if (dpm == null || !dpm.isDeviceOwnerApp(packageName)) {
@@ -291,12 +344,32 @@ class MainActivity : FlutterActivity() {
                             return@setMethodCallHandler
                         }
                         try {
-                            val admin = KioskAdminReceiver.componentName(this)
-                            dpm.reboot(admin)
+                            // Lock task outlives the owner check otherwise and
+                            // leaves the app pinned with nothing able to unpin
+                            // it.
+                            try { stopLockTask() } catch (_: Throwable) {}
+                            @Suppress("DEPRECATION")
+                            dpm.clearDeviceOwnerApp(packageName)
+                            Log.i(TAG_KIOSK, "device owner cleared")
                             result.success(null)
                         } catch (t: Throwable) {
-                            result.error("reboot_failed", t.message, null)
+                            Log.e(TAG_KIOSK, "clearDeviceOwnerApp failed", t)
+                            result.error("clear_failed", t.message, null)
                         }
+                    }
+                    "firmwareCapabilities" -> {
+                        // What this particular tablet can actually be asked
+                        // to do. The service menu greys out what is missing
+                        // and says why, rather than offering a button that
+                        // quietly does nothing.
+                        result.success(
+                            mapOf(
+                                "vendorBars" to hasVendorFirmware,
+                                "vendorReboot" to hasVendorFirmware,
+                                "deviceOwner" to isDeviceOwner(),
+                                "firmware" to (Build.DISPLAY ?: ""),
+                            ),
+                        )
                     }
                     "requestUsbPermission" -> {
                         // Force-show the "Allow USB access?" dialog for the
@@ -414,7 +487,6 @@ class MainActivity : FlutterActivity() {
     override fun onDestroy() {
         if (instance === this) instance = null
         stopImmersiveTicker()
-        stopWatchdog()
         try {
             unregisterReceiver(usbPermissionReceiver)
         } catch (_: Throwable) {
@@ -563,6 +635,11 @@ class MainActivity : FlutterActivity() {
         // haven't been provisioned via `adb shell dpm set-device-owner`).
         configureDeviceOwnerKiosk()
 
+        // Re-arm the firmware's bar properties on every single start, the
+        // way the factory app does. Costs one broadcast and is what makes
+        // the service menu's "show nav bar" expire by itself.
+        applyVendorBarPolicy(hidden = true)
+
         // Show over keyguard / wake the screen for boot-launches.
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
             setShowWhenLocked(true)
@@ -600,24 +677,17 @@ class MainActivity : FlutterActivity() {
 
     override fun onResume() {
         super.onResume()
-        // Back on screen: nothing to drag forward, and whatever suppression
-        // the operator earned by leaving has served its purpose. Cleared
-        // before ensureOverlayPermission, which may open a fresh window of
-        // its own — order matters, because that call sends us to Settings.
-        stopWatchdog()
-        watchdogSuppressUntilMs = 0
         applyImmersive()
         tryEnterLockTask()
         applyGestureExclusion()
-        ensureOverlayPermission()
     }
 
     override fun onPause() {
         // Nothing to fight over while we are off screen, and a ticker
         // running behind the APK-install dialog would poke the very bars
-        // the installer needs.
+        // the installer needs. Whatever took the foreground — Settings, the
+        // installer, the operator — is now left alone until they come back.
         stopImmersiveTicker()
-        startWatchdogIfNeeded()
         super.onPause()
     }
 
@@ -626,73 +696,136 @@ class MainActivity : FlutterActivity() {
         return dpm?.isDeviceOwnerApp(packageName) == true
     }
 
-    /** Only ever armed on a tablet with no device owner — see [watchdogTicker]. */
-    private fun startWatchdogIfNeeded() {
-        if (isDeviceOwner()) return
-        watchdogAttempts = 0
-        uiHandler.removeCallbacks(watchdogTicker)
-        uiHandler.postDelayed(watchdogTicker, WATCHDOG_TICK_MS)
-        Log.i(TAG_KIOSK, "watchdog armed (no device owner)")
-    }
-
-    private fun stopWatchdog() {
-        uiHandler.removeCallbacks(watchdogTicker)
-    }
-
-    private fun bringSelfToFront() {
-        val intent = packageManager.getLaunchIntentForPackage(packageName) ?: return
-        intent.addFlags(
-            Intent.FLAG_ACTIVITY_REORDER_TO_FRONT or Intent.FLAG_ACTIVITY_NEW_TASK,
-        )
-        try {
-            startActivity(intent)
-        } catch (t: Throwable) {
-            // Logged for the first few ticks only: this runs once a second,
-            // and a blocked background start fails the same way every time.
-            if (watchdogAttempts < 3) {
-                Log.w(TAG_KIOSK, "watchdog start refused: " + t.message)
-            }
-        }
-        watchdogAttempts++
+    /**
+     * Read a system property the way a shell would.
+     *
+     * `android.os.SystemProperties` is hidden API and blocked for us, but
+     * `/system/bin/getprop` is a plain executable any app may run. Undefined
+     * properties come back as an empty line, which is exactly the signal we
+     * need — no exception, no ambiguity.
+     */
+    private fun readSystemProperty(name: String): String? = try {
+        val process = ProcessBuilder("/system/bin/getprop", name)
+            .redirectErrorStream(true)
+            .start()
+        val value = process.inputStream.bufferedReader().use { it.readText() }.trim()
+        process.waitFor()
+        value.ifEmpty { null }
+    } catch (t: Throwable) {
+        Log.w(TAG_KIOSK, "getprop $name failed: ${t.message}")
+        null
     }
 
     /**
-     * Ask for "display over other apps" — once per process, and only where
-     * there is no device owner to make it unnecessary.
+     * Whether this tablet's firmware owns the system bars and answers the RY
+     * broadcasts.
      *
-     * Without this permission [watchdogTicker] is inert: Android 10 refuses
-     * activity starts from an app with no visible window, and our
-     * `excludeFromRecents` closes the other way out, since that exemption
-     * wants a task on the Recents screen. SYSTEM_ALERT_WINDOW is what makes
-     * the watchdog work at all.
+     * Probed once — it forks a process — and cached for the life of the
+     * activity, since a ROM does not change under a running app.
      *
-     * The prompt is a system screen, so we have to leave for it — which
-     * trips both lock task and the very watchdog it is about to enable.
-     * Both get the same kind of grace window the APK installer uses.
+     * Everything vendor-specific hangs off this: the bar policy, the reboot
+     * broadcast, and which service-menu tiles are offered at all. On any
+     * other tablet the answer is false and those paths are simply not taken,
+     * rather than fired into a void where `sendBroadcast` would report a
+     * cheerful success nobody could act on.
      */
-    private fun ensureOverlayPermission() {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) return
-        if (overlayAsked || isDeviceOwner()) return
-        if (Settings.canDrawOverlays(this)) return
-        overlayAsked = true
-        val until = SystemClock.elapsedRealtime() + OVERLAY_PROMPT_GRACE_MS
-        watchdogSuppressUntilMs = until
-        suppressLockUntilMs = until
-        try {
-            stopLockTask()
-        } catch (_: Throwable) {
-        }
-        try {
-            startActivity(
-                Intent(
-                    Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
-                    Uri.parse("package:" + packageName),
-                ).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
-            )
-            Log.i(TAG_KIOSK, "asking for SYSTEM_ALERT_WINDOW")
+    private val hasVendorFirmware: Boolean by lazy {
+        val value = readSystemProperty(PROP_NAVBAR_DISABLED)
+        val present = value != null
+        Log.i(
+            TAG_KIOSK,
+            "vendor firmware: $present ($PROP_NAVBAR_DISABLED=$value, " +
+                "build=${Build.DISPLAY})",
+        )
+        present
+    }
+
+    /**
+     * Ask the RY firmware to keep both system bars off from the next boot.
+     *
+     * Called on every start, exactly as the factory app does — its log reads
+     * `Android系统--setSystemBar：false` / `锐翊主板--隐藏导航栏状态栏` on each
+     * launch. Sending it unconditionally is what makes the service-mode
+     * "show nav bar" a **one-session** loan: the operator turns the bars on,
+     * reboots into them, does the work, and the reboot after that comes back
+     * clean because this line already re-armed the properties.
+     *
+     * Nothing happens on the running system; see [ACTION_VENDOR_STATUSBAR_ON].
+     */
+    private fun applyVendorBarPolicy(hidden: Boolean): Boolean {
+        if (!hasVendorFirmware) return false
+        val action =
+            if (hidden) ACTION_VENDOR_STATUSBAR_OFF else ACTION_VENDOR_STATUSBAR_ON
+        return try {
+            sendBroadcast(Intent(action))
+            Log.i(TAG_KIOSK, "vendor bars: sent $action (applies on next boot)")
+            true
         } catch (t: Throwable) {
-            Log.w(TAG_KIOSK, "overlay permission screen unavailable: " + t.message)
+            Log.w(TAG_KIOSK, "vendor bar broadcast refused: ${t.message}")
+            false
         }
+    }
+
+    /**
+     * Reboot the tablet, best path first.
+     *
+     * 1. [DevicePolicyManager.reboot] — clean, synchronous, needs device owner.
+     * 2. The RY firmware broadcast — no permission at all, and the only path
+     *    left on a tablet that was never provisioned. This is what the factory
+     *    app uses for every one of its restarts.
+     *
+     * Returns false when neither path was available, so the caller can fall
+     * back to [scheduleRelaunchAndKill] and at least restart the process.
+     */
+    private fun rebootTablet(): Boolean {
+        val dpm = getSystemService(Context.DEVICE_POLICY_SERVICE)
+            as? DevicePolicyManager
+        if (dpm != null && dpm.isDeviceOwnerApp(packageName)) {
+            try {
+                dpm.reboot(KioskAdminReceiver.componentName(this))
+                Log.i(TAG_KIOSK, "reboot via DevicePolicyManager")
+                return true
+            } catch (t: Throwable) {
+                // DPM.reboot refuses outright while a call is active, and
+                // some OEM builds throw here for reasons of their own — the
+                // vendor broadcast below is unbothered by both.
+                Log.w(TAG_KIOSK, "DPM reboot failed, trying vendor: ${t.message}")
+            }
+        }
+        // Only where somebody is listening. sendBroadcast succeeds whether or
+        // not a receiver exists, so firing this blind would report a reboot
+        // that never happens and leave the operator watching a live screen,
+        // wondering whether the tap registered.
+        if (!hasVendorFirmware) {
+            Log.w(TAG_KIOSK, "no reboot path: not device owner, not RY firmware")
+            return false
+        }
+        return try {
+            sendBroadcast(Intent(ACTION_VENDOR_REBOOT))
+            Log.i(TAG_KIOSK, "reboot via vendor broadcast")
+            true
+        } catch (t: Throwable) {
+            Log.e(TAG_KIOSK, "vendor reboot broadcast failed", t)
+            false
+        }
+    }
+
+    /**
+     * Hand the operator a tablet with visible system bars for one servicing
+     * session, mirroring the factory app's «показать навбар» switch.
+     *
+     * Sends STATUSBAR_ON (properties → false), then reboots. The bars come
+     * back on that boot; [applyVendorBarPolicy] then re-arms the properties
+     * during startup, so the *following* reboot returns the tablet to a bare
+     * kiosk with no second visit to the service menu.
+     */
+    private fun showNavBarAndReboot(): Boolean {
+        if (!applyVendorBarPolicy(hidden = false)) return false
+        // The property write happens inside system_server as it handles the
+        // broadcast. Rebooting in the same breath can outrun it, so let the
+        // handler land before pulling the floor out.
+        uiHandler.postDelayed({ rebootTablet() }, VENDOR_BAR_SETTLE_MS)
+        return true
     }
 
     override fun onWindowFocusChanged(hasFocus: Boolean) {
@@ -703,9 +836,7 @@ class MainActivity : FlutterActivity() {
         } else {
             // Losing window focus while still resumed means something is
             // covering us without replacing us — on a kiosk that is almost
-            // always the notification shade. onPause never fires for it, so
-            // the watchdog would sleep straight through the one escape route
-            // a customer is most likely to find.
+            // always the notification shade, and onPause never fires for it.
             dismissShadeIfNeeded()
         }
     }
@@ -729,7 +860,7 @@ class MainActivity : FlutterActivity() {
     private fun dismissShadeIfNeeded() {
         if (isDeviceOwner()) return
         val now = SystemClock.elapsedRealtime()
-        if (now < watchdogSuppressUntilMs || now < suppressLockUntilMs) return
+        if (now < suppressLockUntilMs) return
         if (now - lastShadeDismissMs < SHADE_DISMISS_MIN_GAP_MS) return
         lastShadeDismissMs = now
         try {
@@ -775,13 +906,49 @@ class MainActivity : FlutterActivity() {
     }
 
     /**
-     * Attempt to enter screen-pinning. Wrapped in try/catch because on most
-     * consumer devices [startLockTask] only succeeds when the app is on the
-     * lock-task allowlist — otherwise it throws IllegalStateException. The
-     * intent is best-effort: if the OS denies, we still have manifest-level
-     * `excludeFromRecents` and HOME-category to make escape harder.
+     * Enter lock task — but only the silent, device-owner flavour.
+     *
+     * Android has two lock-task modes and they are not two grades of the
+     * same thing:
+     *
+     *  * LOCKED  — device owner. Silent, no dialog, and with
+     *              `setLockTaskFeatures(0)` it takes the notification shade
+     *              away too. This is the one we want.
+     *  * PINNED  — everyone else. The system posts "Приложение закреплено —
+     *              чтобы открепить, нажмите и удерживайте «Назад» и «Обзор»"
+     *              and keeps the navigation bar on screen to host those two
+     *              buttons, because they are now the documented way out.
+     *
+     * PINNED therefore *undoes* what we came for: it puts back the very bar
+     * the firmware properties removed, and advertises the escape route to
+     * the customer. On a tablet that was never provisioned we are better off
+     * not asking — the bars are already gone at the framework level, which
+     * is a stronger lock than pinning ever was.
+     *
+     * Still wrapped in try/catch: [startLockTask] throws when the caller is
+     * not on the lock-task allowlist, and a provisioning that half-succeeded
+     * should not take the app down with it.
      */
     private fun tryEnterLockTask() {
+        if (!isDeviceOwner()) {
+            // Not owned → pinning is the only mode on offer, and it costs
+            // more than it buys. If we somehow arrived here already pinned,
+            // leave: the toast and the nav bar go with it.
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                val am = getSystemService(Context.ACTIVITY_SERVICE) as? ActivityManager
+                val state = am?.lockTaskModeState
+                    ?: ActivityManager.LOCK_TASK_MODE_NONE
+                if (state == ActivityManager.LOCK_TASK_MODE_PINNED) {
+                    try {
+                        stopLockTask()
+                        Log.i(TAG_KIOSK, "left PINNED mode (no device owner)")
+                    } catch (t: Throwable) {
+                        Log.w(TAG_KIOSK, "stopLockTask (unpin) failed: ${t.message}")
+                    }
+                }
+            }
+            return
+        }
         if (suppressLockOnce) {
             // Operator just chose "Exit to Android" — don't fight them.
             suppressLockOnce = false
@@ -793,14 +960,10 @@ class MainActivity : FlutterActivity() {
             Log.i(TAG_KIOSK, "lock task suppressed: install in progress")
             return
         }
-        // Already pinned? Then leave it alone. startLockTask() was called from
-        // every onResume, and on a tablet that is not device-owner each call
-        // re-shows the system "App is pinned" confirmation. With a flaky USB
-        // contact that turned into a dialog on every replug: the attach fires
-        // our USB intent-filter, the activity resumes, and up it came again.
-        //
-        // LOCKED is the device-owner path (silent), PINNED is the user-confirmed
-        // one — in both we are already where we want to be.
+        // Already locked? Leave it alone. This runs from every onResume, and
+        // a redundant startLockTask is at best wasted work — historically it
+        // was worse than that, re-showing the pinning dialog on every USB
+        // replug back when we still called it without owner.
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
             val am = getSystemService(Context.ACTIVITY_SERVICE) as? ActivityManager
             val state = am?.lockTaskModeState ?: ActivityManager.LOCK_TASK_MODE_NONE
@@ -850,26 +1013,40 @@ class MainActivity : FlutterActivity() {
             Log.e(TAG_KIOSK, "setLockTaskPackages other failure", t)
             return
         }
-        // Make the kiosk the persistent HOME/launcher. After a reboot the
-        // system launches HOME — which is now us — so the machine returns
-        // straight to the catalog with no operator on-site. This is the
-        // reliable path: BootReceiver's startActivity is blocked by Android
-        // 10+ background-activity-start restrictions (observed: device booted
-        // to the stock launcher instead of the kiosk), but the HOME route is
-        // not subject to that.
+        // Deliberately NOT the HOME app — we match the factory machine.
+        //
+        // We used to pin ourselves as the persistent launcher, because
+        // BootReceiver's startActivity looked like it was being refused by
+        // the Android 10+ background-activity-start rules. Watching a
+        // factory tablet boot showed what actually happens there:
+        //
+        //   START {cat=[HOME] cmp=com.android.launcher3/.Launcher3QuickStepGo}
+        //   Start proc com.shengma.shouhj.sy.world for broadcast BootReceiver
+        //   START {cmp=.../ShanpingYeActivity} from uid 10131
+        //   W/ActivityTaskManager: Background activity start for
+        //       com.shengma.shouhj.sy.world allowed because
+        //       SYSTEM_ALERT_WINDOW permission is granted.
+        //
+        // Declaring SYSTEM_ALERT_WINDOW is enough on its own: it carries the
+        // `appop` protection flag, so the permission is granted at install
+        // and `hasSystemAlertWindowPermission()` falls back to that grant
+        // when the app-op is still MODE_DEFAULT. Nobody has to tick
+        // "Display over other apps" — the earlier blocked boot was the
+        // Android 14 tablet, where this exemption no longer applies.
+        //
+        // The cost is honest: the stock launcher is on screen for the ~6 s
+        // it takes us to come up, exactly as on the factory machine. The
+        // gain is a tablet that can still be reached when the kiosk will not
+        // start, which on a machine standing in a mall is worth more.
+        //
+        // Clearing matters as much as not adding: a tablet provisioned by an
+        // earlier build already carries the HOME binding, and it survives
+        // reinstalls. Without this it would quietly keep winning.
         try {
-            val homeFilter = IntentFilter(Intent.ACTION_MAIN).apply {
-                addCategory(Intent.CATEGORY_HOME)
-                addCategory(Intent.CATEGORY_DEFAULT)
-            }
-            dpm.addPersistentPreferredActivity(
-                admin,
-                homeFilter,
-                ComponentName(this, MainActivity::class.java),
-            )
-            Log.i(TAG_KIOSK, "addPersistentPreferredActivity(HOME) OK")
+            dpm.clearPackagePersistentPreferredActivities(admin, packageName)
+            Log.i(TAG_KIOSK, "cleared persistent HOME binding (factory parity)")
         } catch (t: Throwable) {
-            Log.e(TAG_KIOSK, "addPersistentPreferredActivity failed", t)
+            Log.e(TAG_KIOSK, "clearPackagePersistentPreferredActivities failed", t)
         }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
             try {
@@ -1013,19 +1190,13 @@ class MainActivity : FlutterActivity() {
          */
         private const val IMMERSIVE_TICK_MS = 600L
 
-        /** Watchdog period. Once a second, as specified. */
-        private const val WATCHDOG_TICK_MS = 1000L
-
         /**
-         * How long the service menu's exit buys the operator before the
-         * watchdog takes the screen back. Long enough to redo the Wi-Fi
-         * unhurried, short enough that a session someone walked away from
-         * does not leave the machine open for the rest of the day.
+         * Grace between the STATUSBAR_ON broadcast and the reboot that makes
+         * it visible. system_server writes the property while handling the
+         * broadcast; reboot too early and the write is lost, leaving the
+         * operator staring at the same bare screen they just asked to change.
          */
-        private const val SERVICE_EXIT_GRACE_MS = 30L * 60L * 1000L
-
-        /** Same idea for the overlay prompt, which is a much shorter errand. */
-        private const val OVERLAY_PROMPT_GRACE_MS = 2L * 60L * 1000L
+        private const val VENDOR_BAR_SETTLE_MS = 700L
 
         /**
          * How long the system USB-permission dialog is protected from

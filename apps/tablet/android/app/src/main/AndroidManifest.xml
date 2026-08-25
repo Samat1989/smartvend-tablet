@@ -15,11 +15,27 @@
          install silently; non-owners get a one-time user confirmation. -->
     <uses-permission
         android:name="android.permission.REQUEST_INSTALL_PACKAGES"/>
-    <!-- Lets the no-owner watchdog in MainActivity start an activity from
-         the background, which Android 10+ otherwise refuses. Needed only on
-         tablets that were never provisioned as device owner; with owner the
-         watchdog never runs and this permission goes unused. Granted by hand
-         from Settings, never silently. -->
+    <!-- The reason BootReceiver's startActivity is allowed to run at all.
+         Android 10+ refuses background activity starts, but exempts callers
+         holding SYSTEM_ALERT_WINDOW — and because this permission carries
+         the `appop` protection flag it is granted at install time, with the
+         app-op left at MODE_DEFAULT. hasSystemAlertWindowPermission() notes
+         the op, sees MODE_DEFAULT and falls back to the install grant, so
+         the exemption applies without anyone ticking "Display over other
+         apps". Confirmed on a factory tablet, which autostarts by this exact
+         route and logs:
+
+           W/ActivityTaskManager: Background activity start for
+             com.shengma.shouhj.sy.world allowed because
+             SYSTEM_ALERT_WINDOW permission is granted.
+
+         Android 14 narrowed this exemption, so on newer tablets the boot
+         start needs the device-owner HOME binding instead — see the note in
+         MainActivity.configureDeviceOwnerKiosk.
+
+         Only the permission is wanted here, never the app-op: nothing asks
+         the operator to tick "Display over other apps", and the app draws no
+         overlay of its own. -->
     <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW"/>
 
     <application
@@ -50,17 +66,15 @@
                 <action android:name="android.intent.action.MAIN"/>
                 <category android:name="android.intent.category.LAUNCHER"/>
             </intent-filter>
-            <!-- Allow this app to be set as the default Home/launcher app. With
-                 this filter, the operator can long-press Home and select
-                 "M109E Вендинг" as the default — pressing Home will then
-                 always return here, no matter what the customer touches. -->
-            <intent-filter>
-                <action android:name="android.intent.action.MAIN"/>
-                <category
-                    android:name="android.intent.category.HOME"/>
-                <category
-                    android:name="android.intent.category.DEFAULT"/>
-            </intent-filter>
+            <!-- No CATEGORY_HOME on purpose. The factory app is not a
+                 launcher either: the stock launcher3 comes up at boot and
+                 the vending app covers it a few seconds later, started by
+                 its BOOT_COMPLETED receiver. Matching that leaves a way
+                 back into Android on a tablet whose kiosk refuses to start,
+                 which is the difference between a phone call and a site
+                 visit. Restoring the filter also means restoring
+                 addPersistentPreferredActivity in MainActivity — one is
+                 useless without the other. -->
             <!-- Auto-launch the app when the M109E's CH340 USB-Serial
                  adapter is plugged in. The exact VID/PID is in
                  res/xml/device_filter.xml (matches the factory app's

@@ -416,10 +416,14 @@ class BoardClient extends ChangeNotifier {
           // stuck USB-Serial driver state, #10 rebooted the whole tablet.
           // Both actions are gone on purpose — see docs/known-issues.md KI-1.
           //
-          // This app is the launcher (category.HOME), so killing it took the
-          // only thing on screen away with it, and the relaunch was an inexact
-          // AlarmManager alarm fired into a process that no longer existed —
-          // exactly the background activity start Android 10+ is free to drop.
+          // Killing our own process took the only thing on screen away with
+          // it, and the relaunch was an inexact AlarmManager alarm fired into
+          // a process that no longer existed — exactly the background activity
+          // start Android 10+ is free to drop. (At the time we were also the
+          // launcher, so there was nothing behind us either; we have since
+          // stopped being HOME — see docs/05_SYSTEM_BARS_AND_AUTOSTART.md —
+          // but that only changes what the customer stares at, not the fact
+          // that the restart may never arrive.)
           // On top of that [_reconnectAttempts] only resets on a successful
           // exchange, so a board that is merely unplugged or dead never cleared
           // it: the kiosk disappeared every ~5 minutes, indefinitely. Neither a

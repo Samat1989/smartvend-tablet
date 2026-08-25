@@ -414,6 +414,12 @@ class Strings extends ChangeNotifier {
       'en': 'The tablet will be unlinked from the machine. To resume, you '
           'will have to enter the machine number and secret key again.',
     },
+    'service_system': {
+      'ru': 'Системные настройки',
+      'kk': 'Жүйелік параметрлер',
+      'ky': 'Тутум жөндөөлөрү',
+      'en': 'System settings',
+    },
     'service_exit_kiosk': {
       'ru': 'Выйти в Android',
       'kk': 'Android-қа шығу',
@@ -429,6 +435,101 @@ class Strings extends ChangeNotifier {
           'киоск режимине кайтат.',
       'en': 'The Android system menu will open. The app re-enters '
           'kiosk mode the next time it is brought to the foreground.',
+    },
+    'service_show_navbar': {
+      'ru': 'Показать навбар',
+      'kk': 'Навигация панелін көрсету',
+      'ky': 'Навигация панелин көрсөтүү',
+      'en': 'Show nav bar',
+    },
+    'service_show_navbar_go': {
+      'ru': 'Показать и перезагрузить',
+      'kk': 'Көрсету және қайта қосу',
+      'ky': 'Көрсөтүү жана өчүрүп-күйгүзүү',
+      'en': 'Show and reboot',
+    },
+    'service_show_navbar_confirm': {
+      'ru': 'Планшет сразу перезагрузится и включится с системными '
+          'кнопками внизу и строкой состояния сверху. Это на один сеанс: '
+          'после следующей перезагрузки они снова исчезнут сами.',
+      'kk': 'Планшет бірден қайта қосылады және төменде жүйелік '
+          'батырмалармен, жоғарыда күй жолағымен қосылады. Бұл бір '
+          'сеансқа: келесі қайта қосудан кейін олар өздігінен жоғалады.',
+      'ky': 'Планшет дароо өчүп-күйөт жана ылдыйда тутум баскычтары, '
+          'жогоруда абал сабы менен күйөт. Бул бир сеанска: кийинки '
+          'өчүрүп-күйгүзүүдөн кийин алар өздөрү жоголот.',
+      'en': 'The tablet reboots immediately and comes back with the '
+          'system buttons at the bottom and the status bar on top. This '
+          'lasts one session — the reboot after that hides them again on '
+          'its own.',
+    },
+    'service_clear_owner': {
+      'ru': 'Снять права владельца',
+      'kk': 'Иесі құқықтарын алып тастау',
+      'ky': 'Ээлик укуктарын алып салуу',
+      'en': 'Release device owner',
+    },
+    'service_clear_owner_go': {
+      'ru': 'Снять права',
+      'kk': 'Құқықтарды алып тастау',
+      'ky': 'Укуктарды алып салуу',
+      'en': 'Release',
+    },
+    'service_clear_owner_confirm': {
+      'ru': 'Приложение перестанет быть владельцем устройства. Защита '
+          'киоска отключится сразу: шторка станет доступной, закрепление '
+          'экрана пропадёт. Вернуть права можно только через adb или '
+          'mmd_diag на планшете без аккаунтов. Делайте это, только если '
+          'снимаете планшет с аппарата.',
+      'kk': 'Қосымша құрылғы иесі болуын тоқтатады. Киоск қорғанысы бірден '
+          'өшеді: перде қолжетімді болады, экранды бекіту жоғалады. '
+          'Құқықтарды тек аккаунтсыз планшетте adb немесе mmd_diag арқылы '
+          'қайтаруға болады. Мұны планшетті автоматтан шешкенде ғана '
+          'жасаңыз.',
+      'ky': 'Колдонмо түзмөктүн ээси болбой калат. Киоск коргоосу дароо '
+          'өчөт: парда жеткиликтүү болот, экранды бекитүү жоголот. '
+          'Укуктарды аккаунтсуз планшетте adb же mmd_diag аркылуу гана '
+          'кайтарууга болот. Муну планшетти автоматтан чечкенде гана '
+          'кылыңыз.',
+      'en': 'The app will stop being the device owner. Kiosk protection ends '
+          'at once: the notification shade becomes reachable and screen '
+          'pinning goes away. The rights can only be restored over adb or '
+          'mmd_diag on a tablet with no accounts. Do this only when taking '
+          'the tablet off a machine.',
+    },
+    'service_clear_owner_done': {
+      'ru': 'Права владельца сняты',
+      'kk': 'Иесі құқықтары алынды',
+      'ky': 'Ээлик укуктары алынды',
+      'en': 'Device owner released',
+    },
+    'tile_off_no_owner': {
+      'ru': 'права не выданы',
+      'kk': 'құқықтар берілмеген',
+      'ky': 'укуктар берилген эмес',
+      'en': 'not device owner',
+    },
+    'service_reboot': {
+      'ru': 'Перезагрузить',
+      'kk': 'Қайта қосу',
+      'ky': 'Өчүрүп-күйгүзүү',
+      'en': 'Restart tablet',
+    },
+    'service_reboot_confirm': {
+      'ru': 'Планшет перезагрузится сейчас. Если идёт продажа, она '
+          'прервётся. Аппарат вернётся в рабочий режим сам.',
+      'kk': 'Планшет қазір қайта қосылады. Сатылым жүріп жатса, ол '
+          'үзіледі. Автомат жұмыс режиміне өзі оралады.',
+      'ky': 'Планшет азыр өчүп-күйөт. Сатуу жүрүп жатса, ал үзүлөт. '
+          'Автомат иш режимине өзү кайтат.',
+      'en': 'The tablet will restart now. A sale in progress will be '
+          'interrupted. The machine comes back on its own.',
+    },
+    'service_reboot_failed': {
+      'ru': 'Не удалось перезагрузить. Выключите питание вручную.',
+      'kk': 'Қайта қосу мүмкін болмады. Қуатты қолмен өшіріңіз.',
+      'ky': 'Өчүрүп-күйгүзүү мүмкүн болгон жок. Кубатты кол менен өчүрүңүз.',
+      'en': 'Restart failed. Power-cycle the tablet by hand.',
     },
     'service_change_pin': {'ru': 'Сменить PIN', 'kk': 'PIN өзгерту', 'ky': 'PIN өзгөртүү', 'en': 'Change PIN'},
     'service_m102_password': {
@@ -579,6 +680,18 @@ class Strings extends ChangeNotifier {
     'motor_label': {'ru': 'Мотор', 'kk': 'Мотор', 'ky': 'Мотор', 'en': 'Motor'},
     // Service mode — menu tiles disabled on a lock board
     'tile_off_no_motors': {'ru': 'нет моторов', 'kk': 'моторлар жоқ', 'ky': 'мотор жок', 'en': 'no motors'},
+    'tile_off_vendor_only': {
+      'ru': 'только на заводской прошивке SHENGMA',
+      'kk': 'тек SHENGMA зауыттық микробағдарламасында',
+      'ky': 'SHENGMA заводдук программасында гана',
+      'en': 'SHENGMA firmware only',
+    },
+    'tile_off_needs_owner': {
+      'ru': 'нужны права владельца устройства',
+      'kk': 'құрылғы иесінің құқықтары қажет',
+      'ky': 'түзмөк ээсинин укуктары керек',
+      'en': 'needs device owner',
+    },
     'tile_off_no_channels': {'ru': 'нет каналов', 'kk': 'арналар жоқ', 'ky': 'канал жок', 'en': 'no channels'},
     'service_update': {'ru': 'Обновление', 'kk': 'Жаңарту', 'ky': 'Жаңыртуу', 'en': 'Update'},
     'pin_changed': {'ru': 'PIN изменён', 'kk': 'PIN өзгертілді', 'ky': 'PIN өзгөртүлдү', 'en': 'PIN changed'},

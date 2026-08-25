@@ -1,12 +1,10 @@
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 
 import '../board/board_client.dart';
 import '../services/device_storage.dart';
-import '../services/kiosk_bridge.dart';
 import '../services/strings.dart';
-import '../services/supabase_api.dart';
+import '../widgets/service_tile.dart';
 import 'board_diag_screen.dart';
 import 'climate_screen.dart';
 import 'inventory_edit_screen.dart';
@@ -14,8 +12,8 @@ import 'layout_editor_screen.dart';
 import 'screensaver_media_screen.dart';
 import 'storefront_settings_screen.dart';
 import 'support_settings_screen.dart';
+import 'system_settings_screen.dart';
 import 'tester_screen.dart';
-import 'update_screen.dart';
 
 /// Hub for service-mode actions. Reached via the long-press on the home
 /// screen header → PIN gate → here.
@@ -27,7 +25,7 @@ class ServiceMenuScreen extends StatelessWidget {
     final s = context.watch<Strings>();
     // На плате с замком половина сервисных функций физически отсутствует:
     // моторов нет, каналов DO и датчиков температуры тоже. Плитки не прячем,
-    // а гасим — см. _Tile.disabledReason.
+    // а гасим — см. ServiceTile.disabledReason.
     final lockBoard = context.watch<BoardClient>().isMicromarket;
 
     return Scaffold(
@@ -54,7 +52,7 @@ class ServiceMenuScreen extends StatelessWidget {
                   crossAxisSpacing: 12,
                   childAspectRatio: 1.1,
                   children: [
-                    _Tile(
+                    ServiceTile(
                       icon: Icons.precision_manufacturing,
                       label: s.t('service_test_motors'),
                       color: Colors.indigo,
@@ -64,7 +62,7 @@ class ServiceMenuScreen extends StatelessWidget {
                             builder: (_) => const TesterScreen()),
                       ),
                     ),
-                    _Tile(
+                    ServiceTile(
                       icon: Icons.thermostat,
                       label: s.t('service_climate'),
                       color: Colors.lightBlue,
@@ -77,7 +75,7 @@ class ServiceMenuScreen extends StatelessWidget {
                             builder: (_) => const ClimateScreen()),
                       ),
                     ),
-                    _Tile(
+                    ServiceTile(
                       icon: Icons.inventory_2,
                       label: s.t('service_inventory'),
                       color: Colors.teal,
@@ -90,7 +88,7 @@ class ServiceMenuScreen extends StatelessWidget {
                     // showed a "в разработке" dialog. Its job is now split
                     // for real between «Витрина» (how the catalog looks) and
                     // «Редактор раскладки» (which motor sits where).
-                    _Tile(
+                    ServiceTile(
                       icon: Icons.dashboard_customize,
                       label: s.t('service_layout_editor'),
                       color: Colors.indigo,
@@ -99,7 +97,7 @@ class ServiceMenuScreen extends StatelessWidget {
                             builder: (_) => const LayoutEditorScreen()),
                       ),
                     ),
-                    _Tile(
+                    ServiceTile(
                       icon: Icons.storefront,
                       label: s.t('service_storefront'),
                       color: Colors.cyan.shade700,
@@ -108,7 +106,7 @@ class ServiceMenuScreen extends StatelessWidget {
                             builder: (_) => const StorefrontSettingsScreen()),
                       ),
                     ),
-                    _Tile(
+                    ServiceTile(
                       icon: Icons.slideshow,
                       label: s.t('service_screensaver_media'),
                       color: Colors.pink,
@@ -117,7 +115,7 @@ class ServiceMenuScreen extends StatelessWidget {
                             builder: (_) => const ScreensaverMediaScreen()),
                       ),
                     ),
-                    _Tile(
+                    ServiceTile(
                       icon: Icons.support_agent,
                       label: s.t('service_support'),
                       color: Colors.green.shade700,
@@ -130,13 +128,7 @@ class ServiceMenuScreen extends StatelessWidget {
                     // The operator manages slot-level concerns there, and
                     // sensor mode is one of them — keeps service-menu
                     // focused on machine-wide settings (PIN, layout, etc).
-                    _Tile(
-                      icon: Icons.password,
-                      label: s.t('service_change_pin'),
-                      color: Colors.amber.shade800,
-                      onTap: () => _changePin(context),
-                    ),
-                    _Tile(
+                    ServiceTile(
                       icon: Icons.developer_board,
                       label: s.t('service_board'),
                       color: Colors.purple,
@@ -151,26 +143,20 @@ class ServiceMenuScreen extends StatelessWidget {
                     // items in the cart. A button that just races that timer
                     // gave the operator nothing and crowded the menu. The
                     // error screen still offers a retry.
-                    _Tile(
-                      icon: Icons.system_update,
-                      label: s.t('service_update'),
-                      color: Colors.deepOrange,
+                    //
+                    // Всё, что про сам планшет, а не про автомат —
+                    // обновление, PIN, полосы, перезагрузка, выход в Android
+                    // и отвязка — уехало на отдельный экран. В плоском гриде
+                    // их стало четырнадцать, и техник, искавший «Обновление»,
+                    // читал мимо тестов моторов.
+                    ServiceTile(
+                      icon: Icons.settings,
+                      label: s.t('service_system'),
+                      color: Colors.blueGrey,
                       onTap: () => Navigator.of(context).push(
                         MaterialPageRoute(
-                            builder: (_) => const UpdateScreen()),
+                            builder: (_) => const SystemSettingsScreen()),
                       ),
-                    ),
-                    _Tile(
-                      icon: Icons.exit_to_app,
-                      label: s.t('service_exit_kiosk'),
-                      color: Colors.blueGrey,
-                      onTap: () => _exitToAndroid(context),
-                    ),
-                    _Tile(
-                      icon: Icons.logout,
-                      label: s.t('service_unpair'),
-                      color: Colors.redAccent,
-                      onTap: () => _confirmUnpair(context),
                     ),
                   ],
                 ),
@@ -180,188 +166,6 @@ class ServiceMenuScreen extends StatelessWidget {
         ),
       ),
     );
-  }
-
-  /// Change the service PIN — typed twice, and the dialog will not close
-  /// until both boxes agree and the PIN passes [DeviceStorage.validatePin].
-  ///
-  /// The confirmation is not ceremony. This PIN is the only way back into
-  /// service mode, the tablet is device owner so there is no uninstalling
-  /// around it, and the field is obscured — a single typo committed here
-  /// would leave the operator standing at a cabinet they can no longer get
-  /// into. Same reason the first-run screen has always asked twice; this
-  /// entry point simply never did.
-  Future<void> _changePin(BuildContext context) async {
-    final s = context.read<Strings>();
-    final ctrl = TextEditingController();
-    final confirmCtrl = TextEditingController();
-    final pin = await showDialog<String>(
-      context: context,
-      builder: (ctx) {
-        String? error;
-        return StatefulBuilder(
-          builder: (ctx, setLocal) => AlertDialog(
-            title: Text(s.t('service_change_pin')),
-            content: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  s.t('pin_change_hint'),
-                  style: const TextStyle(
-                      fontSize: 12, color: Colors.black54),
-                ),
-                const SizedBox(height: 12),
-                TextField(
-                  controller: ctrl,
-                  autofocus: true,
-                  obscureText: true,
-                  keyboardType: TextInputType.number,
-                  maxLength: 8,
-                  inputFormatters: [FilteringTextInputFormatter.digitsOnly],
-                  decoration: InputDecoration(labelText: s.t('pin_new')),
-                ),
-                TextField(
-                  controller: confirmCtrl,
-                  obscureText: true,
-                  keyboardType: TextInputType.number,
-                  maxLength: 8,
-                  inputFormatters: [FilteringTextInputFormatter.digitsOnly],
-                  decoration: InputDecoration(labelText: s.t('pin_repeat')),
-                ),
-                if (error != null) ...[
-                  const SizedBox(height: 4),
-                  Text(
-                    error!,
-                    style: const TextStyle(
-                        fontSize: 12,
-                        fontWeight: FontWeight.w600,
-                        color: Color(0xFFB3261E)),
-                  ),
-                ],
-              ],
-            ),
-            actions: [
-              TextButton(
-                onPressed: () => Navigator.of(ctx).pop(),
-                child: Text(s.t('btn_cancel')),
-              ),
-              FilledButton(
-                onPressed: () {
-                  final entered = ctrl.text.trim();
-                  final reason = DeviceStorage.validatePin(entered);
-                  if (reason != null) {
-                    setLocal(() => error = s
-                        .t(reason)
-                        .replaceAll('%n%', '${DeviceStorage.minPinLength}'));
-                    return;
-                  }
-                  if (entered != confirmCtrl.text.trim()) {
-                    setLocal(() => error = s.t('pin_mismatch'));
-                    return;
-                  }
-                  Navigator.of(ctx).pop(entered);
-                },
-                child: Text(s.t('btn_save')),
-              ),
-            ],
-          ),
-        );
-      },
-    );
-    if (pin == null || !context.mounted) return;
-    await context.read<DeviceStorage>().setServicePin(pin);
-    if (!context.mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-          content: Text(context.read<Strings>().t('pin_changed')),
-          backgroundColor: Colors.green),
-    );
-  }
-
-  /// Pops a confirmation, then calls into the Android side to stop lock
-  /// task and launch system Settings. The app reverts to kiosk on its
-  /// next resume — operator never has to "turn kiosk back on".
-  Future<void> _exitToAndroid(BuildContext context) async {
-    final s = context.read<Strings>();
-    final ok = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: Text(s.t('service_exit_kiosk')),
-        content: Text(s.t('service_exit_kiosk_confirm')),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(ctx).pop(false),
-            child: Text(s.t('payment_cancel')),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.of(ctx).pop(true),
-            child: Text(s.t('service_exit_kiosk')),
-          ),
-        ],
-      ),
-    );
-    if (ok != true) return;
-    try {
-      await KioskBridge.exitToAndroid();
-    } catch (e) {
-      if (context.mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('$e')),
-        );
-      }
-    }
-  }
-
-  Future<void> _confirmUnpair(BuildContext context) async {
-    final s = context.read<Strings>();
-    final ok = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: Text(s.t('service_unpair')),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text('${s.t('service_machine_id')}'
-                '${context.read<DeviceStorage>().machid ?? '?'}'),
-            const SizedBox(height: 10),
-            Text(s.t('service_unpair_hint'),
-                style: const TextStyle(fontSize: 13, height: 1.35)),
-          ],
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(ctx).pop(false),
-            child: Text(s.t('payment_cancel')),
-          ),
-          FilledButton(
-            style: FilledButton.styleFrom(backgroundColor: Colors.redAccent),
-            onPressed: () => Navigator.of(ctx).pop(true),
-            child: Text(s.t('service_unpair')),
-          ),
-        ],
-      ),
-    );
-    if (ok == true && context.mounted) {
-      // Give the machine up before wiping the credentials — afterwards we
-      // no longer have the secret to prove we were the holder, and the
-      // owner would have to unbind from the panel to free it.
-      final storage = context.read<DeviceStorage>();
-      final machid = storage.machid;
-      final secret = storage.secret;
-      if (machid != null && secret != null) {
-        await SupabaseApi().releaseMachine(
-          machid: machid,
-          secret: secret,
-          deviceId: await storage.deviceId(),
-        );
-      }
-      await storage.clearPairing();
-      if (context.mounted) {
-        Navigator.of(context).popUntil((r) => r.isFirst);
-      }
-    }
   }
 }
 
@@ -448,68 +252,6 @@ class _StatusHeader extends StatelessWidget {
             ),
           ],
         ],
-      ),
-    );
-  }
-}
-
-class _Tile extends StatelessWidget {
-  final IconData icon;
-  final String label;
-  final Color color;
-  final VoidCallback onTap;
-
-  /// Причина, по которой плитка неактивна. Null — плитка работает.
-  ///
-  /// Выключаем, а не прячем: у пропавшей плитки нет объяснения, и техник на
-  /// точке будет искать её в обновлении или в другой прошивке. Серая плитка с
-  /// подписью «нет моторов на этой плате» отвечает на вопрос сразу.
-  final String? disabledReason;
-
-  const _Tile({
-    required this.icon,
-    required this.label,
-    required this.color,
-    required this.onTap,
-    this.disabledReason,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    final off = disabledReason != null;
-    final tint = off ? Colors.grey : color;
-    return Material(
-      color: tint.withValues(alpha: off ? 0.08 : 0.15),
-      borderRadius: BorderRadius.circular(16),
-      child: InkWell(
-        borderRadius: BorderRadius.circular(16),
-        onTap: off ? null : onTap,
-        child: Padding(
-          padding: const EdgeInsets.all(16),
-          child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              Icon(icon, color: off ? Colors.white24 : color, size: 36),
-              const SizedBox(height: 12),
-              Text(
-                label,
-                textAlign: TextAlign.center,
-                style: TextStyle(
-                    color: off ? Colors.white38 : Colors.white,
-                    fontSize: 14,
-                    fontWeight: FontWeight.w600),
-              ),
-              if (off) ...[
-                const SizedBox(height: 4),
-                Text(
-                  disabledReason!,
-                  textAlign: TextAlign.center,
-                  style: const TextStyle(color: Colors.white24, fontSize: 11),
-                ),
-              ],
-            ],
-          ),
-        ),
       ),
     );
   }
