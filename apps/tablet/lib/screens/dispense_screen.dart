@@ -142,6 +142,23 @@ class _DispenseScreenState extends State<DispenseScreen>
         );
       }
 
+      // Every in-flight recordSaleItem, so the sale can only be closed once
+      // they have all landed.
+      //
+      // These writes stay off the dispense loop's critical path — a hung
+      // Supabase must not hold the next motor — but they are NOT
+      // fire-and-forget any more. complete_sale computes the sale amount by
+      // summing the item rows server-side:
+      //
+      //   sum(price * quantity) filter (where dispensed)
+      //
+      // so an insert that arrives after it sums an empty set and writes
+      // amount = 0. The row then gains its item a second later, leaving a
+      // sale recorded as 0 ₸ with 750 ₸ of goods inside it. Six such sales
+      // across two machines reached production before this was spotted;
+      // the money was taken and the goods dispensed, only the report lied.
+      final pendingItemWrites = <Future<void>>[];
+
       for (var i = 0; i < _queue.length; i++) {
         if (!mounted) return;
         final product = _queue[i];
@@ -163,7 +180,7 @@ class _DispenseScreenState extends State<DispenseScreen>
             );
             _results[j] = step;
             if (saleId != null) {
-              unawaited(_api.recordSaleItem(
+              pendingItemWrites.add(_api.recordSaleItem(
                   machid: machid!, secret: secret!, saleId: saleId, step: step));
             }
           }
@@ -228,14 +245,20 @@ class _DispenseScreenState extends State<DispenseScreen>
             product.copyWith(stock: product.stock - 1),
           );
         }
-        // Persist this item immediately. Unawaited so a slow / hung
-        // Supabase doesn't push the next motor's dispense behind it —
-        // order of inserts isn't load-bearing for the admin.
+        // Persist this item immediately, but off the critical path: a slow
+        // or hung Supabase must not push the next motor's dispense behind
+        // it. Collected rather than dropped — see [pendingItemWrites].
         if (saleId != null) {
-          unawaited(_api.recordSaleItem(
+          pendingItemWrites.add(_api.recordSaleItem(
               machid: machid!, secret: secret!, saleId: saleId, step: step));
         }
       }
+
+      // All motors have finished, so waiting here costs the customer nothing
+      // — and it is the whole point: complete_sale must see every item row.
+      // recordSaleItem swallows its own errors, so this settles rather than
+      // throws, and a failed insert can no longer take the sale down with it.
+      await Future.wait(pendingItemWrites);
 
       if (!mounted) return;
       setState(() {
