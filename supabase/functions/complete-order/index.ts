@@ -72,7 +72,17 @@ Deno.serve(async (req) => {
 
     const { data: po } = await supabase
       .from("pending_orders").select("*").eq("orderid", orderid).single();
-    if (!po) return json({ status: "unknown" });            // no such order
+    // No such order → 404, deliberately NOT 200.
+    //
+    // The board opens the door on any 2xx (handle_order_task in main.c), so a
+    // 200 here meant "unknown order" unlocked the fridge for free. It was
+    // reachable: the board dedupes only against its single last_order_id, so an
+    // MQTT redelivery of an older order — one whose pending row had since been
+    // cleaned up — sailed past that check and got its 200.
+    //
+    // A non-2xx leaves the door shut. The board retries three times and gives
+    // up, which is the right end state for an order we have no record of.
+    if (!po) return json({ status: "unknown" }, 404);
     if (po.status === "completed") return json({ status: "success" });
 
     const { data: market } = await supabase
@@ -93,31 +103,28 @@ Deno.serve(async (req) => {
     // Couldn't capture: return non-2xx so the device retries the whole request.
     if (!captured) return json({ status: "waiting", code: lastCode, msg: lastMsg }, 503);
 
-    // Claim exactly once, then record the sale + decrement stock.
-    const { data: claimed } = await supabase
-      .from("pending_orders").update({ status: "completed" })
-      .eq("orderid", orderid).eq("status", "pending").select();
-    if (!claimed || claimed.length === 0) return json({ status: "success" }); // finalized elsewhere
-
-    const cart = Array.isArray(claimed[0].cart) ? claimed[0].cart : [];
-    const { data: sale, error: saleErr } = await supabase.from("sales").insert({
-      micromarket_id: po.micromarket_id,
-      amount: claimed[0].amount,
-      status: "completed",
-      payment_id: claimed[0].torderid,
-    }).select().single();
-    if (saleErr) throw saleErr;
-
-    for (const it of cart) {
-      await supabase.from("sales_items").insert({
-        sale_id: sale.id, product_id: it.id, price: it.price, quantity: it.count,
-      });
-      const { data: inv } = await supabase
-        .from("inventory").select("stock").eq("id", it.id).single();
-      const newStock = Math.max(0, (inv?.stock ?? 0) - (it.count ?? 1));
-      await supabase.from("inventory").update({ stock: newStock })
-        .eq("id", it.id).eq("micromarket_id", po.micromarket_id);
+    // Claim + sale + items + stock in one Postgres transaction.
+    //
+    // Today the board is the only caller, but create-payment's disabled
+    // backstop (for markets with no relay) calls the same function, so if it
+    // is ever switched back on the two can race for one order and exactly one
+    // will record it.
+    //
+    // The claim used to happen here, in JS, before any of the writes. Money was
+    // captured by then, so a failure in the lines that followed left the order
+    // no longer `pending`: no sale, no stock change, and nothing that could
+    // retry it. Now a failure commits nothing and 503 tells the caller to come
+    // back — the order is still there to finish.
+    const { data: fin, error: finErr } = await supabase
+      .rpc("finalize_paid_order", { p_orderid: orderid });
+    if (finErr) {
+      console.error("finalize_paid_order failed", orderid, finErr.message);
+      return json({ status: "waiting", error: finErr.message }, 503);
     }
+    // Same reasoning as the 404 above — reachable only if the row vanished
+    // between the read and the call, but the door must not open for an order
+    // we did not record.
+    if (fin?.status === "unknown") return json({ status: "unknown" }, 404);
     return json({ status: "success" });
   } catch (error) {
     return json({ error: error.message }, 400);

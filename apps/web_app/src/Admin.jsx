@@ -1488,13 +1488,30 @@ export default function Admin() {
     }
   }
 
+  // «+1 / −1» — операция относительная, и считать её надо в базе.
+  //
+  // Раньше здесь бралcя product.stock из состояния, загруженного при открытии
+  // страницы, к нему прибавлялась дельта и писалось абсолютное значение. Окно
+  // между чтением и записью — не миллисекунды, а сколько панель открыта: пока
+  // оператор смотрит на «5», покупатель забирает товар, в базе становится 4,
+  // оператор жмёт «+1» и пишет 6. Продажа затёрта, и цифра выглядит
+  // правдоподобно, так что заметят это нескоро.
+  //
+  // adjust_inventory_stock делает stock = stock + delta одним выражением и
+  // возвращает то, что получилось. Оптимистичное значение показываем сразу,
+  // потом заменяем на ответ базы — если разошлось, оператор увидит настоящее
+  // число, а не своё.
   async function updateStock(product, delta) {
-    const newStock = Math.max(0, product.stock + delta);
-    setProducts(products.map(p => p.id === product.id ? { ...p, stock: newStock } : p));
-    
+    const optimistic = Math.max(0, product.stock + delta);
+    setProducts(products.map(p => p.id === product.id ? { ...p, stock: optimistic } : p));
+
     try {
-      const { error } = await supabase.from('inventory').update({ stock: newStock }).eq('id', product.id);
+      const { data: actual, error } = await supabase
+        .rpc('adjust_inventory_stock', { p_id: product.id, p_delta: delta });
       if (error) throw error;
+      if (typeof actual === 'number' && actual !== optimistic) {
+        setProducts(prev => prev.map(p => p.id === product.id ? { ...p, stock: actual } : p));
+      }
       showToast(t('stock_saved'));
     } catch (err) {
       console.error('Error updating stock:', err);

@@ -55,27 +55,22 @@ async function finalizeIfPaid(supabase, orderid, machid, appkey) {
   }
   if (parseInt(res.code) !== 1) return false;
 
-  const { data: claimed } = await supabase
-    .from("pending_orders").update({ status: "completed" })
-    .eq("orderid", orderid).eq("status", "pending").select();
-  if (!claimed || claimed.length === 0) return true; // finalized elsewhere
-
-  const cart = Array.isArray(claimed[0].cart) ? claimed[0].cart : [];
-  const { data: sale, error: saleErr } = await supabase.from("sales").insert({
-    micromarket_id: machid, amount: claimed[0].amount, status: "completed",
-    payment_id: claimed[0].torderid,
-  }).select().single();
-  if (saleErr) return true;
-  for (const it of cart) {
-    await supabase.from("sales_items").insert({
-      sale_id: sale.id, product_id: it.id, price: it.price, quantity: it.count,
-    });
-    const { data: inv } = await supabase
-      .from("inventory").select("stock").eq("id", it.id).single();
-    const newStock = Math.max(0, (inv?.stock ?? 0) - (it.count ?? 1));
-    await supabase.from("inventory").update({ stock: newStock })
-      .eq("id", it.id).eq("micromarket_id", machid);
+  // Claim + sale + items + stock, all inside one Postgres transaction. This
+  // used to be five separate round-trips starting with the claim, so any
+  // failure after it left the order no longer `pending` — money captured,
+  // nothing recorded, and no retry path. Now a failure commits nothing and
+  // the order stays claimable by the next poll.
+  const { data: fin, error: finErr } = await supabase
+    .rpc("finalize_paid_order", { p_orderid: orderid });
+  if (finErr) {
+    // Deliberately NOT swallowed: returning false keeps the polling loop
+    // alive so the next tick retries a still-pending order.
+    console.error("finalize_paid_order failed", orderid, finErr.message);
+    return false;
   }
+  // 'already' — another invocation got there first. 'unknown' — no such
+  // order. Both mean "stop polling", same as success.
+  console.log("finalize_paid_order", orderid, fin?.status ?? "?");
   return true;
 }
 
