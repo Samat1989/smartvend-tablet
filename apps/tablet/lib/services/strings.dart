@@ -143,6 +143,99 @@ class Strings extends ChangeNotifier {
       'en': 'QR via O!Bank, prices in som. Unchecked — Kaspi QR.'
     },
     'verifying': {'ru': 'Проверка…', 'kk': 'Тексеру…', 'ky': 'Текшерилүүдө…', 'en': 'Verifying…'},
+
+    // --- Failures, one sentence each -------------------------------------
+    // Keyed by AppErrorKind (see services/app_error.dart). These are the ONLY
+    // failure texts a person ever sees: status codes, response bodies, host
+    // names and exception dumps stay in the log. Each says what happened and,
+    // where the reader can act, what to do — no "error 500", no stack.
+    'err_offline': {
+      'ru': 'Нет подключения к интернету. Проверьте Wi-Fi и попробуйте снова.',
+      'kk': 'Интернет байланысы жоқ. Wi-Fi тексеріп, қайта көріңіз.',
+      'ky': 'Интернет байланышы жок. Wi-Fi текшерип, кайра аракет кылыңыз.',
+      'en': 'No internet connection. Check Wi-Fi and try again.'
+    },
+    'err_timeout': {
+      'ru': 'Сервер не отвечает. Попробуйте ещё раз.',
+      'kk': 'Сервер жауап бермей тұр. Қайталап көріңіз.',
+      'ky': 'Сервер жооп бербей жатат. Кайра аракет кылыңыз.',
+      'en': 'The server is not responding. Please try again.'
+    },
+    'err_server': {
+      'ru': 'Сервис временно недоступен. Попробуйте позже.',
+      'kk': 'Қызмет уақытша қолжетімсіз. Кейінірек көріңіз.',
+      'ky': 'Кызмат убактылуу жеткиликсиз. Кийинчерээк аракет кылыңыз.',
+      'en': 'The service is temporarily unavailable. Please try later.'
+    },
+    'err_denied': {
+      'ru': 'Нет доступа. Проверьте подключение аппарата в сервисном режиме.',
+      'kk': 'Қол жеткізу жоқ. Сервистік режимде аппарат қосылымын тексеріңіз.',
+      'ky': 'Уруксат жок. Тейлөө режиминде аппараттын туташуусун текшериңиз.',
+      'en': 'Access denied. Check the machine pairing in service mode.'
+    },
+    'err_not_found': {
+      'ru': 'Данные не найдены.',
+      'kk': 'Деректер табылмады.',
+      'ky': 'Маалымат табылган жок.',
+      'en': 'Not found.'
+    },
+    'err_invalid': {
+      'ru': 'Запрос отклонён. Проверьте введённые данные.',
+      'kk': 'Сұраныс қабылданбады. Енгізілген деректерді тексеріңіз.',
+      'ky': 'Сурам четке кагылды. Киргизилген маалыматты текшериңиз.',
+      'en': 'Request rejected. Check the values you entered.'
+    },
+    'err_unknown': {
+      'ru': 'Что-то пошло не так. Попробуйте ещё раз.',
+      'kk': 'Бірдеңе дұрыс болмады. Қайталап көріңіз.',
+      'ky': 'Бир нерсе туура эмес кетти. Кайра аракет кылыңыз.',
+      'en': 'Something went wrong. Please try again.'
+    },
+    'err_retry': {
+      'ru': 'Повторить',
+      'kk': 'Қайталау',
+      'ky': 'Кайталоо',
+      'en': 'Retry'
+    },
+    'pair_err_not_found': {
+      'ru': 'Аппарат с таким номером не найден.',
+      'kk': 'Мұндай нөмірлі аппарат табылмады.',
+      'ky': 'Мындай номурдагы аппарат табылган жок.',
+      'en': 'No machine with that number.'
+    },
+    'pair_err_secret': {
+      'ru': 'Секретный ключ не подходит. Проверьте его в панели владельца.',
+      'kk': 'Құпия кілт сәйкес келмейді. Иесінің панелінен тексеріңіз.',
+      'ky': 'Купуя ачкыч дал келбейт. Ээсинин панелинен текшериңиз.',
+      'en': 'Wrong secret key. Check it in the owner panel.'
+    },
+    'pair_err_kind': {
+      'ru': 'Этот тип аппарата приложение не обслуживает. Планшет ему не нужен.',
+      'kk': 'Бұл түрдегі аппаратқа қолданба қолдау көрсетпейді. Оған планшет қажет емес.',
+      'ky': 'Бул түрдөгү аппаратты колдонмо тейлебейт. Ага планшет керек эмес.',
+      'en': 'This machine type is not supported. It does not need a tablet.'
+    },
+    'pair_err_occupied': {
+      'ru': 'Аппарат уже занят другим планшетом. Отвяжите его в панели владельца.',
+      'kk': 'Аппаратты басқа планшет иеленген. Иесінің панелінен ажыратыңыз.',
+      'ky': 'Аппарат башка планшет тарабынан ээленген. Ээсинин панелинен ажыратыңыз.',
+      'en': 'Another tablet already holds this machine. Release it in the owner panel.'
+    },
+    'pay_err_amount': {
+      'ru': 'Сумма должна быть больше нуля.',
+      'kk': 'Сома нөлден үлкен болуы керек.',
+      'ky': 'Сумма нөлдөн чоң болушу керек.',
+      'en': 'The amount must be greater than zero.'
+    },
+    // Shown when the gateway itself refuses. Its own wording and code go to
+    // the operator's "Подробнее" panel — Russian-only, internal, and nothing
+    // a customer standing at the machine can act on.
+    'pay_err_declined': {
+      'ru': 'Оплата отклонена. Попробуйте ещё раз или выберите другой способ.',
+      'kk': 'Төлем қабылданбады. Қайталап көріңіз немесе басқа тәсілді таңдаңыз.',
+      'ky': 'Төлөм четке кагылды. Кайра аракет кылыңыз же башка ыкманы тандаңыз.',
+      'en': 'Payment declined. Try again or use another method.'
+    },
     // Home / catalog
     'cart': {'ru': 'Корзина', 'kk': 'Себет', 'ky': 'Себет', 'en': 'Cart'},
     'cart_empty': {'ru': 'Корзина пуста', 'kk': 'Себет бос', 'ky': 'Себет бош', 'en': 'Cart is empty'},

@@ -4,7 +4,9 @@ import 'package:provider/provider.dart';
 
 import '../services/device_storage.dart';
 import '../services/kiosk_bridge.dart';
+import '../services/app_error.dart';
 import '../services/strings.dart';
+import '../widgets/error_card.dart';
 import '../services/supabase_api.dart';
 import '../widgets/service_tile.dart';
 import 'update_screen.dart';
@@ -288,9 +290,7 @@ class _SystemSettingsScreenState extends State<SystemSettingsScreen> {
       await KioskBridge.showNavBarAndReboot();
     } catch (e) {
       if (context.mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('$e')),
-        );
+        showErrorSnack(context, AppError.from(e)..log('SystemSettings.reboot'));
       }
     }
   }
@@ -365,9 +365,7 @@ class _SystemSettingsScreenState extends State<SystemSettingsScreen> {
       await KioskBridge.exitToAndroid();
     } catch (e) {
       if (context.mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('$e')),
-        );
+        showErrorSnack(context, AppError.from(e)..log('SystemSettings.reboot'));
       }
     }
   }
@@ -421,9 +419,7 @@ class _SystemSettingsScreenState extends State<SystemSettingsScreen> {
       }
     } catch (e) {
       if (context.mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('$e')),
-        );
+        showErrorSnack(context, AppError.from(e)..log('SystemSettings.reboot'));
       }
     }
   }

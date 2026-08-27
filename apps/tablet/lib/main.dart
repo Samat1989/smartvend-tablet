@@ -84,9 +84,15 @@ class VendingApp extends StatelessWidget {
           GlobalWidgetsLocalizations.delegate,
           GlobalCupertinoLocalizations.delegate,
         ],
+        // Kyrgyz was missing here while Strings carried a full 'ky' column and
+        // the pairing screen offered a KG button: the app's own text switched,
+        // but everything the framework supplies — text-selection menus, date
+        // pickers, semantics labels — fell back to another language.
+        // flutter_localizations ships ky, so declaring it is all it took.
         supportedLocales: const [
           Locale('ru'),
           Locale('kk'),
+          Locale('ky'),
           Locale('en'),
         ],
         // Global activity tracker — every pointer event on any route

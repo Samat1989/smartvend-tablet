@@ -5,6 +5,8 @@ import 'package:crypto/crypto.dart';
 import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 
+import 'app_error.dart';
+
 class SmartVendConfig {
   static const String paymentUrl = 'https://levending.smartvend.kz/payment_request';
   static const String resultUrl = 'https://levending.smartvend.kz/payment_result';
@@ -39,8 +41,15 @@ enum PaymentStatus {
   }
 }
 
+/// A payment attempt that did not get off the ground.
+///
+/// Carries a [Strings] KEY, not prose. This lands on the customer-facing
+/// payment screen, where the old messages read "Сеть: ClientException with
+/// SocketException…", "HTTP 500" and "SmartVend: … (code=2)" — technical,
+/// and Russian regardless of the language the customer picked.
 class PaymentException implements Exception {
-  final String message;
+  /// Key into [Strings]. The screen resolves it in the customer's language.
+  final String messageKey;
 
   /// Optional debug payload — request fields actually sent (with secret
   /// redacted) and the verbatim gateway response. Surfaced in the UI's
@@ -48,9 +57,9 @@ class PaymentException implements Exception {
   /// refused (wrong machid, bad signature, expired timestamp, etc).
   final String? details;
 
-  PaymentException(this.message, {this.details});
+  PaymentException(this.messageKey, {this.details});
   @override
-  String toString() => message;
+  String toString() => 'PaymentException($messageKey)';
 }
 
 /// Direct client for SmartVend (LE) third-party QR API. Mirrors the logic
@@ -78,7 +87,7 @@ class PaymentService {
     String terNumber = '',
   }) async {
     if (priceTenge <= 0) {
-      throw PaymentException('Сумма должна быть больше нуля');
+      throw PaymentException('pay_err_amount');
     }
     final cleanSecret = secret.trim();
     final cleanMachid = machid.trim();
@@ -123,7 +132,8 @@ class PaymentService {
           )
           .timeout(const Duration(seconds: 15));
     } catch (e) {
-      throw PaymentException('Сеть: $e', details: _debugSnapshot(body, cleanSecret, null));
+      throw PaymentException(AppError.from(e).messageKey,
+          details: _debugSnapshot(body, cleanSecret, null));
     }
 
     _logResponse('createPayment', resp);
@@ -132,7 +142,7 @@ class PaymentService {
 
     if (resp.statusCode < 200 || resp.statusCode >= 300) {
       throw PaymentException(
-        'HTTP ${resp.statusCode}',
+        AppError.http(resp.statusCode, resp.body).messageKey,
         details: detailsBlob,
       );
     }
@@ -141,17 +151,15 @@ class PaymentService {
     try {
       json = jsonDecode(resp.body) as Map<String, dynamic>;
     } catch (_) {
-      throw PaymentException('Некорректный ответ сервера',
-          details: detailsBlob);
+      throw PaymentException('err_server', details: detailsBlob);
     }
 
     final code = json['code']?.toString();
     if (code != '1') {
-      final msg = json['msg']?.toString() ?? 'Ошибка';
-      throw PaymentException(
-        'SmartVend: $msg (code=$code)',
-        details: detailsBlob,
-      );
+      // The gateway's own wording and code go to the operator panel, not to
+      // the customer: they are Russian-only, internal, and unactionable at
+      // the machine.
+      throw PaymentException('pay_err_declined', details: detailsBlob);
     }
 
     // SmartVend can return orderid/torderid as either string or number

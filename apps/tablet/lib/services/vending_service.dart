@@ -9,6 +9,7 @@ import '../models/category.dart';
 import '../models/machine_layout.dart';
 import '../models/product.dart';
 import 'device_storage.dart';
+import 'app_error.dart';
 import 'supabase_api.dart';
 
 enum CatalogState { loading, ready, error, unpaired }
@@ -237,11 +238,11 @@ class VendingService extends ChangeNotifier {
   final List<CartItem> _cart = [];
 
   CatalogState _state = CatalogState.loading;
-  String? _error;
+  AppError? _error;
   String? _paymentId;
 
   CatalogState get state => _state;
-  String? get error => _error;
+  AppError? get error => _error;
   List<Product> get catalog => List.unmodifiable(_catalog);
   List<Category> get categories => List.unmodifiable(_categories);
   List<CartItem> get cartItems => List.unmodifiable(_cart);

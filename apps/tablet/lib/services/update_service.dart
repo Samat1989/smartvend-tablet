@@ -7,6 +7,7 @@ import 'package:http/http.dart' as http;
 import 'package:package_info_plus/package_info_plus.dart';
 import 'package:path_provider/path_provider.dart';
 
+import 'app_error.dart';
 import 'kiosk_bridge.dart';
 
 /// In-app updater backed by a manifest in Supabase Storage.
@@ -57,7 +58,10 @@ class UpdateService {
         .get(url, headers: {'Accept': 'application/json'})
         .timeout(const Duration(seconds: 15));
     if (resp.statusCode != 200) {
-      throw HttpException('Manifest ${resp.statusCode}: ${resp.body}');
+      // Classified here rather than left as a generic HttpException so the
+      // screen can tell "no manifest published yet" (404) from "the storage
+      // is down" (5xx). The status and body ride along as log detail.
+      throw AppError.http(resp.statusCode, resp.body);
     }
 
     final m = jsonDecode(utf8.decode(resp.bodyBytes)) as Map<String, dynamic>;

@@ -76,9 +76,11 @@ class _PairingScreenState extends State<PairingScreen> {
     final err = await _api.verifyPairing(machid, secret);
     if (!mounted) return;
     if (err != null) {
+      // The API layer returns Strings keys, never prose — see verifyPairing.
+      final text = context.read<Strings>().t(err);
       setState(() {
         _busy = false;
-        _error = err;
+        _error = text;
       });
       return;
     }
@@ -93,9 +95,10 @@ class _PairingScreenState extends State<PairingScreen> {
     );
     if (!mounted) return;
     if (!claim.ok) {
+      final text = context.read<Strings>().t(claim.message!);
       setState(() {
         _busy = false;
-        _error = claim.message;
+        _error = text;
       });
       return;
     }

@@ -7,6 +7,7 @@ import '../models/catalog_product.dart';
 import '../models/machine_layout.dart';
 import '../models/product.dart';
 import '../services/device_storage.dart';
+import '../services/app_error.dart';
 import '../services/strings.dart';
 import '../services/supabase_api.dart';
 import '../services/vending_service.dart';
@@ -807,7 +808,7 @@ class _CatalogPickerSheetState extends State<_CatalogPickerSheet> {
   final _api = SupabaseApi();
   final _searchCtrl = TextEditingController();
   List<CatalogProduct>? _all;
-  String? _error;
+  AppError? _error;
 
   @override
   void initState() {
@@ -919,7 +920,7 @@ class _CatalogPickerSheetState extends State<_CatalogPickerSheet> {
               Icon(Icons.error_outline,
                   size: 40, color: Colors.red.shade400),
               const SizedBox(height: 8),
-              Text(_error!,
+              Text(s.t(_error!.messageKey),
                   textAlign: TextAlign.center,
                   style: const TextStyle(color: Colors.black54)),
               const SizedBox(height: 12),

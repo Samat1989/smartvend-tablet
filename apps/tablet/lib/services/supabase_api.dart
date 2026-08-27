@@ -5,6 +5,8 @@ import 'dart:convert';
 import 'package:flutter/foundation.dart' hide Category;
 import 'package:http/http.dart' as http;
 
+import 'app_error.dart';
+
 import '../models/cart.dart';
 import '../models/catalog_product.dart';
 import '../models/category.dart';
@@ -16,11 +18,15 @@ class SupabaseConfig {
 }
 
 /// Result of a paired-fetch attempt.
+///
+/// [error] is an [AppError], not a string: the UI renders it through
+/// [Strings], so a status code or a response body cannot leak onto the
+/// screen by someone printing what they caught.
 class FetchResult<T> {
   final T? data;
-  final String? error;
+  final AppError? error;
   FetchResult.ok(T this.data) : error = null;
-  FetchResult.err(String this.error) : data = null;
+  FetchResult.err(AppError this.error) : data = null;
   bool get isOk => error == null;
 }
 
@@ -50,7 +56,8 @@ class ClaimOutcome {
   /// only this one may cost the tablet its pairing.
   final bool occupied;
 
-  /// Ready-to-show reason; null on success.
+  /// [Strings] KEY for the reason, null on success. The caller resolves it —
+  /// this layer has no language.
   final String? message;
 
   bool get ok => message == null;
@@ -117,6 +124,12 @@ class SupabaseApi {
   /// Returns null on success, or a localised-style error string.
   static const _supportedKinds = {'vending', 'micromarket_tablet'};
 
+  /// Returns null when the pair checks out, otherwise a [Strings] KEY.
+  ///
+  /// A key rather than a sentence: this reaches the pairing screen, which the
+  /// installer may be running in any of the four languages. The last branch
+  /// used to return `'HTTP ${resp.statusCode}: ${resp.body}'` — the RPC's raw
+  /// response, straight onto the screen.
   Future<String?> verifyPairing(String machid, String secret) async {
     try {
       final resp = await _rpc('verify_pairing', {
@@ -130,17 +143,19 @@ class SupabaseApi {
         final kind = (jsonDecode(resp.body) as String?)?.trim() ??
             'micromarket_tablet';
         if (!_supportedKinds.contains(kind)) {
-          return 'Этот аппарат не обслуживается приложением (тип: $kind). '
-              'Для static-QR аппарата планшет не нужен.';
+          debugPrint('[verifyPairing] unsupported machine kind: $kind');
+          return 'pair_err_kind';
         }
         return null;
       }
       final msg = _errMessage(resp.body);
-      if (msg.contains('not found')) return 'Аппарат №$machid не найден';
-      if (msg.contains('bad secret')) return 'Секрет не совпадает';
-      return 'HTTP ${resp.statusCode}: ${resp.body}';
+      if (msg.contains('not found')) return 'pair_err_not_found';
+      if (msg.contains('bad secret')) return 'pair_err_secret';
+      final err = AppError.http(resp.statusCode, resp.body)
+        ..log('verifyPairing');
+      return err.messageKey;
     } catch (e) {
-      return 'Сеть: $e';
+      return (AppError.from(e)..log('verifyPairing')).messageKey;
     }
   }
 
@@ -165,19 +180,21 @@ class SupabaseApi {
         'p_device_id': deviceId,
       });
       if (resp.statusCode < 200 || resp.statusCode >= 300) {
-        return ClaimOutcome.failed(_errMessage(resp.body));
+        final err = AppError.http(resp.statusCode, resp.body)
+          ..log('claimMachine');
+        return ClaimOutcome.failed(err.messageKey);
       }
       final body = jsonDecode(resp.body);
       if (body is Map && body['ok'] == true) return const ClaimOutcome.ok();
+      // last_seen_at used to be spliced into the message shown on screen.
+      // It belongs in the log: an installer needs "occupied, release it in
+      // the panel", not a timestamp of the other tablet's last heartbeat.
       final seen = body is Map ? body['last_seen_at'] as String? : null;
-      final when = seen == null
-          ? ''
-          : ' Последний раз на связи: '
-              '${DateTime.parse(seen).toLocal()}.';
-      return ClaimOutcome.occupied('Этот аппарат уже занят другим планшетом.$when '
-          'Выйдите из аккаунта на нём или отвяжите планшет в админке.');
+      debugPrint('[claimMachine] occupied, last seen: $seen');
+      return const ClaimOutcome.occupied('pair_err_occupied');
     } catch (e) {
-      return ClaimOutcome.failed('Сеть: $e');
+      return ClaimOutcome.failed(
+          (AppError.from(e)..log('claimMachine')).messageKey);
     }
   }
 
@@ -285,7 +302,7 @@ class SupabaseApi {
         headers: _headers,
       ).timeout(const Duration(seconds: 15));
       if (r.statusCode < 200 || r.statusCode >= 300) {
-        return FetchResult.err('HTTP ${r.statusCode}: ${r.body}');
+        return FetchResult.err(AppError.http(r.statusCode, r.body));
       }
       final list = jsonDecode(r.body) as List;
       final products = <Product>[];
@@ -311,7 +328,7 @@ class SupabaseApi {
       }
       return FetchResult.ok(products);
     } catch (e) {
-      return FetchResult.err('Сеть: $e');
+      return FetchResult.err(AppError.from(e));
     }
   }
 
@@ -332,7 +349,7 @@ class SupabaseApi {
         'p_include_drafts': includeDrafts,
       });
       if (resp.statusCode < 200 || resp.statusCode >= 300) {
-        return FetchResult.err('HTTP ${resp.statusCode}: ${resp.body}');
+        return FetchResult.err(AppError.http(resp.statusCode, resp.body));
       }
       final list = jsonDecode(resp.body) as List;
       final products = <CatalogProduct>[
@@ -341,7 +358,7 @@ class SupabaseApi {
       ];
       return FetchResult.ok(products);
     } catch (e) {
-      return FetchResult.err('Сеть: $e');
+      return FetchResult.err(AppError.from(e));
     }
   }
 
@@ -356,7 +373,7 @@ class SupabaseApi {
         headers: _headers,
       ).timeout(const Duration(seconds: 10));
       if (r.statusCode < 200 || r.statusCode >= 300) {
-        return FetchResult.err('HTTP ${r.statusCode}: ${r.body}');
+        return FetchResult.err(AppError.http(r.statusCode, r.body));
       }
       final list = jsonDecode(r.body) as List;
       final cats = <Category>[];
@@ -373,7 +390,7 @@ class SupabaseApi {
       }
       return FetchResult.ok(cats);
     } catch (e) {
-      return FetchResult.err('Сеть: $e');
+      return FetchResult.err(AppError.from(e));
     }
   }
 

@@ -7,6 +7,7 @@ import 'package:qr_flutter/qr_flutter.dart';
 import '../services/device_storage.dart';
 import '../services/payment_service.dart';
 import '../board/board_client.dart';
+import '../services/app_error.dart';
 import '../services/strings.dart';
 import '../services/vending_service.dart';
 import '../theme.dart';
@@ -130,9 +131,16 @@ class _PaymentScreenState extends State<PaymentScreen> {
       _startPolling();
     } catch (e) {
       if (!mounted) return;
+      // A PaymentException already carries a Strings key. Anything else is
+      // a transport failure: classify it, show the sentence, and keep the
+      // exception text in the log — the customer sees neither hostnames nor
+      // errno, and the operator panel stays for gateway payloads.
+      final key = e is PaymentException
+          ? e.messageKey
+          : (AppError.from(e)..log('PaymentScreen.start')).messageKey;
       setState(() {
         _state = _State.failed;
-        _statusMsg = e.toString();
+        _statusMsg = context.read<Strings>().t(key);
         _statusDetails = e is PaymentException ? e.details : null;
       });
     }

@@ -10,6 +10,7 @@ import '../models/motor_layout.dart';
 import '../models/product.dart';
 import '../services/device_storage.dart';
 import '../services/idle_service.dart';
+import '../services/app_error.dart';
 import '../services/strings.dart';
 import '../services/vending_service.dart';
 import '../theme.dart';
@@ -388,7 +389,7 @@ class _ProductList extends StatelessWidget {
           case CatalogState.unpaired:
             return const SizedBox.shrink();
           case CatalogState.error:
-            return _ErrorView(message: svc.error ?? '');
+            return _ErrorView(error: svc.error);
           case CatalogState.ready:
             // Two render paths share the same SingleChildScrollView so
             // the right-rail's `Scrollable.ensureVisible` works in both:
@@ -871,8 +872,12 @@ class _LangChip extends StatelessWidget {
 }
 
 class _ErrorView extends StatelessWidget {
-  const _ErrorView({required this.message});
-  final String message;
+  const _ErrorView({required this.error});
+
+  /// Nullable because the service can be in the error state before it has
+  /// classified anything; the headline alone still tells the customer the
+  /// catalog did not load.
+  final AppError? error;
 
   @override
   Widget build(BuildContext context) {
@@ -898,10 +903,11 @@ class _ErrorView extends StatelessWidget {
                 style: const TextStyle(
                     fontSize: 18, fontWeight: FontWeight.w800)),
             const SizedBox(height: 8),
-            Text(message,
-                textAlign: TextAlign.center,
-                style: const TextStyle(
-                    fontSize: 12, color: AppColors.iosGray)),
+            if (error != null)
+              Text(s.t(error!.messageKey),
+                  textAlign: TextAlign.center,
+                  style: const TextStyle(
+                      fontSize: 13, color: AppColors.iosGray)),
             const SizedBox(height: 8),
             // VendingService retries on a 5→30 s backoff while this
             // screen is up (boot races the tablet's network coming up) —

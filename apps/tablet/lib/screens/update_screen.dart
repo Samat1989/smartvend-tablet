@@ -6,7 +6,9 @@ import 'package:package_info_plus/package_info_plus.dart';
 import 'package:provider/provider.dart';
 
 import '../services/kiosk_bridge.dart';
+import '../services/app_error.dart';
 import '../services/strings.dart';
+import '../widgets/error_card.dart';
 import '../services/update_service.dart';
 
 /// Service-mode update tile destination.
@@ -36,6 +38,10 @@ class _UpdateScreenState extends State<UpdateScreen> {
   bool _checking = false;
   bool _downloading = false;
   String? _error;
+
+  /// Classified transport/HTTP failure. Mutually exclusive with [_error]:
+  /// whichever is set, the other is cleared, so only one card is ever shown.
+  AppError? _fault;
 
   /// Info-level banner ("подтвердите установку…") driven by the native
   /// PackageInstaller statuses — see [KioskBridge.installStatusStream].
@@ -111,6 +117,7 @@ class _UpdateScreenState extends State<UpdateScreen> {
     setState(() {
       _checking = true;
       _error = null;
+      _fault = null;
       _update = null;
     });
     try {
@@ -129,9 +136,11 @@ class _UpdateScreenState extends State<UpdateScreen> {
       });
     } catch (e) {
       if (!mounted) return;
+      final fault = AppError.from(e)..log('UpdateScreen.check');
       setState(() {
         _checking = false;
-        _error = e.toString();
+        _error = null;
+        _fault = fault;
       });
     }
   }
@@ -144,6 +153,7 @@ class _UpdateScreenState extends State<UpdateScreen> {
       _received = 0;
       _total = info.assetSize;
       _error = null;
+      _fault = null;
       _installHint = null;
     });
     try {
@@ -176,9 +186,13 @@ class _UpdateScreenState extends State<UpdateScreen> {
       setState(() {
         _downloading = false;
         _installHint = null;
-        _error = noPermission
-            ? context.read<Strings>().t('upd_no_permission')
-            : e.toString();
+        if (noPermission) {
+          _error = context.read<Strings>().t('upd_no_permission');
+          _fault = null;
+        } else {
+          _error = null;
+          _fault = AppError.from(e)..log('UpdateScreen.install');
+        }
       });
     }
   }
@@ -195,6 +209,7 @@ class _UpdateScreenState extends State<UpdateScreen> {
       _received = 0;
       _total = info.assetSize;
       _error = null;
+      _fault = null;
       _installHint = null;
       _manualApkPath = null;
     });
@@ -218,9 +233,11 @@ class _UpdateScreenState extends State<UpdateScreen> {
       await _openManualApk();
     } catch (e) {
       if (!mounted) return;
+      final fault = AppError.from(e)..log('UpdateScreen.manualDownload');
       setState(() {
         _downloading = false;
-        _error = e.toString();
+        _error = null;
+        _fault = fault;
       });
     }
   }
@@ -249,7 +266,9 @@ class _UpdateScreenState extends State<UpdateScreen> {
         children: [
           _versionCard(s),
           const SizedBox(height: 16),
-          if (_error != null) _errorCard(),
+          if (_fault != null)
+            ErrorCard(error: _fault!, onRetry: _check),
+          if (_error != null) ErrorCard.message(text: _error!),
           if (_installHint != null) _installHintCard(),
           if (_manualApkPath != null) _manualApkCard(s),
           if (_update != null) _updateCard(s),
@@ -530,24 +549,4 @@ class _UpdateScreenState extends State<UpdateScreen> {
     );
   }
 
-  Widget _errorCard() {
-    return Card(
-      color: Colors.red.shade50,
-      child: Padding(
-        padding: const EdgeInsets.all(14),
-        child: Row(
-          children: [
-            Icon(Icons.error_outline, color: Colors.red.shade700),
-            const SizedBox(width: 12),
-            Expanded(
-              child: Text(
-                _error!,
-                style: TextStyle(color: Colors.red.shade900, fontSize: 13),
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
 }
