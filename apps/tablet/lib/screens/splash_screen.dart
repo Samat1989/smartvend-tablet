@@ -23,10 +23,17 @@ class SplashScreen extends StatelessWidget {
   /// if a genuine async startup step ever appears, feed its completion here.
   final double progress;
 
-  /// Emblem height in logical pixels. At the tablets' 1.5x density this lands
-  /// within a few pixels of what the OS splash renders, so the mark does not
-  /// jump when one screen replaces the other.
-  static const double emblemHeight = 96;
+  /// Emblem height in logical pixels, tuned so this screen draws the mark at
+  /// the same size the OS splash does — measured at 137 physical px on the
+  /// fleet's 800x1280 / 1.5x tablets, hence 137 / 1.5.
+  ///
+  /// The OS picks its own size from the icon slot, so this is calibrated to
+  /// that hardware rather than derived. On a tablet with a different density
+  /// the two would drift apart again; re-measure if the fleet ever changes.
+  static const double emblemHeight = 91;
+
+  /// Gap between the mark and the wordmark below it.
+  static const double _gap = 22;
 
   @override
   Widget build(BuildContext context) {
@@ -35,44 +42,68 @@ class SplashScreen extends StatelessWidget {
     // ancestor falls back to Flutter's unstyled-text style — black glyphs
     // with a yellow underline, which on the tablet read as a stray progress
     // bar sitting under the wordmark.
+    // The mark is pinned to the exact centre of the screen — where the OS
+    // splash puts it — and the wordmark and bar hang below it, rather than
+    // the three being centred as one column. Centring the column would push
+    // the mark ~75 px above where the OS had it, and the handover then reads
+    // as two separate screens instead of text and a bar appearing under a
+    // mark that never moved. The OS splash cannot be switched off (Android
+    // 12 made it mandatory), so the next best thing is making it invisible.
     return Material(
       color: Colors.white,
-      child: Center(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            const Image(
-              image: AssetImage('lib/static/micromart_emblem.png'),
-              height: emblemHeight,
-              fit: BoxFit.contain,
-            ),
-            const SizedBox(height: 18),
-            const Text(
-              'MicroVend',
-              style: TextStyle(
-                fontFamily: 'Inter',
-                fontWeight: FontWeight.w600,
-                fontSize: 34,
-                letterSpacing: -0.5,
-                // Sampled from the wordmark in design/micromart_logo.png so
-                // the text sits at the same weight of grey as the old art.
-                color: Color(0xFF383838),
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          final centreY = constraints.maxHeight / 2;
+          return Stack(
+            children: [
+              Positioned(
+                top: centreY - emblemHeight / 2,
+                left: 0,
+                right: 0,
+                child: const Image(
+                  image: AssetImage('lib/static/micromart_emblem.png'),
+                  height: emblemHeight,
+                  fit: BoxFit.contain,
+                ),
               ),
-            ),
-            const SizedBox(height: 28),
-            SizedBox(
-              width: 200,
-              child: LinearProgressIndicator(
-                value: progress,
-                minHeight: 5,
-                backgroundColor: const Color(0xFFE4E4E4),
-                valueColor:
-                    const AlwaysStoppedAnimation<Color>(AppColors.primary),
-                borderRadius: const BorderRadius.all(Radius.circular(3)),
+              Positioned(
+                top: centreY + emblemHeight / 2 + _gap,
+                left: 0,
+                right: 0,
+                child: Column(
+                  children: [
+                    const Text(
+                      'MicroVend',
+                      style: TextStyle(
+                        fontFamily: 'Inter',
+                        fontWeight: FontWeight.w600,
+                        fontSize: 34,
+                        letterSpacing: -0.5,
+                        // Sampled from the wordmark in
+                        // design/micromart_logo.png so the text sits at the
+                        // same weight of grey as the old art.
+                        color: Color(0xFF383838),
+                      ),
+                    ),
+                    const SizedBox(height: 28),
+                    SizedBox(
+                      width: 200,
+                      child: LinearProgressIndicator(
+                        value: progress,
+                        minHeight: 5,
+                        backgroundColor: const Color(0xFFE4E4E4),
+                        valueColor: const AlwaysStoppedAnimation<Color>(
+                            AppColors.primary),
+                        borderRadius:
+                            const BorderRadius.all(Radius.circular(3)),
+                      ),
+                    ),
+                  ],
+                ),
               ),
-            ),
-          ],
-        ),
+            ],
+          );
+        },
       ),
     );
   }
