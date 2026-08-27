@@ -15,8 +15,9 @@ tablet is on a version that reads Supabase. Once they are, pass --no-github
 and the repository can go private.
 
 Requirements (one-time):
-  1. Supabase service_role key in .supabase_key at the repo root (gitignored)
-     -- Dashboard -> Project Settings -> API. Skip with --no-supabase.
+  1. Supabase secret key (sb_secret_...) in .supabase_key at the repo root,
+     gitignored -- Dashboard -> Project Settings -> API Keys -> Secret keys.
+     Skip with --no-supabase.
   2. GitHub CLI + auth:  sudo apt install gh && gh auth login
      (a fine-grained PAT in .github_token also works, and is the fallback for
      a headless box with no keyring). Skip with --no-github.
@@ -39,21 +40,22 @@ The build number is DERIVED from the version, never invented:
 With each part capped at 99 this is strictly monotonic as the version grows,
 so versionCode can't drift out of sync with the version name.
 
-The TAG carries a different number than pubspec, on purpose. Flutter's
---split-per-abi adds an ABI offset to the shipped versionCode (armeabi-v7a =
-+1000), so the APK installed on a tablet reports `pubspec build + 1000`.
-UpdateService compares the tag's build against the installed versionCode, so
-the tag must encode the POST-offset value or every release looks older than
-what is already on the machine. pubspec keeps the pre-offset base so
-day-to-day Flutter tooling stays sane.
+The MANIFEST (and the git tag) carry a different number than pubspec, on
+purpose. Flutter's --split-per-abi adds an ABI offset to the shipped
+versionCode (armeabi-v7a = +1000), so the APK installed on a tablet reports
+`pubspec build + 1000`. UpdateService compares the manifest's `code` against
+that installed versionCode, so the manifest must carry the POST-offset value
+or every release looks older than what is already on the machine. pubspec
+keeps the pre-offset base so day-to-day Flutter tooling stays sane.
 
-    pubspec.yaml   version: 1.1.21+10121
-    git tag        v1.1.21+11121
-    installed APK  versionCode 11121
+    pubspec.yaml     version: 1.1.21+10121
+    manifest "code"  11121
+    git tag          v1.1.21+11121
+    installed APK    versionCode 11121
 
-The offset is 1000 because UpdateService.assetName is pinned to
-app-armeabi-v7a-release.apk -- the tablet always installs that split. If that
-ever changes, change ABI_OFFSET with it (arm64-v8a = 2000).
+The offset is 1000 because APK_NAME below is the armeabi-v7a split -- the
+only one a tablet ever installs. If that ever changes, change ABI_OFFSET
+with it (arm64-v8a = 2000).
 
 The script fails loud -- any unexpected state (dirty tree, missing keystore,
 tag already taken, gh not logged in) stops the run before anything
@@ -155,7 +157,7 @@ def main() -> None:
     # seconds rather than a full flutter build.
     step("Checking prerequisites")
     env = require_gh() if not args.no_github else None
-    sb_key = _supabase.service_key() if not args.no_supabase else None
+    sb_key = _supabase.secret_key() if not args.no_supabase else None
     require("flutter", "Install the Flutter SDK and put it on PATH.")
 
     keystore = PROJECT / "android" / "release.jks"

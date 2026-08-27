@@ -47,20 +47,28 @@ _CONTENT_TYPES = {
 }
 
 
-def service_key() -> str:
-    """service_role key, from $SUPABASE_SERVICE_KEY or .supabase_key.
+def secret_key() -> str:
+    """Supabase secret key, from $SUPABASE_SECRET_KEY or .supabase_key.
 
-    Storage has no scoped upload keys, so publishing needs service_role.
+    This project is on Supabase's current key scheme -- the tablet ships a
+    `sb_publishable_...` key (SupabaseConfig.anonKey), whose privileged
+    counterpart is `sb_secret_...`. The legacy `service_role` JWT still
+    works if that is what a given project hands out; both are passed the
+    same way, so nothing here needs to tell them apart.
+
+    Storage has no upload-only keys, so publishing needs a full-access one.
     Treat it like the GitHub PAT: gitignored file, never committed.
     """
-    key = os.environ.get("SUPABASE_SERVICE_KEY", "").strip()
+    key = (os.environ.get("SUPABASE_SECRET_KEY")
+           or os.environ.get("SUPABASE_SERVICE_KEY") or "").strip()
     if not key and KEY_FILE.exists():
         key = KEY_FILE.read_text(encoding="utf-8").strip()
     if not key:
-        fail(f"Supabase service_role key not found.\n"
+        fail(f"Supabase secret key not found.\n"
              f"  Put it in {KEY_FILE} (gitignored), or set "
-             f"SUPABASE_SERVICE_KEY.\n"
-             f"  Dashboard -> Project Settings -> API -> service_role key.")
+             f"SUPABASE_SECRET_KEY.\n"
+             f"  Dashboard -> Project Settings -> API Keys -> Secret keys "
+             f"(sb_secret_...).")
     return key
 
 
