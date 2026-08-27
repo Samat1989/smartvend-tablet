@@ -132,18 +132,26 @@ class _PairingScreenState extends State<PairingScreen> {
                     children: [
                       const _LangSwitcher(),
                       const SizedBox(height: 8),
-                      Container(
-                        width: 88,
-                        height: 88,
-                        decoration: const BoxDecoration(
-                          gradient: signatureGradient,
-                          shape: BoxShape.circle,
-                        ),
-                        child: GestureDetector(
-                          behavior: HitTestBehavior.opaque,
-                          onTap: _onServiceTap,
-                          child: const Icon(Icons.point_of_sale,
-                              size: 44, color: Colors.white),
+                      // The brand emblem rather than a stock cash-register
+                      // glyph. No gradient disc behind it: the mark is blue
+                      // and orange on transparent, and the blue half sank
+                      // into the gradient.
+                      //
+                      // Still the door into service mode — ten taps here
+                      // inside five seconds (_onServiceTap). Kept opaque and
+                      // padded to 88 px total so the target stays
+                      // finger-sized and the column keeps its old rhythm,
+                      // even though the mark is wider than it is tall.
+                      GestureDetector(
+                        behavior: HitTestBehavior.opaque,
+                        onTap: _onServiceTap,
+                        child: Padding(
+                          padding: const EdgeInsets.symmetric(vertical: 12),
+                          child: Image.asset(
+                            'lib/static/micromart_emblem.png',
+                            height: 64,
+                            fit: BoxFit.contain,
+                          ),
                         ),
                       ),
                       const SizedBox(height: 20),

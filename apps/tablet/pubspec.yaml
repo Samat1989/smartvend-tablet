@@ -138,6 +138,7 @@ flutter:
   assets:
     - lib/static/logo_kaspi.png
     - lib/static/logo_odengi.png
+    - lib/static/micromart_emblem.png
 
   # An image asset can refer to one or more resolution-specific "variants", see
   # https://flutter.dev/to/resolution-aware-images
