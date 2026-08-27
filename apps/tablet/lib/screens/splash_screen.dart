@@ -23,13 +23,15 @@ class SplashScreen extends StatelessWidget {
   /// if a genuine async startup step ever appears, feed its completion here.
   final double progress;
 
-  /// Emblem height in logical pixels, tuned so this screen draws the mark at
-  /// the same size the OS splash does — measured at 137 physical px on the
-  /// fleet's 800x1280 / 1.5x tablets, hence 137 / 1.5.
+  /// Emblem height, chosen so this screen draws the mark at the same size the
+  /// OS splash does. Measured at 137 physical px on the fleet's 240 dpi
+  /// tablets, hence 137 / 1.5.
   ///
-  /// The OS picks its own size from the icon slot, so this is calibrated to
-  /// that hardware rather than derived. On a tablet with a different density
-  /// the two would drift apart again; re-measure if the fleet ever changes.
+  /// Density-independent despite being a measured number: Flutter's logical
+  /// pixels are dp, and Android sizes the splash icon slot in dp too, so both
+  /// scale by the same devicePixelRatio and stay matched on any screen. What
+  /// would break the match is a ROM that overrides the splash icon dimension
+  /// or an Android release that changes it — not a different density.
   static const double emblemHeight = 91;
 
   /// Gap between the mark and the wordmark below it.
