@@ -28,6 +28,11 @@ enum AppErrorKind {
   /// The thing asked for is not there (404).
   notFound,
 
+  /// This machine is held by a different tablet. A 403 like [denied], but a
+  /// different answer: nothing is misconfigured, the cabinet is simply in use
+  /// somewhere else, and the fix is in the owner panel rather than here.
+  occupied,
+
   /// The request itself was refused as wrong (400/409/422) — usually input.
   invalid,
 
@@ -88,6 +93,15 @@ class AppError implements Exception {
   factory AppError.http(int status, [String body = '']) {
     final detail = 'HTTP $status: ${body.length > 300 ? body.substring(0, 300) : body}';
     if (status == 401 || status == 403) {
+      // _assert_machine raises errcode 42501 when another tablet holds the
+      // claim, and PostgREST renders that as a bare 403 — indistinguishable
+      // from a wrong secret unless the message is read. Eighteen write RPCs
+      // go through that guard, so this belongs here rather than at one call
+      // site. Wording comes from
+      // 20260808140000_enforce_claim_on_machine_writes.sql.
+      if (body.contains('claimed by another')) {
+        return AppError(AppErrorKind.occupied, detail);
+      }
       return AppError(AppErrorKind.denied, detail);
     }
     if (status == 404) return AppError(AppErrorKind.notFound, detail);
@@ -106,6 +120,7 @@ class AppError implements Exception {
         AppErrorKind.server => 'err_server',
         AppErrorKind.denied => 'err_denied',
         AppErrorKind.notFound => 'err_not_found',
+        AppErrorKind.occupied => 'err_occupied',
         AppErrorKind.invalid => 'err_invalid',
         AppErrorKind.unknown => 'err_unknown',
       };

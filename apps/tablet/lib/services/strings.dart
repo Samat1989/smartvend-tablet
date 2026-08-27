@@ -215,11 +215,15 @@ class Strings extends ChangeNotifier {
       'ky': 'Бул түрдөгү аппаратты колдонмо тейлебейт. Ага планшет керек эмес.',
       'en': 'This machine type is not supported. It does not need a tablet.'
     },
-    'pair_err_occupied': {
-      'ru': 'Аппарат уже занят другим планшетом. Отвяжите его в панели владельца.',
-      'kk': 'Аппаратты басқа планшет иеленген. Иесінің панелінен ажыратыңыз.',
-      'ky': 'Аппарат башка планшет тарабынан ээленген. Ээсинин панелинен ажыратыңыз.',
-      'en': 'Another tablet already holds this machine. Release it in the owner panel.'
+    'err_occupied': {
+      'ru': 'Этот аппарат уже используется другим планшетом. '
+          'Отвяжите его в панели владельца.',
+      'kk': 'Бұл аппаратты басқа планшет қолданып жатыр. '
+          'Иесінің панелінен ажыратыңыз.',
+      'ky': 'Бул аппаратты башка планшет колдонуп жатат. '
+          'Ээсинин панелинен ажыратыңыз.',
+      'en': 'This machine is already in use by another tablet. '
+          'Release it in the owner panel.'
     },
     'pay_err_amount': {
       'ru': 'Сумма должна быть больше нуля.',

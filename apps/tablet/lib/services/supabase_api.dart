@@ -151,6 +151,11 @@ class SupabaseApi {
       final msg = _errMessage(resp.body);
       if (msg.contains('not found')) return 'pair_err_not_found';
       if (msg.contains('bad secret')) return 'pair_err_secret';
+      // NB "already held by another tablet" lands here, not in claimMachine:
+      // verify_pairing calls _assert_machine, whose p_check_claim defaults to
+      // true, so the second tablet is refused before claimMachine — and its
+      // occupied branch — ever gets a turn. AppError.http reads that case out
+      // of the body and returns occupied rather than a bare "denied".
       final err = AppError.http(resp.statusCode, resp.body)
         ..log('verifyPairing');
       return err.messageKey;
@@ -191,7 +196,7 @@ class SupabaseApi {
       // the panel", not a timestamp of the other tablet's last heartbeat.
       final seen = body is Map ? body['last_seen_at'] as String? : null;
       debugPrint('[claimMachine] occupied, last seen: $seen');
-      return const ClaimOutcome.occupied('pair_err_occupied');
+      return const ClaimOutcome.occupied('err_occupied');
     } catch (e) {
       return ClaimOutcome.failed(
           (AppError.from(e)..log('claimMachine')).messageKey);

@@ -35,6 +35,9 @@ class ErrorCard extends StatelessWidget {
         AppErrorKind.server => Icons.cloud_off_rounded,
         AppErrorKind.denied => Icons.lock_outline_rounded,
         AppErrorKind.notFound => Icons.search_off_rounded,
+        // Not a lock: nothing is misconfigured, the cabinet is simply being
+        // driven from another tablet right now.
+        AppErrorKind.occupied => Icons.devices_other_rounded,
         AppErrorKind.invalid => Icons.report_problem_outlined,
         AppErrorKind.unknown || null => Icons.error_outline_rounded,
       };
