@@ -47,7 +47,6 @@
       "Bash(git commit *)",
       "Bash(git push *)",
       "Bash(keytool -printcert -jarfile build/app/outputs/flutter-apk/app-release.apk)",
-      "Bash(keytool -list -keystore android/release.jks -storepass 'Samisym1989!' -alias smartvend)",
       "Bash(git tag *)",
       "Bash(npx vercel *)",
       "Bash(/c/car/platform-tools/adb.exe -s 10.16.16.220:42537 install -r /c/m109e/m102_tester/build/app/outputs/flutter-apk/app-release.apk)",
