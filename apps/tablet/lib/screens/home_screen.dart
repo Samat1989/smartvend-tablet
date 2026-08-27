@@ -18,6 +18,7 @@ import '../widgets/action_pill.dart';
 import '../widgets/product_card.dart';
 import '../widgets/shelf_header.dart';
 import '../widgets/lang_chip.dart';
+import '../widgets/view_mode_toggle.dart';
 import '../widgets/support_corner.dart';
 import 'cart_screen.dart';
 import 'screensaver_screen.dart';
@@ -29,7 +30,13 @@ import 'service_pin_screen.dart';
 /// the list's own padding, the rail's scroll target, and the trigger line
 /// that decides which shelf the rail highlights. The trigger comment drifted
 /// out of sync with the padding twice before this constant existed.
-const double _kCatalogTopPadding = 12;
+/// Top inset of the catalog list.
+///
+/// Was 12. Now clears [ViewModeToggle], which floats above the list rather
+/// than scrolling with it: 8 top + 52 pill + 4 gap. Cards still pass under
+/// the pill as the customer scrolls — that is what its translucent white
+/// background is for.
+const double _kCatalogTopPadding = 64;
 
 /// Customer-facing catalog ported from the Figma file
 /// "MicroMart / Menu - Nothing Selected".
@@ -139,6 +146,7 @@ class _HomeScreenState extends State<HomeScreen> {
     // the auto-cycle / screensaver stages start fresh from "home".
     if (svc.cartCount > 0 && idleFor >= _cartAbandonAfter) {
       svc.clearCart();
+      svc.resetView();
       Navigator.of(context).popUntil((r) => r.isFirst);
       IdleService.instance.touched();
       _lastShelfAdvanceAt = null;
@@ -152,6 +160,10 @@ class _HomeScreenState extends State<HomeScreen> {
     if (svc.cartCount > 0) return;
 
     if (idleFor >= _screensaverAfter) {
+      // Back to photos before the screensaver hides the catalog: the next
+      // customer must find the cabinet showing pictures, not somebody
+      // else's search for cell 14.
+      svc.resetView();
       _screensaverOpen = true;
       _lastShelfAdvanceAt = null;
       final nav = Navigator.of(context);
@@ -322,6 +334,15 @@ class _HomeScreenState extends State<HomeScreen> {
                     ],
                   ),
                   const _BottomActionBar(),
+                  // Above the catalog, left of the shelf rail. Listed after
+                  // the list so cards scroll UNDER it, and before the
+                  // maintenance curtain so a dead board hides it — with the
+                  // cabinet not answering there is nothing to browse.
+                  const Positioned(
+                    top: 8,
+                    left: 16,
+                    child: ViewModeToggle(),
+                  ),
                   if (boardDown)
                     _MaintenanceOverlay(onServiceTap: _onServiceTap),
                   // Bottom-RIGHT stack: language chip over the support

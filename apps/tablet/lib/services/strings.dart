@@ -191,6 +191,20 @@ class Strings extends ChangeNotifier {
       'ky': 'Бир нерсе туура эмес кетти. Кайра аракет кылыңыз.',
       'en': 'Something went wrong. Please try again.'
     },
+    // Storefront view switch. Icon-only on screen — these name the two
+    // buttons for screen readers and the long-press tooltip.
+    'view_photos': {
+      'ru': 'Показывать фото',
+      'kk': 'Суреттерді көрсету',
+      'ky': 'Сүрөттөрдү көрсөтүү',
+      'en': 'Show photos'
+    },
+    'view_numbers': {
+      'ru': 'Показывать номера ячеек',
+      'kk': 'Ұяшық нөмірлерін көрсету',
+      'ky': 'Уяча номерлерин көрсөтүү',
+      'en': 'Show cell numbers'
+    },
     'err_retry': {
       'ru': 'Повторить',
       'kk': 'Қайталау',

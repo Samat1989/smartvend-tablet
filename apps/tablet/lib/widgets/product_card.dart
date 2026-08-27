@@ -74,14 +74,30 @@ class ProductCard extends StatelessWidget {
     // shadow makes the selected ones lift off the page.
     final selected = count > 0;
 
-    // Slot number from the machine layout, shown only when the operator
-    // enabled it in «Витрина». Null when the layout has no slot for this
-    // motor (product assigned before the layout was built) — nothing to
-    // show then, and a wrong number is worse than none.
+    // Two independent questions about the slot number, deliberately not
+    // collapsed into one flag:
+    //
+    //   numbersView — the CUSTOMER asked to see numbers instead of photos
+    //                 (the toggle at the top of the storefront). Replaces
+    //                 the picture, and ignores the operator setting: the
+    //                 point of the mode is the number, so withholding it
+    //                 would make the toggle do nothing on a stocked shelf.
+    //   showSlot    — the OPERATOR allowed a small badge on a PHOTO card
+    //                 («Витрина» → «Показывать номер ячейки»).
+    //
+    // Null slot means the layout has no cell for this motor (product
+    // assigned before the layout was built) — nothing to show, and a wrong
+    // number is worse than none.
+    final slot = svc.layout.slotForMotor(product.motorId)?.label;
     final showSlot = context.watch<DeviceStorage>().showSlotNumber;
-    final slotLabel =
-        showSlot ? svc.layout.slotForMotor(product.motorId)?.label : null;
+    final numbersView = svc.numbersView;
     final hasPhoto = (product.imageUrl ?? '').isNotEmpty;
+
+    // The big number stands in for the picture: because the customer asked
+    // for it, or because there is no picture to show anyway.
+    final bigNumber = slot != null && (numbersView || !hasPhoto);
+    // The badge only makes sense over an actual photo.
+    final badgeNumber = slot != null && showSlot && hasPhoto && !numbersView;
 
     return AnimatedContainer(
       duration: const Duration(milliseconds: 180),
@@ -126,14 +142,28 @@ class ProductCard extends StatelessWidget {
                             // the slot number where the picture would be. A
                             // big digit is far more useful to someone at the
                             // cabinet than the generic 📦 fallback.
-                            if (slotLabel != null && !hasPhoto) {
+                            if (bigNumber) {
+                              // Keep the digits clear of the add button.
+                              // Both are centred/pinned inside the SAME box,
+                              // so without this the 44-dp circle sits on the
+                              // last digit — «031» read as «03» on a
+                              // three-column shelf. Reserved only when the
+                              // button is actually drawn; the settings
+                              // preview renders the card without it.
+                              const gap = 44.0 + 12.0;
+                              final pad = short * 0.12;
                               return Center(
                                 child: Padding(
-                                  padding: EdgeInsets.all(short * 0.12),
+                                  padding: EdgeInsets.fromLTRB(
+                                    pad,
+                                    pad,
+                                    interactive ? gap : pad,
+                                    pad,
+                                  ),
                                   child: FittedBox(
                                     fit: BoxFit.scaleDown,
                                     child: Text(
-                                      slotLabel,
+                                      slot,
                                       style: const TextStyle(
                                         color: AppColors.iosBlack,
                                         fontSize: 64,
@@ -161,7 +191,7 @@ class ProductCard extends StatelessWidget {
                     // Card with a photo — the number rides in a small badge
                     // at the bottom-left, clear of the counter pill (top
                     // left) and the add button (top right).
-                    if (slotLabel != null && hasPhoto)
+                    if (badgeNumber)
                       Positioned(
                         bottom: 10,
                         left: 12,
@@ -174,7 +204,7 @@ class ProductCard extends StatelessWidget {
                             padding: const EdgeInsets.symmetric(
                                 horizontal: 8, vertical: 3),
                             child: Text(
-                              slotLabel,
+                              slot,
                               style: const TextStyle(
                                 color: AppColors.iosBlack,
                                 fontSize: 14,

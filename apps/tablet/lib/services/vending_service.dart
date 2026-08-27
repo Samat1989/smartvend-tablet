@@ -399,6 +399,35 @@ class VendingService extends ChangeNotifier {
     notifyListeners();
   }
 
+  // ----- storefront view -----
+
+  /// Storefront shows slot numbers instead of product photos.
+  ///
+  /// A customer's momentary choice, not an operator setting, so it is
+  /// deliberately NOT persisted: the next person at the cabinet must find it
+  /// showing photos. [resetView] puts it back when they walk away.
+  ///
+  /// Distinct from [DeviceStorage.showSlotNumber], which is the operator's
+  /// call about whether a PHOTO card carries a small number badge. This one
+  /// replaces the photo outright. The two can be on at once and do not
+  /// contradict each other — the badge simply has nothing to sit on while
+  /// this is true.
+  ///
+  /// Lives here rather than in its own provider because its lifetime is the
+  /// storefront session's, the same one the cart already has.
+  bool _numbersView = false;
+  bool get numbersView => _numbersView;
+
+  void setNumbersView(bool value) {
+    if (_numbersView == value) return;
+    _numbersView = value;
+    notifyListeners();
+  }
+
+  /// Back to photos. Called when the customer is gone — screensaver taking
+  /// over, or an abandoned cart being cleared.
+  void resetView() => setNumbersView(false);
+
   // ----- dispense -----
 
   /// Latch a successful payment so the dispense screen can record the sale.
