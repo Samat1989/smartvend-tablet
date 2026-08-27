@@ -17,6 +17,7 @@ import '../theme.dart';
 import '../widgets/action_pill.dart';
 import '../widgets/product_card.dart';
 import '../widgets/shelf_header.dart';
+import '../widgets/lang_chip.dart';
 import '../widgets/support_corner.dart';
 import 'cart_screen.dart';
 import 'screensaver_screen.dart';
@@ -342,7 +343,7 @@ class _HomeScreenState extends State<HomeScreen> {
                       // inside it.
                       crossAxisAlignment: CrossAxisAlignment.center,
                       children: [
-                        _LangChip(),
+                        LangChip(),
                         SizedBox(height: 14),
                         SupportCorner(),
                       ],
@@ -825,51 +826,6 @@ class _MaintenanceOverlay extends StatelessWidget {
 /// on a 2-column layout the support chip covered a meaningful part of the
 /// top-right product. Laying them out in the flow instead costs one strip of
 /// height and gives the grid the whole area below, with nothing overlapping.
-class _LangChip extends StatelessWidget {
-  const _LangChip();
-
-  @override
-  Widget build(BuildContext context) {
-    final s = context.watch<Strings>();
-    // Cycles through whatever this cabinet offers — a Kyrgyz machine steps
-    // KG → EN → RU, a Kazakh one KZ → EN → RU. indexOf returns -1 for a
-    // language that is not on the list, which lands the next tap on the
-    // first entry: the right place to end up.
-    final cycle = s.languages;
-    final next = cycle[(cycle.indexOf(s.lang) + 1) % cycle.length];
-    final display = Strings.label(s.lang);
-    return GestureDetector(
-      behavior: HitTestBehavior.opaque,
-      onTap: () => s.setLang(next),
-      child: SizedBox(
-        // Same height as the support button below it, so the two read as one
-        // stack in the bottom-right corner and the language tap target stays
-        // finger-sized.
-        height: SupportCorner.height,
-        child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 12),
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              const Icon(Icons.language,
-                  size: 1, color: Color.fromARGB(255, 175, 188, 197)),
-              const SizedBox(width: 1),
-              Text(
-                display,
-                style: const TextStyle(
-                  color: Color.fromARGB(255, 139, 151, 161),
-                  fontWeight: FontWeight.w900,
-                  fontSize: 14,
-                  letterSpacing: 0.5,
-                ),
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-}
 
 class _ErrorView extends StatelessWidget {
   const _ErrorView({required this.error});

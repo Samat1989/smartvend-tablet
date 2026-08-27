@@ -6,6 +6,7 @@ import '../services/device_storage.dart';
 import '../services/strings.dart';
 import '../services/supabase_api.dart';
 import '../theme.dart';
+import '../widgets/lang_chip.dart';
 import 'service_pin_screen.dart';
 
 class PairingScreen extends StatefulWidget {
@@ -133,7 +134,10 @@ class _PairingScreenState extends State<PairingScreen> {
                     mainAxisSize: MainAxisSize.min,
                     crossAxisAlignment: CrossAxisAlignment.stretch,
                     children: [
-                      const _LangSwitcher(),
+                      const Align(
+                        alignment: Alignment.topRight,
+                        child: LangChip(),
+                      ),
                       const SizedBox(height: 8),
                       // The brand emblem rather than a stock cash-register
                       // glyph. No gradient disc behind it: the mark is blue
@@ -326,27 +330,3 @@ class _PairingScreenState extends State<PairingScreen> {
   }
 }
 
-class _LangSwitcher extends StatelessWidget {
-  const _LangSwitcher();
-
-  @override
-  Widget build(BuildContext context) {
-    final s = context.watch<Strings>();
-    return Align(
-      alignment: Alignment.topRight,
-      child: SegmentedButton<String>(
-        showSelectedIcon: false,
-        style: SegmentedButton.styleFrom(
-          textStyle: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold),
-          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-        ),
-        segments: [
-          for (final code in s.languages)
-            ButtonSegment(value: code, label: Text(Strings.label(code))),
-        ],
-        selected: {s.lang},
-        onSelectionChanged: (set) => s.setLang(set.first),
-      ),
-    );
-  }
-}
