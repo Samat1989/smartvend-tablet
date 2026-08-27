@@ -29,6 +29,10 @@ key.properties
 # scripts/README.md for setup instructions.
 .github_token
 
+# service_role key used by the release scripts to publish artifacts to
+# Supabase Storage. Full access to the project — never commit.
+.supabase_key
+
 # Third-party tooling jars (downloaded separately when needed).
 apktool*.jar
 uber-apk-signer*.jar

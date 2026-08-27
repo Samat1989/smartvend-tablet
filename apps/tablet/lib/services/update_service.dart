@@ -9,104 +9,80 @@ import 'package:path_provider/path_provider.dart';
 
 import 'kiosk_bridge.dart';
 
-/// In-app updater backed by GitHub Releases.
+/// In-app updater backed by a manifest in Supabase Storage.
 ///
 /// Flow:
-///   1. [check] hits the GitHub REST API for the latest published
-///      release of [owner]/[repo] and parses `tag_name` ("v1.0.5") +
-///      the asset list.
-///   2. Compares the release's version (parsed from the tag) against
-///      the current `package_info.buildNumber`. Returns null if we're
-///      already up-to-date.
-///   3. [downloadAndInstall] streams the matching ABI asset to local
-///      storage, then hands the file to [KioskBridge.installApk] which
-///      runs PackageInstaller on the native side.
+///   1. [check] GETs [manifestUrl] — a small JSON describing exactly one
+///      release — and compares its `code` against the installed
+///      `package_info.buildNumber`. Returns null if we're already current.
+///   2. [downloadAndInstall] streams the APK the manifest points at to
+///      local storage, then hands the file to [KioskBridge.installApk],
+///      which runs PackageInstaller on the native side.
 ///
-/// The GitHub API allows 60 unauthenticated requests/hour per IP —
-/// plenty for the manual "check for updates" tap in the service menu.
+/// This used to read the GitHub Releases API, and most of the complexity it
+/// has shed came from one fact: a GitHub repo is a SINGLE tag namespace
+/// shared with the esp-pulse and esp-relay firmware streams. That forced a
+/// tag-shape whitelist here (a blacklist had already broken once, when the
+/// new pulse stream sat at the top of /releases carrying no APK), tag
+/// prefixes on every stream, and a two-step /tags dance in the firmware.
+///
+/// Storage has paths instead: `updates/tablet/` is ours alone, and the
+/// manifest describes one release, so there is nothing to filter. Adding the
+/// firmware streams later cannot disturb this — they get their own
+/// directories and their own manifests.
 class UpdateService {
-  UpdateService({required this.owner, required this.repo});
+  UpdateService({required this.manifestUrl});
 
-  /// GitHub repository — e.g. `Samat1989` / `smartvend-tablet`. APK
-  /// assets must be attached to a published Release; pre-releases
-  /// can be opted into with [allowPrereleases].
-  final String owner;
-  final String repo;
+  /// Public URL of `updates/tablet/manifest.json`, written by
+  /// scripts/release_tablet.py. The bucket is public, so no auth here.
+  final String manifestUrl;
 
-  /// Per-architecture asset name we pick from the release. The
-  /// android-arm split is the only one we ship to current hardware
-  /// (Unisoc SC9832E). If a future device needs a different ABI we
-  /// can extend this with a per-CPU lookup against `Platform.version`
-  /// or a Dart isolate that runs `getprop ro.product.cpu.abilist`.
-  static const String assetName = 'app-armeabi-v7a-release.apk';
-
-  /// Tag shape of OUR releases — "v1.1.27+10127".
+  /// What the manifest currently advertises, alongside what is installed.
   ///
-  /// This repo also hosts the ESP firmware streams, which tag their releases
-  /// "relay-v*" / "pulse-v*" and attach a .bin instead of an APK. Those get
-  /// published more often than the tablet does and always sit at the top of
-  /// the /releases list.
+  /// Always non-null on success — ask [UpdateInfo.isNewer] whether it is
+  /// worth installing, so the service menu can show "up to date" with the
+  /// two versions side by side instead of an empty result.
   ///
-  /// Matching our own shape positively, instead of blacklisting theirs, is
-  /// deliberate. This used to read `if (tag.startsWith('relay-')) return false`
-  /// and adding the esp-pulse stream silently broke the updater: the newest
-  /// release was a pulse one, it passed the relay-only filter, carried no APK,
-  /// and check() gave up and reported "up to date" from then on. A whitelist
-  /// cannot be outrun by the next firmware stream.
-  static final RegExp _tabletTag = RegExp(r'^v?\d+\.\d+\.\d+');
-
-  /// Latest release info if available + newer than current.
-  /// Returns null when:
-  ///   • Current version is >= the published tag's version
-  ///   • The matching ABI asset isn't attached to the release
-  ///   • The network call fails (caller surfaces the error string)
-  Future<UpdateInfo?> check({bool allowPrereleases = false}) async {
-    final url = Uri.parse('https://api.github.com/repos/$owner/$repo/releases');
-    final resp = await http.get(url, headers: {
-      'Accept': 'application/vnd.github+json',
-      'X-GitHub-Api-Version': '2022-11-28',
-    }).timeout(const Duration(seconds: 15));
+  /// Throws on a failed fetch or a malformed manifest; the caller surfaces
+  /// the message. The nullable return type is kept because the caller still
+  /// has a "no releases" branch from the GitHub era.
+  Future<UpdateInfo?> check() async {
+    // Cache-busting query: Storage serves objects through a CDN, and while
+    // the manifest is uploaded with a 60 s max-age, an intermediate proxy on
+    // the machine's network is under no obligation to respect it.
+    final url = Uri.parse(manifestUrl).replace(queryParameters: {
+      't': DateTime.now().millisecondsSinceEpoch.toString(),
+    });
+    final resp = await http
+        .get(url, headers: {'Accept': 'application/json'})
+        .timeout(const Duration(seconds: 15));
     if (resp.statusCode != 200) {
-      throw HttpException('GitHub API ${resp.statusCode}: ${resp.body}');
+      throw HttpException('Manifest ${resp.statusCode}: ${resp.body}');
     }
-    final list = jsonDecode(resp.body) as List;
 
-    // Newest-first, take the first release that is ours AND actually carries
-    // the APK. A loop rather than a single firstWhere because a firmware
-    // release always sits at the top of the list, and because a tablet release
-    // whose asset upload failed would otherwise stop the updater dead instead
-    // of falling through to the last good one.
-    for (final r in list) {
-      final tag = (r['tag_name'] as String?) ?? '';
-      if (!_tabletTag.hasMatch(tag)) continue;
-      if (!allowPrereleases && r['prerelease'] != false) continue;
-
-      final version = _parseVersion(tag);
-      if (version == null) continue;
-
-      final assets = (r['assets'] as List?) ?? const [];
-      final asset = assets.firstWhere(
-        (a) => (a['name'] as String?)?.toLowerCase() == assetName.toLowerCase(),
-        orElse: () => null,
-      );
-      if (asset == null) continue;
-
-      final info = await PackageInfo.fromPlatform();
-      final current = int.tryParse(info.buildNumber) ?? 0;
-
-      return UpdateInfo(
-        tagName: tag,
-        versionName: version.name,
-        versionCode: version.code,
-        currentVersionName: info.version,
-        currentVersionCode: current,
-        assetUrl: asset['browser_download_url'] as String,
-        assetSize: (asset['size'] as num?)?.toInt() ?? 0,
-        body: r['body'] as String? ?? '',
-        publishedAt: r['published_at'] as String? ?? '',
-      );
+    final m = jsonDecode(utf8.decode(resp.bodyBytes)) as Map<String, dynamic>;
+    final versionName = (m['version'] as String?)?.trim() ?? '';
+    final assetUrl = (m['url'] as String?)?.trim() ?? '';
+    // `code` is the SHIPPED versionCode — the release script writes the
+    // post-ABI-offset number (pubspec build + 1000 for armeabi-v7a), because
+    // that is what the installed APK reports and what we compare against.
+    final versionCode = (m['code'] as num?)?.toInt() ?? 0;
+    if (versionName.isEmpty || assetUrl.isEmpty || versionCode == 0) {
+      throw const FormatException('manifest missing version/code/url');
     }
-    return null;
+
+    final info = await PackageInfo.fromPlatform();
+    return UpdateInfo(
+      tagName: 'v$versionName+$versionCode',
+      versionName: versionName,
+      versionCode: versionCode,
+      currentVersionName: info.version,
+      currentVersionCode: int.tryParse(info.buildNumber) ?? 0,
+      assetUrl: assetUrl,
+      assetSize: (m['size'] as num?)?.toInt() ?? 0,
+      body: m['notes'] as String? ?? '',
+      publishedAt: m['published_at'] as String? ?? '',
+    );
   }
 
   /// Download the release APK and return the saved path.
@@ -165,35 +141,6 @@ class UpdateService {
     await KioskBridge.installApk(path);
   }
 
-  _ParsedVersion? _parseVersion(String tag) {
-    // Accepted tag formats:
-    //   v1.0.5          → name=1.0.5, code derived from version parts
-    //   v1.0.5+1005     → name=1.0.5, code=1005 (matches pubspec.yaml)
-    //   1.0.5+1005      → same, leading "v" is optional
-    final cleaned = tag.replaceFirst(RegExp(r'^v'), '');
-    final parts = cleaned.split('+');
-    final name = parts.first;
-    if (name.isEmpty) return null;
-    int code;
-    if (parts.length >= 2) {
-      code = int.tryParse(parts[1]) ?? 0;
-    } else {
-      // Derive a monotonic int from the dotted version when no
-      // explicit build number is given. 1.0.5 → 10005.
-      final dots = name.split('.').map(int.tryParse).toList();
-      if (dots.any((n) => n == null)) return null;
-      code = dots[0]! * 10000 +
-          (dots.length > 1 ? dots[1]! * 100 : 0) +
-          (dots.length > 2 ? dots[2]! : 0);
-    }
-    return _ParsedVersion(name: name, code: code);
-  }
-}
-
-class _ParsedVersion {
-  _ParsedVersion({required this.name, required this.code});
-  final String name;
-  final int code;
 }
 
 /// Compare two dotted version names ("1.1.5" vs "1.1.3").

@@ -1,24 +1,36 @@
 #!/usr/bin/env python3
-"""One-shot tablet release: build signed APKs, tag, push, publish to GitHub.
+"""One-shot tablet release: build signed APKs, tag, push, publish.
 
-Replaces apps/tablet/scripts/release.ps1. Uploads the armeabi-v7a split as the
-release's only asset -- that is the one every tablet installs (see ABI_OFFSET
-below and UpdateService.assetName).
+Replaces apps/tablet/scripts/release.ps1. Ships the armeabi-v7a split -- that
+is the one every tablet installs (see ABI_OFFSET below).
+
+Publishes to TWO places by default, and that is deliberate:
+
+  * Supabase Storage (updates/tablet/) -- what tablets read from now on
+  * GitHub Releases                    -- the old channel
+
+Tablets in the field only learn about the Supabase manifest from a build
+delivered over the OLD channel, so GitHub has to keep publishing until every
+tablet is on a version that reads Supabase. Once they are, pass --no-github
+and the repository can go private.
 
 Requirements (one-time):
-  1. GitHub CLI + auth:  sudo apt install gh && gh auth login
-     (a fine-grained PAT in .github_token at the repo root also works, and
-     is the fallback for a headless box with no keyring)
-  2. apps/tablet/android/release.jks + key.properties -- both gitignored,
+  1. Supabase service_role key in .supabase_key at the repo root (gitignored)
+     -- Dashboard -> Project Settings -> API. Skip with --no-supabase.
+  2. GitHub CLI + auth:  sudo apt install gh && gh auth login
+     (a fine-grained PAT in .github_token also works, and is the fallback for
+     a headless box with no keyring). Skip with --no-github.
+  3. apps/tablet/android/release.jks + key.properties -- both gitignored,
      copy them in by hand (see android/README_RELEASE_SIGNING.md)
-  3. A JDK, only for the signature sanity check. Without one the check is
+  4. A JDK, only for the signature sanity check. Without one the check is
      skipped with a warning rather than blocking the release.
 
 Usage:
-  python scripts/release_tablet.py                        # auto-bump patch
-  python scripts/release_tablet.py --version 1.2.0        # derived build
-  python scripts/release_tablet.py --version 1.2.0+10200  # explicit build
-  python scripts/release_tablet.py --notes "Fixes X"      # else auto-generated
+  python3 scripts/release_tablet.py                        # auto-bump patch
+  python3 scripts/release_tablet.py --version 1.2.0        # derived build
+  python3 scripts/release_tablet.py --version 1.2.0+10200  # explicit build
+  python3 scripts/release_tablet.py --notes "Fixes X"      # else auto-generated
+  python3 scripts/release_tablet.py --no-github            # after the migration
 
 VERSION AND BUILD NUMBERS -- the part that is easy to get wrong.
 
@@ -53,10 +65,13 @@ from __future__ import annotations
 import argparse
 import os
 import re
+import shutil
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import _supabase  # noqa: E402
 from _common import (  # noqa: E402
     REPO_ROOT, OWNER_REPO, bump_patch, current_branch, derive_build, fail, git,
     info, ok, require, require_clean_tree, require_gh, resolve, run, step,
@@ -84,6 +99,9 @@ def find_keytool() -> str | None:
         Path("/opt/android-studio/jbr"),
         Path("/snap/android-studio/current/android-studio/jbr"),
     ]
+    # The tarball install unpacks to a versioned directory, e.g.
+    # ~/android-studio-2025.1.1.13-linux/android-studio/jbr — newest first.
+    roots += sorted(home.glob("android-studio-*/android-studio/jbr"), reverse=True)
     roots += sorted(Path("/usr/lib/jvm").glob("*"), reverse=True)
     for r in roots:
         cand = r / "bin" / "keytool"
@@ -120,13 +138,24 @@ def main() -> None:
     ap.add_argument("--skip-build", action="store_true",
                     help="reuse the APKs already on disk")
     ap.add_argument("--no-push", action="store_true")
+    ap.add_argument("--no-github", action="store_true",
+                    help="skip the GitHub Release (use once every tablet "
+                         "reads the Supabase manifest)")
+    ap.add_argument("--no-supabase", action="store_true",
+                    help="skip publishing to Supabase Storage")
     args = ap.parse_args()
+
+    if args.no_github and args.no_supabase:
+        fail("--no-github and --no-supabase together leave nowhere to publish.")
 
     print(f"Project: {PROJECT}")
 
     # --- Preflight ----------------------------------------------------------
+    # Both credentials are checked BEFORE the build, so a missing key costs
+    # seconds rather than a full flutter build.
     step("Checking prerequisites")
-    env = require_gh()
+    env = require_gh() if not args.no_github else None
+    sb_key = _supabase.service_key() if not args.no_supabase else None
     require("flutter", "Install the Flutter SDK and put it on PATH.")
 
     keystore = PROJECT / "android" / "release.jks"
@@ -222,24 +251,53 @@ def main() -> None:
         git("push", "origin", branch)
         git("push", "origin", tag)
 
-    # --- Create GitHub Release + upload the APK -----------------------------
-    # One asset, on purpose. UpdateService.assetName is pinned to
-    # app-armeabi-v7a-release.apk, so that is the only file any tablet ever
-    # downloads; the arm64 and x86_64 splits were dead weight on the release
-    # page and an invitation to hand-install the wrong one.
-    step(f"Creating GitHub Release {tag}")
-    gh_args = ["gh", "release", "create", tag, "--repo", OWNER_REPO, "--title", tag]
-    gh_args += ["--notes", args.notes] if args.notes else ["--generate-notes"]
-    if args.draft:
-        gh_args.append("--draft")
-    gh_args.append(str(apk))
-    run(gh_args, env=env)
+    # --- Publish to Supabase Storage ----------------------------------------
+    # The version code in the manifest is the POST-offset one (tag_build), not
+    # pubspec's. The tablet compares it against its own installed versionCode,
+    # which carries the +1000 from --split-per-abi -- the same trap the tag
+    # calculation exists to avoid, one field over.
+    man_url = None
+    if not args.no_supabase:
+        step("Publishing to Supabase Storage")
+        _supabase.ensure_bucket(sb_key, public=True)
+        # A versioned filename, not a fixed one: Storage objects are served
+        # through a CDN, so overwriting a single app.apk could hand a device
+        # that is mid-download a half-swapped file. These never change.
+        staged = apk.parent / f"app-{new[0]}.{new[1]}.{new[2]}-armeabi-v7a.apk"
+        shutil.copy2(apk, staged)
+        man_url = _supabase.publish(sb_key, "tablet", staged, {
+            "version": f"{new[0]}.{new[1]}.{new[2]}",
+            "code": tag_build,
+            "notes": args.notes or f"Release {tag}",
+            "published_at": datetime.now(timezone.utc)
+                            .replace(microsecond=0).isoformat(),
+        })
+        ok(f"manifest -> {man_url}")
 
-    url = run(["gh", "release", "view", tag, "--repo", OWNER_REPO,
-               "--json", "url", "--jq", ".url"], env=env, capture=True).stdout.strip()
+    # --- Create GitHub Release + upload the APK -----------------------------
+    # One asset, on purpose: the tablet only ever installs the v7a split, so
+    # the arm64 and x86_64 splits were dead weight on the release page and an
+    # invitation to hand-install the wrong one.
+    gh_url = None
+    if not args.no_github:
+        step(f"Creating GitHub Release {tag}")
+        gh_args = ["gh", "release", "create", tag, "--repo", OWNER_REPO,
+                   "--title", tag]
+        gh_args += ["--notes", args.notes] if args.notes else ["--generate-notes"]
+        if args.draft:
+            gh_args.append("--draft")
+        gh_args.append(str(apk))
+        run(gh_args, env=env)
+        gh_url = run(["gh", "release", "view", tag, "--repo", OWNER_REPO,
+                      "--json", "url", "--jq", ".url"],
+                     env=env, capture=True).stdout.strip()
+
     step("Done")
-    ok(f"Release URL: {url}")
-    print(f"APK URL:     {url.replace('/tag/', '/download/')}/{APK_NAME}")
+    if man_url:
+        ok(f"Supabase manifest: {man_url}")
+    if gh_url:
+        ok(f"GitHub release:   {gh_url}")
+        print(f"  APK: {gh_url.replace('/tag/', '/download/')}/{APK_NAME}")
     print()
     print("On the tablet: service-mode -> Обновление -> Проверить обновление.")
 

@@ -22,10 +22,15 @@ class UpdateScreen extends StatefulWidget {
 }
 
 class _UpdateScreenState extends State<UpdateScreen> {
-  final _service = UpdateService(
-    owner: 'Samat1989',
-    repo: 'smartvend-tablet',
-  );
+  // Written by scripts/release_tablet.py. The bucket is public — the APK is
+  // not a secret (it already sits on every tablet), so the download needs no
+  // auth and the ESP firmware streams can reuse the same scheme later under
+  // their own directories.
+  static const String _manifestUrl =
+      'https://cgvfhtvdtdjsyluhlcbq.supabase.co'
+      '/storage/v1/object/public/updates/tablet/manifest.json';
+
+  final _service = UpdateService(manifestUrl: _manifestUrl);
 
   PackageInfo? _info;
   bool _checking = false;
