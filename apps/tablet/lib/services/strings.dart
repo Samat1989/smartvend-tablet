@@ -126,18 +126,21 @@ class Strings extends ChangeNotifier {
     'machid_label': {'ru': 'Номер аппарата', 'kk': 'Аппарат нөмірі', 'ky': 'Аппараттын номери', 'en': 'Machine ID'},
     'secret_label': {'ru': 'Секретный ключ', 'kk': 'Құпия кілт', 'ky': 'Купуя ачкыч', 'en': 'Secret key'},
     'connect_btn': {'ru': 'Подключить', 'kk': 'Қосу', 'ky': 'Туташтыруу', 'en': 'Connect'},
+    // "O!Bank" is the name the wallet goes by, and the one _PayTabPill shows
+    // on the payment screen. Keep the two screens spelling it the same way —
+    // this used to read "O!Деньги" here and "O!" there.
     'odengi_label': {
-      'ru': 'O!Деньги (Кыргызстан)',
-      'kk': 'O!Деньги (Қырғызстан)',
-      'ky': 'O!Деньги (Кыргызстан)',
-      'en': 'O!Dengi (Kyrgyzstan)'
+      'ru': 'O!Bank (Кыргызстан)',
+      'kk': 'O!Bank (Қырғызстан)',
+      'ky': 'O!Bank (Кыргызстан)',
+      'en': 'O!Bank (Kyrgyzstan)'
     },
     'odengi_hint': {
-      'ru': 'QR через O!Деньги, цены в сомах. Без галочки — Kaspi QR.',
-      'kk': 'QR O!Деньги арқылы, бағалар сомда. Белгісіз — Kaspi QR.',
-      'ky': 'QR O!Деньги аркылуу, баалар сом менен. Белгиленбесе — Kaspi '
+      'ru': 'QR через O!Bank, цены в сомах. Без галочки — Kaspi QR.',
+      'kk': 'QR O!Bank арқылы, бағалар сомда. Белгісіз — Kaspi QR.',
+      'ky': 'QR O!Bank аркылуу, баалар сом менен. Белгиленбесе — Kaspi '
           'QR.',
-      'en': 'QR via O!Dengi, prices in som. Unchecked — Kaspi QR.'
+      'en': 'QR via O!Bank, prices in som. Unchecked — Kaspi QR.'
     },
     'verifying': {'ru': 'Проверка…', 'kk': 'Тексеру…', 'ky': 'Текшерилүүдө…', 'en': 'Verifying…'},
     // Home / catalog

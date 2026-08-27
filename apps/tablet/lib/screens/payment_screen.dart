@@ -265,11 +265,12 @@ class _PaymentScreenState extends State<PaymentScreen> {
                         currency: s.currency,
                       ),
                   const SizedBox(height: 20),
-                  // Sized to its own text, not to the QR below it: 'O!' is
-                  // two characters, and stretched across the card it read as
-                  // a button rather than as the name of who takes the money.
+                  // Sized to its own text, not to the QR below it: these
+                  // names are short, and stretched across the card the pill
+                  // read as a button rather than as the name of who takes
+                  // the money.
                   _PayTabPill(
-                    label: odengi ? 'O!' : 'Kaspi QR',
+                    label: odengi ? 'O!Bank' : 'Kaspi QR',
                     color: odengi ? AppColors.odengi : AppColors.kaspi,
                   ),
                   const SizedBox(height: 16),
