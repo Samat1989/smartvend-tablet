@@ -94,10 +94,14 @@ class AppError implements Exception {
     final detail = 'HTTP $status: ${body.length > 300 ? body.substring(0, 300) : body}';
     if (status == 401 || status == 403) {
       // _assert_machine raises errcode 42501 when another tablet holds the
-      // claim, and PostgREST renders that as a bare 403 — indistinguishable
-      // from a wrong secret unless the message is read. Eighteen write RPCs
-      // go through that guard, so this belongs here rather than at one call
-      // site. Wording comes from
+      // claim. PostgREST renders that for the anon role as a bare 401 —
+      // verified against the live project, where the tablet logged
+      //   HTTP 401: {"code":"42501", …
+      //     "message":"machine 100000000 is claimed by another tablet"}
+      // Both 401 and 403 are matched because the mapping is PostgREST's to
+      // change, and either way the status alone is indistinguishable from a
+      // wrong secret. Eighteen write RPCs pass through that guard, so this
+      // belongs here rather than at one call site. Wording comes from
       // 20260808140000_enforce_claim_on_machine_writes.sql.
       if (body.contains('claimed by another')) {
         return AppError(AppErrorKind.occupied, detail);

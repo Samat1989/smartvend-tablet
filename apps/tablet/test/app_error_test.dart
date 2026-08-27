@@ -8,17 +8,22 @@ import 'package:micromart/services/app_error.dart';
 
 void main() {
   group('AppError.http', () {
-    test('403 from the claim guard reads as occupied, not denied', () {
+    test('a 401/403 from the claim guard reads as occupied, not denied', () {
       // The regression this file exists for. _assert_machine raises errcode
       // 42501 when a second tablet tries to take a machine another one holds,
-      // and PostgREST renders that as a plain 403 — the same status as a
+      // and PostgREST renders that as a plain 401/403 — the same status as a
       // wrong secret. Classified by status alone the installer was told
       // "нет доступа, проверьте подключение" while the true answer was
       // "this cabinet is already in use".
-      const body = '{"code":"42501","message":'
-          '"machine 5 is claimed by another tablet"}';
-      expect(AppError.http(403, body).kind, AppErrorKind.occupied);
-      expect(AppError.http(403, body).messageKey, 'err_occupied');
+      //
+      // Body copied from what the live project actually returned; the tablet
+      // was seen logging exactly this.
+      const body = '{"code":"42501","details":null,"hint":null,"message":'
+          '"machine 100000000 is claimed by another tablet"}';
+      for (final status in [401, 403]) {
+        expect(AppError.http(status, body).kind, AppErrorKind.occupied);
+        expect(AppError.http(status, body).messageKey, 'err_occupied');
+      }
     });
 
     test('a plain 403 is still denied', () {

@@ -154,8 +154,9 @@ class SupabaseApi {
       // NB "already held by another tablet" lands here, not in claimMachine:
       // verify_pairing calls _assert_machine, whose p_check_claim defaults to
       // true, so the second tablet is refused before claimMachine — and its
-      // occupied branch — ever gets a turn. AppError.http reads that case out
-      // of the body and returns occupied rather than a bare "denied".
+      // occupied branch — ever gets a turn. The refusal arrives as a 401 whose
+      // body names the reason; AppError.http reads it out and returns
+      // occupied rather than a bare "denied".
       final err = AppError.http(resp.statusCode, resp.body)
         ..log('verifyPairing');
       return err.messageKey;
