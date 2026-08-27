@@ -6,6 +6,7 @@ import 'package:provider/provider.dart';
 import 'board/board_client.dart';
 import 'screens/home_screen.dart';
 import 'screens/pairing_screen.dart';
+import 'screens/splash_screen.dart';
 import 'services/climate_controller.dart';
 import 'services/device_storage.dart';
 import 'services/supabase_api.dart';
@@ -100,8 +101,64 @@ class VendingApp extends StatelessWidget {
             child: child!,
           );
         },
-        home: const _Router(),
+        home: const _Boot(),
       ),
+    );
+  }
+}
+
+/// Holds the branded [SplashScreen] while its bar fills, then cross-fades
+/// into the app.
+///
+/// A brand moment, not a loading gate: DeviceStorage.init() already finished
+/// before runApp(), so nothing here is actually being waited on and the bar
+/// simply paces [_hold]. That is deliberate rather than decorative — the OS
+/// splash cannot carry the wordmark, so this screen exists to show it, and a
+/// bar that fills tells the operator the tablet is starting rather than
+/// stuck. If a genuine async startup step ever appears, drive [_bar] from it
+/// instead of from a fixed duration.
+class _Boot extends StatefulWidget {
+  const _Boot();
+
+  @override
+  State<_Boot> createState() => _BootState();
+}
+
+class _BootState extends State<_Boot> with SingleTickerProviderStateMixin {
+  static const _hold = Duration(milliseconds: 1800);
+  static const _fade = Duration(milliseconds: 350);
+
+  late final AnimationController _bar =
+      AnimationController(vsync: this, duration: _hold)
+        ..addStatusListener((s) {
+          if (s == AnimationStatus.completed && mounted) {
+            setState(() => _handedOver = true);
+          }
+        })
+        ..forward();
+
+  bool _handedOver = false;
+
+  @override
+  void dispose() {
+    _bar.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AnimatedSwitcher(
+      duration: _fade,
+      child: _handedOver
+          ? const _Router()
+          // Rebuilt on every tick rather than wrapped in AnimatedBuilder
+          // inside SplashScreen: the splash is three static widgets and one
+          // bar, and keeping it a plain StatelessWidget taking a double is
+          // simpler than threading a Listenable through it.
+          : AnimatedBuilder(
+              animation: _bar,
+              builder: (_, _) => SplashScreen(progress: _bar.value),
+            ),
     );
   }
 }

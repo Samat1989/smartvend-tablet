@@ -105,18 +105,23 @@ flutter_launcher_icons:
 # a single source PNG. Re-run whenever the splash image changes:
 #   flutter pub get
 #   dart run flutter_native_splash:create
+# The source images are the EMBLEM ONLY — no wordmark. Android 12+ hands
+# the image to windowSplashScreenAnimatedIcon, which scales it into a
+# square icon slot: the old full-page 744x1133 composition arrived on the
+# tablet visibly squashed, mark and wordmark both. The wordmark now lives
+# in SplashScreen (Flutter), where it is real text and always sharp.
+#
+# design/splash_android12.png is 1152x1152 with the mark inside a 768 px
+# circle — the safe area the OS guarantees not to clip.
 flutter_native_splash:
   color: "#FFFFFF"
-  image: design/Splash.png
+  image: design/splash_legacy.png
   android: true
   ios: false
   fullscreen: true
   android_gravity: center
-  # Android 12+ uses a centered-icon splash API. The full splash image
-  # gets cropped to a circle by the OS, so we pass the same PNG but
-  # accept that the OS will frame it.
   android_12:
-    image: design/Splash.png
+    image: design/splash_android12.png
     color: "#FFFFFF"
 
 # For information on the generic Dart part of this file, see the
@@ -145,6 +150,15 @@ flutter:
 
   # For details regarding adding assets from package dependencies, see
   # https://flutter.dev/to/asset-from-package
+
+  # Bundled for the SplashScreen wordmark only — the rest of the UI stays on
+  # the platform font. Inter is SIL Open Font Licence, so shipping the .otf
+  # inside the APK is fine.
+  fonts:
+    - family: Inter
+      fonts:
+        - asset: lib/static/fonts/Inter-SemiBold.otf
+          weight: 600
 
   # To add custom fonts to your application, add a fonts section here,
   # in this "flutter" section. Each entry in this list should have a
