@@ -21,26 +21,28 @@ Intentionally **not used**. The old `.github/workflows/release.yml`
 was removed: it was copied from the pre-monorepo layout
 (`m102_tester/` instead of `apps/tablet/`) and failed on every tag
 push. Releases are built and uploaded locally by
-`scripts/release.ps1` — CI plays no part.
+`scripts/release_tablet.py` — CI plays no part.
 
 ## Releasing
 
-`scripts/release.ps1` bumps the version, builds split-per-abi APKs,
-tags the commit, pushes to origin, creates a GitHub Release, and
-uploads every ABI as an asset. Requires `gh` CLI (one-time
-`winget install GitHub.cli` + `gh auth login`).
+`scripts/release_tablet.py` (repo root) bumps the version, builds
+split-per-abi APKs, tags the commit, pushes to origin, creates a
+GitHub Release, and uploads the armeabi-v7a split as its only asset.
+Requires `gh` CLI (`sudo apt install gh`) plus `gh auth login`.
+A PAT in `.github_token` at the repo root is an optional fallback
+for a headless box with no keyring.
 
-```powershell
-cd apps\tablet
-.\scripts\release.ps1 -Version 1.0.6+1006
+```bash
+# from the repo root
+python3 scripts/release_tablet.py --version 1.0.6+1006
 # or with explicit release notes
-.\scripts\release.ps1 -Version 1.0.6+1006 -Notes "Adds: …  Fixes: …"
-# or, if pubspec is already at the desired version:
-.\scripts\release.ps1
+python3 scripts/release_tablet.py --version 1.0.6+1006 --notes "Adds: …  Fixes: …"
+# or, to auto-bump the patch version:
+python3 scripts/release_tablet.py
 ```
 
-Flags: `-Draft` (create release as draft), `-SkipBuild` (reuse
-existing APKs), `-NoPush` (tag + build locally without pushing).
+Flags: `--draft` (create release as draft), `--skip-build` (reuse
+existing APKs), `--no-push` (tag + build locally without pushing).
 
 The script refuses to run if the working tree is dirty, the tag
 already exists, the keystore is missing, or `gh` isn't authenticated

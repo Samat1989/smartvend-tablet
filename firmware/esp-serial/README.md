@@ -90,15 +90,15 @@ UART0 здесь — канал команд, а не лог. Любая стр�
 ## Сборка и прошивка
 
 ```bash
-# в окружении ESP-IDF (export.ps1 / get_idf)
+# в окружении ESP-IDF (export.sh)
 cd firmware/esp-serial
 idf.py set-target esp32
-idf.py -p COM9 build flash
+idf.py -p /dev/ttyUSB0 build flash
 ```
 
 > ⚠️ Прошивка **перезапишет** то, что стоит на плате. Полный бэкап штатной
 > прошивки SmartVend снят: `esp32_dump/flash_full.bin`. Откат:
-> `python -m esptool --port COM9 write-flash 0 esp32_dump/flash_full.bin`
+> `python3 -m esptool --port /dev/ttyUSB0 write-flash 0 esp32_dump/flash_full.bin`
 
 ## Проверка без планшета
 

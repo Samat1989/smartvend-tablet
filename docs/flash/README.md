@@ -11,8 +11,8 @@
 
 ## Как обновить образ
 Из корня репозитория:
-```powershell
-.\make-web-flasher.ps1 -Commit -Push
+```bash
+python3 scripts/make_web_flasher.py --commit --push
 ```
 Скрипт соберёт прошивку (`idf.py build`), склеит `relay-merged.bin`, подтянет версию
 в `manifest.json`, закоммитит и запушит. GitHub Pages обновится автоматически.
@@ -53,10 +53,10 @@ GitHub → репозиторий → **Settings → Pages → Source: `main` / 
 Arduino IDE.
 
 Запасной путь, когда браузер не сдаётся вовсе (нужен ESP-IDF на ПК):
-```powershell
-python -m esptool --chip esp32 -p COM18 -b 460800 `
-  --before default_reset --after hard_reset write_flash `
-  --flash_mode dio --flash_size 4MB --flash_freq 40m 0x0 docs\flash\relay-merged.bin
+```bash
+python3 -m esptool --chip esp32 -p /dev/ttyUSB0 -b 460800 \
+  --before default_reset --after hard_reset write_flash \
+  --flash_mode dio --flash_size 4MB --flash_freq 40m 0x0 docs/flash/relay-merged.bin
 ```
 
 ## Замечания

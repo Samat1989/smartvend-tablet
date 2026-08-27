@@ -15,7 +15,7 @@ class M102Controller:
     def __init__(self, port, slave_addr=1):
         """
         Инициализация контроллера M102.
-        :param port: COM-порт (например, 'COM6' или '/dev/ttyUSB0')
+        :param port: последовательный порт (например, '/dev/ttyUSB0')
         :param slave_addr: Адрес платы (по умолчанию 1)
         """
         try:
@@ -258,7 +258,8 @@ class M102Controller:
 if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser(description="M102 Vending Controller CLI")
-    parser.add_argument("--port", default="COM6", help="COM port (default: COM6)")
+    parser.add_argument("--port", default="/dev/ttyUSB0",
+                        help="serial port (default: /dev/ttyUSB0)")
     parser.add_argument("--motor", type=int, help="Motor index to run (0-99)")
     parser.add_argument("--type", type=int, default=2, help="Motor type (0=lock, 2=2-wire, 3=3-wire)")
     parser.add_argument("--curtain", type=int, default=0, help="Light curtain mode (0-2)")

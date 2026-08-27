@@ -67,7 +67,7 @@ class M102Controller:
         return None, None
 
 # Использование:
-ctrl = M102Controller('COM6')  # замените на ваш порт
+ctrl = M102Controller('/dev/ttyUSB0')  # замените на ваш порт
 
 # Выдать товар из ячейки (соответствие между motor_num и L/C/H см. в таблице ниже)
 ctrl.dispense(0)  # выдача из первой ячейки

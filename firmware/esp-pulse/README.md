@@ -17,7 +17,7 @@
 | Открытие | защёлкнуть ON → ждать → защёлкнуть OFF | `HIGH` → ждать → `LOW` |
 | Состояние после сброса | реле держит положение, поэтому на старте принудительно защёлкивается закрытым | пин отпускается сам; `lock_close()` на старте только сокращает окно |
 | OTA-теги | `relay-v*`, ассет `relay-mart.bin` | `pulse-v*`, ассет `pulse-mart.bin` |
-| Релиз | `release-relay.ps1` | `release-pulse.ps1` |
+| Релиз | `release_fw.py relay` | `release_fw.py pulse` |
 
 Код различия — три функции `lock_pins_init()` / `lock_open()` / `lock_close()`
 в `main/main.c` (секция «Lock output»).
@@ -75,10 +75,10 @@
 ## Сборка и прошивка
 
 ```bash
-# в окружении ESP-IDF (export.ps1 / get_idf)
+# в окружении ESP-IDF (export.sh)
 cd firmware/esp-pulse
 idf.py set-target esp32
-idf.py -p COM9 build flash monitor
+idf.py -p /dev/ttyUSB0 build flash monitor
 ```
 
 `build/`, `managed_components/` и `sdkconfig` генерируются — в репозитории лежат
@@ -87,8 +87,8 @@ idf.py -p COM9 build flash monitor
 
 ## Релиз
 
-```powershell
-.\release-pulse.ps1 "Что изменилось"
+```bash
+python3 scripts/release_fw.py pulse -m "Что изменилось"
 ```
 
 Скрипт бампает `FW_VERSION_NAME`/`FW_VERSION_CODE` в `main/main.c`, собирает,

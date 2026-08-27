@@ -29,22 +29,22 @@ help               справка
 
 ## Сборка и прошивка
 > ⚠️ Прошивка ПЕРЕЗАПИШЕТ штатную прошивку SmartVend. Полный бэкап уже снят:
-> `esp32_dump/flash_full.bin`. Откат: `python -m esptool --port COM9 write-flash 0 esp32_dump/flash_full.bin`
+> `esp32_dump/flash_full.bin`. Откат: `python3 -m esptool --port /dev/ttyUSB0 write-flash 0 esp32_dump/flash_full.bin`
 
 ```bash
-# в окружении ESP-IDF (export.ps1 / export.sh)
+# в окружении ESP-IDF (export.sh)
 cd firmware/relay-test
 idf.py set-target esp32
-idf.py -p COM9 build flash
+idf.py -p /dev/ttyUSB0 build flash
 ```
 
 ## Проверка с ПК
 ```bash
 pip install pyserial
-# закрыть idf.py monitor, чтобы освободить COM9
-python relay_ctl.py --port COM9                 # интерактивно
-python relay_ctl.py --selftest --hold 3         # CH0: ВКЛ -> 3с -> ВЫКЛ
-python relay_ctl.py -c "g 2 1"                   # сырой тест пина IO2
+# закрыть idf.py monitor, чтобы освободить /dev/ttyUSB0
+python3 relay_ctl.py --port /dev/ttyUSB0                 # интерактивно
+python3 relay_ctl.py --selftest --hold 3         # CH0: ВКЛ -> 3с -> ВЫКЛ
+python3 relay_ctl.py -c "g 2 1"                   # сырой тест пина IO2
 ```
 
 ### Как найти пины CH1 (если не IO4/IO17)

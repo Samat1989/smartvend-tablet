@@ -1,6 +1,6 @@
 # Раскладка моторов — конкретный аппарат
 
-> Получено эмпирически: запуск `python vending_ctrl.py --port COM6 --motor N --type 2` по каждому индексу и наблюдение какая ячейка крутится.
+> Получено эмпирически: запуск `python3 vending_ctrl.py --port /dev/ttyUSB0 --motor N --type 2` по каждому индексу и наблюдение какая ячейка крутится.
 
 ## Тип моторов
 
@@ -116,14 +116,14 @@ motor_id = (9 - shelf_label // 10) * 10 + (10 - shelf_label % 10)
 
 ```bash
 # Самый верхний левый (99)
-python vending_ctrl.py --port COM6 --motor 99 --type 2
+python3 vending_ctrl.py --port /dev/ttyUSB0 --motor 99 --type 2
 
 # Самый нижний правый (44)
-python vending_ctrl.py --port COM6 --motor 44 --type 2
+python3 vending_ctrl.py --port /dev/ttyUSB0 --motor 44 --type 2
 
 # Прогнать всю верхнюю строку
 for n in 99 98 97 96 95 94; do
-    python vending_ctrl.py --port COM6 --motor $n --type 2
+    python3 vending_ctrl.py --port /dev/ttyUSB0 --motor $n --type 2
     sleep 8  # ждать завершения мотора + запас
 done
 ```

@@ -30,7 +30,7 @@ docs/             Документация и планы разработки
   refs/           Вендорские справочники (протоколы, API PDF)
 
 tools/            Вспомогательные python-скрипты
-release-relay.ps1 Сборка/публикация прошивки ESP-реле в GitHub Releases
+scripts/          Релизные скрипты (Python) — см. scripts/README.md
 ```
 
 Два типа продающих машин (vending со спиралями и static-QR с замком) и
@@ -55,5 +55,5 @@ release-relay.ps1 Сборка/публикация прошивки ESP-рел�
 
 - `apps/web_app` (Vercel): в настройках проекта Vercel выставить
   **Root Directory = `apps/web_app`**.
-- `apps/tablet`: релиз через `apps/tablet/scripts/release.ps1` (нужен `gh` CLI,
+- `apps/tablet`: релиз через `python3 scripts/release_tablet.py` (нужен `gh` CLI,
   см. `apps/tablet/android/README_RELEASE_SIGNING.md`).

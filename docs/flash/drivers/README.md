@@ -13,7 +13,7 @@
 2. Переименуйте/сохраните строго как `CP210x.zip` и `CH341SER.EXE` в этой папке
    (`docs/flash/drivers/`).
 3. Закоммитьте и запушьте:
-   ```powershell
+   ```bash
    git add docs/flash/drivers
    git commit -m "web-flasher: add USB-UART drivers"
    git push

@@ -253,22 +253,22 @@
 
 ```bash
 # Сканировать адреса плат
-python vending_ctrl.py --port COM6 --scan-addr
+python3 vending_ctrl.py --port /dev/ttyUSB0 --scan-addr
 
 # Получить ID и температуру
-python vending_ctrl.py --port COM6 --info
+python3 vending_ctrl.py --port /dev/ttyUSB0 --info
 
 # Перебрать все DO
 for i in 0 1 2 3 4; do
-    python vending_ctrl.py --port COM6 --do $i 1
+    python3 vending_ctrl.py --port /dev/ttyUSB0 --do $i 1
     sleep 1
 done
 
 # Запустить мотор 5 (физическая ячейка L6 если 1-based)
-python vending_ctrl.py --port COM6 --motor 5 --type 2
+python3 vending_ctrl.py --port /dev/ttyUSB0 --motor 5 --type 2
 
 # Сканировать наличие моторов
-python vending_ctrl.py --port COM6 --scan-all
+python3 vending_ctrl.py --port /dev/ttyUSB0 --scan-all
 ```
 
 ---

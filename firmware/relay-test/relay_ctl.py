@@ -4,8 +4,8 @@ PC-side tester for the relay-test firmware (talks over USB-serial to the ESP32).
 
 Install:  pip install pyserial
 Usage:
-  python relay_ctl.py                      # interactive shell on COM9
-  python relay_ctl.py --port COM9
+  python3 relay_ctl.py                     # interactive shell on /dev/ttyUSB0
+  python3 relay_ctl.py --port /dev/ttyUSB0
   python relay_ctl.py --selftest           # auto: on 0 -> wait -> off 0
   python relay_ctl.py -c "g 2 1"           # send one command and print reply
 
@@ -31,7 +31,7 @@ def send(ser, line):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--port", default="COM9")
+    ap.add_argument("--port", default="/dev/ttyUSB0")
     ap.add_argument("--baud", type=int, default=115200)
     ap.add_argument("-c", "--cmd", help="send a single command, print reply, exit")
     ap.add_argument("--selftest", action="store_true",
