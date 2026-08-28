@@ -143,20 +143,45 @@ class ProductCard extends StatelessWidget {
                             // big digit is far more useful to someone at the
                             // cabinet than the generic 📦 fallback.
                             if (bigNumber) {
-                              // Keep the digits clear of the add button.
-                              // Both are centred/pinned inside the SAME box,
-                              // so without this the 44-dp circle sits on the
-                              // last digit — «031» read as «03» on a
-                              // three-column shelf. Reserved only when the
-                              // button is actually drawn; the settings
-                              // preview renders the card without it.
+                              // Keep the digits clear of the controls. They
+                              // are pinned inside the SAME box as this text,
+                              // so without a reservation the 44-dp circles
+                              // sit on the number: «031» read as «03» on a
+                              // three-column shelf.
+                              //
+                              // Two different reservations, because the two
+                              // controls are shaped differently. All three
+                              // variants below were tried on a real cabinet.
+                              //
+                              // Right: the add button is a 44-dp circle, so
+                              // 56 dp of clear width is enough and the digits
+                              // keep their height. Without it the circle sat
+                              // on the last digit — «031» read as «03».
+                              //
+                              // Left: the counter pill is ~80 dp wide (16 pad
+                              // + count + 8 + a 28-dp circle + 6), so clearing
+                              // it sideways would need ~100 of a 218-dp card
+                              // and leave the number nothing. It gives way
+                              // downward instead — but only on the card that
+                              // is actually in the cart. Reserving the row's
+                              // height on every card shrank the digits
+                              // everywhere, and the digits are the entire
+                              // point of this view.
+                              //
+                              // So an untouched card — the majority, and the
+                              // ones being read — keeps the big number, and a
+                              // card someone has already picked gives up some
+                              // of it to say how many. Nothing is ever hidden.
                               const gap = 44.0 + 12.0;
+                              const controlsRow = 12.0 + 44.0 + 8.0;
                               final pad = short * 0.12;
                               return Center(
                                 child: Padding(
                                   padding: EdgeInsets.fromLTRB(
                                     pad,
-                                    pad,
+                                    (interactive && count > 0)
+                                        ? controlsRow
+                                        : pad,
                                     interactive ? gap : pad,
                                     pad,
                                   ),
