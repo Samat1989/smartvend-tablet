@@ -239,6 +239,43 @@ class Strings extends ChangeNotifier {
       'en': 'This machine is already in use by another tablet. '
           'Release it in the owner panel.'
     },
+    // Only reachable when accept_admin_release did not go through — the
+    // pairing screen lifts the block before claiming, so in practice this
+    // means the network dropped between the two calls.
+    'err_released': {
+      'ru': 'Этот планшет отвязали от аппарата в панели владельца. '
+          'Попробуйте подключить ещё раз.',
+      'kk': 'Бұл планшет иесінің панелінен аппараттан ажыратылған. '
+          'Қайта қосып көріңіз.',
+      'ky': 'Бул планшет ээсинин панелинен аппараттан ажыратылган. '
+          'Кайра туташтырып көрүңүз.',
+      'en': 'This tablet was unbound from the machine in the owner panel. '
+          'Try connecting again.'
+    },
+    // --- Why the tablet unpaired itself ----------------------------------
+    // Shown on the pairing screen after the fact, not at the moment it
+    // happens: by then the storefront is already gone. Amber, not red —
+    // nothing broke, someone decided this. See DeviceStorage.unpairNotice.
+    'unpair_released': {
+      'ru': 'Аппарат отвязали от этого планшета в панели владельца. '
+          'Чтобы продолжить работу, подключите аппарат заново.',
+      'kk': 'Аппарат осы планшеттен иесінің панелінде ажыратылды. '
+          'Жұмысты жалғастыру үшін аппаратты қайта қосыңыз.',
+      'ky': 'Аппарат бул планшеттен ээсинин панелинде ажыратылды. '
+          'Иштөөнү улантуу үчүн аппаратты кайра туташтырыңыз.',
+      'en': 'This tablet was unbound from the machine in the owner panel. '
+          'Pair the machine again to carry on.'
+    },
+    'unpair_taken': {
+      'ru': 'Аппарат перешёл к другому планшету. Этот планшет его больше '
+          'не обслуживает.',
+      'kk': 'Аппарат басқа планшетке өтті. Бұл планшет оған енді қызмет '
+          'көрсетпейді.',
+      'ky': 'Аппарат башка планшетке өттү. Бул планшет ага мындан ары '
+          'кызмат кылбайт.',
+      'en': 'The machine moved to another tablet. This one no longer '
+          'serves it.'
+    },
     'pay_err_amount': {
       'ru': 'Сумма должна быть больше нуля.',
       'kk': 'Сома нөлден үлкен болуы керек.',
