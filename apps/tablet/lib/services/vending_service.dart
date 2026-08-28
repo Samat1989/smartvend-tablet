@@ -19,21 +19,49 @@ enum CatalogState { loading, ready, error, unpaired }
 /// Catalog is loaded from Supabase on construction (and on demand via
 /// [reload]). Slots without a DB row remain absent from the catalog.
 class VendingService extends ChangeNotifier {
-  /// Catalog auto-refresh interval. Owner edits inventory/prices/stock
-  /// from the Supabase dashboard or owner app; the tablet picks up changes
-  /// within this window without manual reload. 60 s is conservative enough
-  /// not to hammer Supabase (~1440 requests/day) and quick enough to feel
-  /// near-instant for the operator.
-  static const _autoRefreshInterval = Duration(seconds: 60);
+  /// Heartbeat interval. Also the tablet's ONLY scheduled network call: the
+  /// catalog no longer has a timer of its own, it is refetched when the
+  /// server says its fingerprint changed (see [_catalogDigest]).
+  ///
+  /// Five minutes rather than the old sixty seconds because the cost of a
+  /// beat is the REQUEST, not its payload. Dart's HttpClient drops an idle
+  /// connection after 15 s, so every beat pays a fresh TLS handshake — a
+  /// ~2.6 KB certificate chain against a 66-byte response body. Three
+  /// requests a minute came to roughly 840 MB a month per tablet, most of it
+  /// spent re-downloading a catalog that had not changed. This is ~50 MB.
+  ///
+  /// What it costs: everything riding the beat is now up to five minutes
+  /// stale — the online lamp, `board_ok` (a live tablet with a dead board,
+  /// which 20260807120000 calls the most common and most annoying failure),
+  /// and the owner's «Отвязать планшет». A claim refused at app start is
+  /// still immediate. The panel's offline window moved to 15 minutes to
+  /// match — three missed beats, see 20260828160000.
+  static const _pingInterval = Duration(minutes: 5);
 
-  Timer? _autoRefreshTimer;
+  Timer? _pingTimer;
+
+  /// Fingerprint of the machine's inventory as the server last reported it,
+  /// opaque to us. The catalog is refetched when a beat brings a different
+  /// one, which is what replaced polling it every minute.
+  ///
+  /// Deliberately not compared field-by-field and not recomputed here: the
+  /// server builds this string, and a client that tried to reproduce it
+  /// byte-for-byte would drift on the first formatting difference and then
+  /// either reload forever or never again.
+  ///
+  /// In memory only. A tablet that just started loads the catalog anyway, so
+  /// there is nothing worth persisting.
+  String? _catalogDigest;
 
   /// Fast-retry timer for the error state. After a reboot the app comes
   /// up before the tablet's Wi-Fi/GSM does, so the very first load
   /// times out and the customer-facing error screen used to sit there
-  /// for up to a full 60 s auto-refresh tick even after the network
-  /// returned. While the error screen is showing we retry on a short
-  /// backoff instead; the 60 s timer stays as the steady-state backstop.
+  /// for up to a full background tick even after the network returned.
+  /// While the error screen is showing we retry on a short backoff instead.
+  ///
+  /// This matters more now that the catalog has no timer of its own: on a
+  /// tablet stuck in [CatalogState.error] this backoff is the only thing
+  /// that will ever try again.
   Timer? _retryTimer;
   int _retryAttempt = 0;
 
@@ -64,7 +92,7 @@ class VendingService extends ChangeNotifier {
     _storage.addListener(_onStorageChanged);
     if (_storage.isPaired) {
       reload();
-      _startAutoRefresh();
+      _startHeartbeat();
       // Push the locally-stored layout on every boot. Cheap (single
       // RPC), idempotent server-side, and ensures admin always shows
       // the same shelf shape the operator sees on the tablet without
@@ -113,28 +141,17 @@ class VendingService extends ChangeNotifier {
     );
   }
 
-  void _startAutoRefresh() {
+  void _startHeartbeat() {
     // Timer.periodic's first tick is a full interval away; take the claim now
-    // so the machine is held from boot rather than a minute into it. Cheap
-    // and idempotent — _ensureClaim is a no-op after the first success.
+    // so the machine is held from boot rather than five minutes into it.
+    // Cheap and idempotent — _ensureClaim is a no-op after the first success.
     unawaited(_ensureClaim());
-    _autoRefreshTimer?.cancel();
-    _autoRefreshTimer = Timer.periodic(_autoRefreshInterval, (_) {
+    _pingTimer?.cancel();
+    _pingTimer = Timer.periodic(_pingInterval, (_) {
       if (!_storage.isPaired) return;
-      // The heartbeat rides this timer rather than getting one of its own —
-      // the tablet already talks to Supabase every minute. It is sent on
-      // EVERY tick, including the ones the catalog sync skips below: a
-      // machine with a customer standing at it is very much on-line, and
-      // going dark in the owner panel mid-sale would be exactly backwards.
       _sendPing();
-      // Skip cycles that would either disturb a customer mid-purchase or
-      // overlap with a fetch that's already in flight. The next tick tries
-      // again — silent retries are fine here, this is a background sync.
-      if (_cart.isNotEmpty) return;
-      if (_state == CatalogState.loading) return;
-      reload(silent: true);
     });
-    // Don't make the panel wait a full minute to light up after a restart.
+    // Don't make the panel wait a full interval to light up after a restart.
     _sendPing();
   }
 
@@ -153,7 +170,21 @@ class VendingService extends ChangeNotifier {
   /// and gets taken silently.
   bool _claimAttempted = false;
 
-  Future<void> _ensureClaim() async {
+  /// The claim currently in flight, so a heartbeat that starts while it is
+  /// still running waits for the verdict instead of racing past it.
+  ///
+  /// [_startHeartbeat] fires `_ensureClaim()` and `_sendPing()` back to back;
+  /// the `_ensureClaim` inside `_sendPing` used to return instantly because
+  /// `_claimAttempted` is set synchronously, before the await. A tablet the
+  /// owner had just unbound would therefore get one beat out before learning
+  /// it had lost the machine — relighting the lamp on a cabinet that is no
+  /// longer its own. At sixty seconds that was lost in the noise; at five
+  /// minutes it would sit there.
+  Future<void>? _claimInFlight;
+
+  Future<void> _ensureClaim() => _claimInFlight ??= _claim();
+
+  Future<void> _claim() async {
     final machid = _storage.machid;
     final secret = _storage.secret;
     if (machid == null || secret == null) return;
@@ -177,7 +208,11 @@ class VendingService extends ChangeNotifier {
         notice: claim.released ? 'unpair_released' : 'unpair_taken',
       );
     } else if (!claim.ok) {
+      // Transport failure — let the next beat try again. Both flags have to
+      // be cleared: the cached future would otherwise complete instantly
+      // forever and the retry would never leave the ground.
       _claimAttempted = false;
+      _claimInFlight = null;
     }
   }
 
@@ -227,7 +262,7 @@ class VendingService extends ChangeNotifier {
     // corrupt by finishing what is already in flight — and dropping to the
     // pairing screen on top of a customer who has just paid would take their
     // money and hand them nothing. Wait for the cabinet to be idle; the next
-    // beat is a minute away.
+    // beat is five minutes away.
     if (verdict['claim'] == 'released') {
       if (_cart.isNotEmpty || _paymentId != null) {
         debugPrint('[ping] released by owner — deferred, sale in progress');
@@ -240,15 +275,40 @@ class VendingService extends ChangeNotifier {
     // 'push' — the cloud is behind us, most often because a save happened
     // while the tablet had no network and nothing ever retried it.
     // 'stale' means another tablet on this machid edited later; we leave it
-    // alone rather than fighting over the row every minute.
+    // alone rather than fighting over the row every beat.
     if (verdict['layout'] == 'push' && _layout.isNotEmpty) {
       unawaited(_pushLayoutToCloud(_layout.encode()));
     }
+
+    // This is what replaced refetching the whole catalog every minute in the
+    // hope something had changed. Absent on a server that predates the
+    // fingerprint — then nothing reloads on its own, which is why the manual
+    // refresh in the inventory editor stays.
+    final digest = verdict['catalog'] as String?;
+    if (!catalogChanged(_catalogDigest, digest)) return;
+    _catalogDigest = digest;
+    // Same two guards the old timer carried: never blank the shelf under a
+    // customer who is choosing, never overlap a fetch already in flight.
+    // The next beat picks it up.
+    if (_cart.isNotEmpty || _state == CatalogState.loading) return;
+    unawaited(reload(silent: true));
   }
 
-  void _stopAutoRefresh() {
-    _autoRefreshTimer?.cancel();
-    _autoRefreshTimer = null;
+  /// Should a beat reporting [fresh] send us back for the catalog, given we
+  /// last saw [seen]?
+  ///
+  /// Split out as a pure function because the rule has three cases and only
+  /// one of them is obvious. A first beat (`seen` null) reloads: the tablet
+  /// may have been running on a catalog fetched before the last edit. A
+  /// server with no fingerprint (`fresh` null) never reloads, rather than
+  /// reloading on every beat — the opposite mistake is a tablet that
+  /// downloads the catalog forever.
+  static bool catalogChanged(String? seen, String? fresh) =>
+      fresh != null && fresh != seen;
+
+  void _stopHeartbeat() {
+    _pingTimer?.cancel();
+    _pingTimer = null;
   }
 
   final BoardClient board;
@@ -309,7 +369,7 @@ class VendingService extends ChangeNotifier {
   void _onStorageChanged() {
     if (_storage.isPaired && _state == CatalogState.unpaired) {
       reload();
-      _startAutoRefresh();
+      _startHeartbeat();
       if (_layout.isNotEmpty) {
         unawaited(_pushLayoutToCloud(_layout.encode()));
       }
@@ -317,7 +377,7 @@ class VendingService extends ChangeNotifier {
       _catalog.clear();
       _cart.clear();
       _state = CatalogState.unpaired;
-      _stopAutoRefresh();
+      _stopHeartbeat();
       _retryTimer?.cancel();
       _retryAttempt = 0;
       notifyListeners();
@@ -473,7 +533,7 @@ class VendingService extends ChangeNotifier {
 
   @override
   void dispose() {
-    _stopAutoRefresh();
+    _stopHeartbeat();
     _retryTimer?.cancel();
     _storage.removeListener(_onStorageChanged);
     super.dispose();
