@@ -215,6 +215,15 @@ grant  execute on function public.claim_machine(bigint, text, text) to anon;
 -- and the tablet tells them apart only to say the right thing on the pairing
 -- screen: 'lost' — another tablet took over; 'released' — the owner unbound
 -- this one.
+--
+-- The signature is copied from the LIVE function, not from
+-- 20260808140000_enforce_claim_on_machine_writes.sql, which is two migrations
+-- behind it: 20260824120000 added p_ter_number. `create or replace` matches on
+-- the argument list, so recreating the 7-argument version would not have
+-- replaced anything — it would have added a second, overloaded device_ping,
+-- and PostgREST answers an ambiguous overload with an error rather than a
+-- guess. Every heartbeat in the fleet would have failed. Caught by diffing
+-- pg_get_functiondef against the file before applying.
 create or replace function public.device_ping(
   p_machid      bigint,
   p_secret      text,
@@ -222,7 +231,8 @@ create or replace function public.device_ping(
   p_app_version text        default null,
   p_layout_hash text        default null,
   p_layout_at   timestamptz default null,
-  p_device_id   text        default null
+  p_device_id   text        default null,
+  p_ter_number  text        default null
 )
 returns jsonb
 language plpgsql
@@ -252,12 +262,22 @@ begin
     return jsonb_build_object('claim', 'released', 'layout', 'ok');
   end if;
 
-  insert into public.device_status (machid, last_seen_at, board_ok, app_version, updated_at)
-  values (p_machid, now(), p_board_ok, p_app_version, now())
+  insert into public.device_status
+    (machid, last_seen_at, board_ok, app_version, ter_number, updated_at)
+  values
+    (p_machid, now(), p_board_ok, p_app_version,
+     nullif(btrim(coalesce(p_ter_number, '')), ''), now())
   on conflict (machid) do update set
     last_seen_at = now(),
     board_ok     = excluded.board_ok,
     app_version  = coalesce(excluded.app_version, public.device_status.app_version),
+    -- Absent parameter (an app that predates 20260824120000) means "no
+    -- report" and keeps what we had; an empty string is a real report of
+    -- "Kaspi" and must be able to clear a stale 'ODG'.
+    ter_number   = case
+                     when p_ter_number is null then public.device_status.ter_number
+                     else nullif(btrim(p_ter_number), '')
+                   end,
     updated_at   = now();
 
   if p_layout_hash is null then
@@ -279,6 +299,9 @@ begin
 end;
 $$;
 
-revoke execute on function public.device_ping(bigint, text, boolean, text, text, timestamptz, text)
+revoke execute on function
+  public.device_ping(bigint, text, boolean, text, text, timestamptz, text, text)
   from public, authenticated;
-grant  execute on function public.device_ping(bigint, text, boolean, text, text, timestamptz, text) to anon;
+grant execute on function
+  public.device_ping(bigint, text, boolean, text, text, timestamptz, text, text)
+  to anon;
