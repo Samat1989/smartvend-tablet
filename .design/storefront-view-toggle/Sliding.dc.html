@@ -15,77 +15,82 @@
       -webkit-font-smoothing: antialiased;
     }
     a { color: #0088FF; } a:hover { color: #0070D6; }
-    .seg {
+    .track {
+      position: relative;
       display: flex;
-      gap: 4px;
-      background: #FFFFFF;
-      border-radius: 26px;
+      height: 56px;
+      border-radius: 16px;
+      background: #E5E1E8;
       padding: 4px;
-      box-shadow: 0 16px 16px -8px rgba(47,46,50,0.10),
-                  0 4px 4px -4px rgba(47,46,50,0.05);
+      box-sizing: border-box;
     }
-    .seg > button {
+    .thumb {
+      position: absolute;
+      top: 4px;
+      bottom: 4px;
+      width: calc(50% - 4px);
+      border-radius: 12px;
+      background: #FFFFFF;
+      box-shadow: 0 4px 10px -2px rgba(47,46,50,0.18);
+      transition: transform 220ms cubic-bezier(0.2, 0.8, 0.2, 1);
+    }
+    .track > button {
+      position: relative;
       flex: 1 1 0;
       display: flex;
       align-items: center;
       justify-content: center;
-      gap: 8px;
-      height: 44px;
+      gap: 9px;
       border: 0;
-      border-radius: 22px;
       background: transparent;
-      color: #8E8E93;
       font: inherit;
-      font-size: 15px;
+      font-size: 16px;
       font-weight: 700;
       letter-spacing: -0.3px;
+      color: #8E8E93;
       cursor: pointer;
-      transition: background 160ms ease, color 160ms ease;
+      transition: color 160ms ease;
     }
-    .seg > button[data-on="1"] { background: #0088FF; color: #FFFFFF; }
+    .track > button[data-on="1"] { color: #1C1C1E; }
   </style>
 </helmet>
 
 <div style="width: 533px; height: 853px; background: #F2F2F7; overflow: hidden; position: relative;">
 
-  <!-- Переключатель вида: во всю ширину каталога -->
   <div style="padding: 16px 16px 14px 16px;">
-    <div class="seg">
+    <div class="track">
+      <div class="thumb" style="{{ thumbStyle }}"></div>
       <button onClick="{{ showPhotos }}" data-on="{{ photosOn }}">
         <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="3"></rect><circle cx="8.5" cy="8.5" r="1.8"></circle><path d="M21 15l-5-5L5 21"></path></svg>
         Фото
       </button>
       <button onClick="{{ showNumbers }}" data-on="{{ numbersOn }}">
-        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 5h4v4H5z"></path><path d="M15 5h4v4h-4z"></path><path d="M5 15h4v4H5z"></path><path d="M15 15h4v4h-4z"></path></svg>
-        Номера
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16M4 12h16M4 17h16"></path></svg>
+        Номера ячеек
       </button>
     </div>
   </div>
 
-  <!-- Полка -->
   <div style="display: flex; align-items: center; gap: 10px; padding: 0 16px 10px 16px;">
     <div style="width: 26px; height: 26px; border-radius: 8px; background: #E5E1E8; color: #5D5B5F; font-size: 13px; font-weight: 800; display: flex; align-items: center; justify-content: center;">1</div>
     <div style="color: #8E8E93; font-size: 15px; font-weight: 600; letter-spacing: -0.3px;">1 — 5</div>
   </div>
 
-  <!-- НОМЕРА: карточек нет вовсе, только цифра -->
+  <!-- Номера на белых плитках: карточка ужалась до цифры и цены -->
   <sc-if value="{{ numbers }}" hint-placeholder-val="{{ true }}">
     <div style="display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; padding: 0 16px;">
       <sc-for list="{{ slots }}" as="s" hint-placeholder-count="6">
         <button onClick="{{ s.pick }}" style="{{ s.tileStyle }}">
           <span style="{{ s.numStyle }}">{{ s.n }}</span>
+          <span style="color: #FF8D28; font-size: 17px; font-weight: 800; letter-spacing: -0.3px;">{{ s.price }}</span>
           <sc-if value="{{ s.inCart }}" hint-placeholder-val="{{ true }}">
-            <span style="position: absolute; top: 8px; right: 8px; min-width: 26px; height: 26px; padding: 0 7px; border-radius: 13px; background: #0088FF; color: #FFFFFF; font-size: 14px; font-weight: 800; display: flex; align-items: center; justify-content: center;">{{ s.qty }}</span>
+            <span style="position: absolute; top: 10px; right: 10px; min-width: 26px; height: 26px; padding: 0 7px; border-radius: 13px; background: #0088FF; color: #FFFFFF; font-size: 14px; font-weight: 800; display: flex; align-items: center; justify-content: center;">{{ s.qty }}</span>
           </sc-if>
         </button>
       </sc-for>
     </div>
-    <div style="padding: 22px 16px 0 16px; color: #8E8E93; font-size: 13px; line-height: 1.45; letter-spacing: -0.1px;">
-      Нажмите номер ячейки, чтобы добавить товар
-    </div>
   </sc-if>
 
-  <!-- ФОТО: карточки как сейчас -->
   <sc-if value="{{ photos }}" hint-placeholder-val="{{ true }}">
     <div style="display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; padding: 0 16px;">
       <sc-for list="{{ cards }}" as="c" hint-placeholder-count="6">
@@ -95,7 +100,6 @@
             <div style="position: absolute; top: 12px; right: 12px; width: 44px; height: 44px; border-radius: 22px; background: #0088FF; box-shadow: 0 2px 6px rgba(0,0,0,0.2); display: flex; align-items: center; justify-content: center;">
               <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#FFFFFF" stroke-width="2.4" stroke-linecap="round"><path d="M12 5v14M5 12h14"></path></svg>
             </div>
-            <div style="position: absolute; bottom: 10px; left: 12px; padding: 3px 8px; border-radius: 8px; background: rgba(255,255,255,0.92); color: #1C1C1E; font-size: 14px; font-weight: 800;">{{ c.n }}</div>
           </div>
           <div style="height: 54px; padding: 6px 12px 10px 12px; display: flex; align-items: flex-end; justify-content: space-between; gap: 6px;">
             <div style="color: #1C1C1E; font-size: 14px; font-weight: 600; letter-spacing: -0.2px;">{{ c.name }}</div>
@@ -106,7 +110,6 @@
     </div>
   </sc-if>
 
-  <!-- Корзина -->
   <div style="position: absolute; left: 0; right: 0; bottom: 0; padding: 0 16px 22px 16px; display: flex; justify-content: center;">
     <div style="display: flex; align-items: center; gap: 14px; height: 62px; padding: 0 10px 0 22px; border-radius: 31px; background: #1C1C1E; box-shadow: 0 16px 16px -8px rgba(47,46,50,0.24);">
       <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#FFFFFF" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="20" r="1.4"></circle><circle cx="18" cy="20" r="1.4"></circle><path d="M2 3h3l2.4 11.3a2 2 0 0 0 2 1.6h7.6a2 2 0 0 0 2-1.5L21 7H6"></path></svg>
@@ -123,7 +126,7 @@
 </div>
 </x-dc>
 
-<script data-dc-script data-props='{"accent":{"editor":"color","default":"#0088FF","options":["#0088FF","#1C1C1E","#FF8D28","#34C759"]},"numberSize":{"editor":"range","default":56,"min":32,"max":80,"step":2,"unit":"px","section":"Номера"}}'>
+<script data-dc-script data-props='{"numberSize":{"editor":"range","default":46,"min":28,"max":72,"step":2,"unit":"px","section":"Номера"},"keepPrice":{"editor":"boolean","default":true,"section":"Номера"}}'>
 class Component extends DCLogic {
   constructor(props) {
     super(props);
@@ -131,19 +134,21 @@ class Component extends DCLogic {
   }
 
   renderVals() {
-    const accent = this.props.accent ?? '#0088FF';
-    const size = this.props.numberSize ?? 56;
+    const size = this.props.numberSize ?? 46;
+    const keepPrice = this.props.keepPrice ?? true;
     const numbers = this.state.numbers;
     const cart = this.state.cart;
     const count = Object.values(cart).reduce((a, b) => a + b, 0);
 
-    const slots = [1, 2, 3, 4, 5, 6].map((n) => {
+    const prices = ['1 ₸', '1 ₸', '1 ₸', '1 ₸', '2 ₸', '2 ₸'];
+    const slots = [1, 2, 3, 4, 5, 6].map((n, i) => {
       const qty = cart[n] ?? 0;
       const inCart = qty > 0;
       return {
         n: String(n),
         qty: String(qty),
         inCart,
+        price: keepPrice ? prices[i] : '',
         tileStyle: [
           'position: relative',
           'appearance: none',
@@ -152,20 +157,22 @@ class Component extends DCLogic {
           'cursor: pointer',
           'height: 132px',
           'border-radius: 20px',
+          'background: #FFFFFF',
           'display: flex',
+          'flex-direction: column',
           'align-items: center',
           'justify-content: center',
+          'gap: 4px',
           inCart
-            ? 'background: rgba(0,136,255,0.10)'
-            : 'background: transparent',
-          inCart ? 'box-shadow: inset 0 0 0 2px ' + accent : 'box-shadow: none',
+            ? 'box-shadow: inset 0 0 0 2px #0088FF, 0 16px 16px -8px rgba(47,46,50,0.10)'
+            : 'box-shadow: 0 16px 16px -8px rgba(47,46,50,0.10), 0 4px 4px -4px rgba(47,46,50,0.05)',
         ].join('; '),
         numStyle: [
           'font-size: ' + size + 'px',
           'font-weight: 800',
-          'letter-spacing: -2px',
+          'letter-spacing: -1.5px',
           'line-height: 1',
-          'color: ' + (inCart ? accent : '#1C1C1E'),
+          'color: #1C1C1E',
         ].join('; '),
         pick: () => {
           const next = { ...this.state.cart };
@@ -181,7 +188,7 @@ class Component extends DCLogic {
       n: String(n),
       tint: tints[i],
       name: names[i],
-      price: (i === 4 ? 2 : 1) + ' ₸',
+      price: prices[i],
     }));
 
     return {
@@ -189,6 +196,7 @@ class Component extends DCLogic {
       photos: !numbers,
       numbersOn: numbers ? '1' : '0',
       photosOn: numbers ? '0' : '1',
+      thumbStyle: 'transform: translateX(' + (numbers ? '100%' : '0') + ')',
       showNumbers: () => this.setState({ numbers: true }),
       showPhotos: () => this.setState({ numbers: false }),
       slots,
