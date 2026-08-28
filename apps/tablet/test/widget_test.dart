@@ -100,4 +100,28 @@ void main() {
       expect(whatsappDigits('—'), isNull);
     });
   });
+
+  group('VendingService.catalogChanged', () {
+    test('a first beat reloads: what is on screen may predate the last edit',
+        () {
+      expect(VendingService.catalogChanged(null, 'abc'), isTrue);
+    });
+
+    test('same fingerprint, no reload — this is the whole point', () {
+      expect(VendingService.catalogChanged('abc', 'abc'), isFalse);
+    });
+
+    test('changed fingerprint reloads', () {
+      expect(VendingService.catalogChanged('abc', 'def'), isTrue);
+    });
+
+    test('a server without the fingerprint never reloads, rather than always',
+        () {
+      // Rolled out before the migration, or rolled back after it. Reloading
+      // on every beat would be the expensive mistake; the manual refresh in
+      // the inventory editor covers the operator.
+      expect(VendingService.catalogChanged('abc', null), isFalse);
+      expect(VendingService.catalogChanged(null, null), isFalse);
+    });
+  });
 }
