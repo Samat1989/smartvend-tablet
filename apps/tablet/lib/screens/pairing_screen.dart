@@ -90,17 +90,9 @@ class _PairingScreenState extends State<PairingScreen> {
     // set up on a cabinet that belongs to someone else's tablet.
     final storage = context.read<DeviceStorage>();
     final deviceId = await storage.deviceId();
-    // If the owner unbound THIS tablet from the panel, the server refuses to
-    // let it re-claim on its own — that refusal is what makes the panel
-    // button stick across a reboot. Someone typing both credentials here is
-    // the deliberate opposite decision, so lift the block first. No-op in
-    // every other case.
-    await _api.acceptAdminRelease(
-      machid: machid,
-      secret: secret,
-      deviceId: deviceId,
-    );
-    if (!mounted) return;
+    // If the owner unbound THIS tablet from the panel, verify_pairing above
+    // has already lifted the block — someone typing both credentials is the
+    // deliberate opposite decision. Nothing to do here.
     final claim = await _api.claimMachine(
       machid: machid,
       secret: secret,

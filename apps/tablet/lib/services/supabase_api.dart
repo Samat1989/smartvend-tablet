@@ -209,9 +209,9 @@ class SupabaseApi {
       final body = jsonDecode(resp.body);
       if (body is Map && body['ok'] == true) return const ClaimOutcome.ok();
       // The owner pressed «Отвязать планшет» while we were holding the
-      // machine. Refused only for the automatic claim: the pairing screen
-      // clears the mark first (see [acceptAdminRelease]), so an installer who
-      // types the credentials again is let straight through.
+      // machine. Refused only for the automatic claim: verify_pairing clears
+      // the mark, so an installer who types the credentials again is let
+      // straight through on the very next call.
       if (body is Map && body['reason'] == 'released') {
         debugPrint('[claimMachine] released by owner at ${body['released_at']}');
         return const ClaimOutcome.released('err_released');
@@ -225,37 +225,6 @@ class SupabaseApi {
     } catch (e) {
       return ClaimOutcome.failed(
           (AppError.from(e)..log('claimMachine')).messageKey);
-    }
-  }
-
-  /// Acknowledge an owner-side unbind, so [claimMachine] will let this tablet
-  /// take the machine again.
-  ///
-  /// Called from the pairing screen ONLY, and only after `verify_pairing` has
-  /// accepted the machid + secret a person just typed. That is the whole
-  /// difference between this path and the automatic claim at boot: someone is
-  /// standing at the cabinet deciding to bind it, which is exactly the
-  /// decision the panel button reversed.
-  ///
-  /// Best-effort. Silent on failure, including the 404 from a project that
-  /// predates the `accept_admin_release` RPC — such a server has no mark to
-  /// clear, so there is nothing to report and nothing to retry.
-  Future<void> acceptAdminRelease({
-    required String machid,
-    required String secret,
-    required String deviceId,
-  }) async {
-    try {
-      final resp = await _rpc('accept_admin_release', {
-        'p_machid': _machidParam(machid),
-        'p_secret': secret.trim(),
-        'p_device_id': deviceId,
-      });
-      if (resp.statusCode < 200 || resp.statusCode >= 300) {
-        debugPrint('[acceptAdminRelease] HTTP ${resp.statusCode}');
-      }
-    } catch (e) {
-      debugPrint('[acceptAdminRelease] exception: $e');
     }
   }
 
