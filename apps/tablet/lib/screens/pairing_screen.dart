@@ -89,10 +89,22 @@ class _PairingScreenState extends State<PairingScreen> {
     // savePairing so a refusal leaves the tablet unpaired instead of half
     // set up on a cabinet that belongs to someone else's tablet.
     final storage = context.read<DeviceStorage>();
+    final deviceId = await storage.deviceId();
+    // If the owner unbound THIS tablet from the panel, the server refuses to
+    // let it re-claim on its own — that refusal is what makes the panel
+    // button stick across a reboot. Someone typing both credentials here is
+    // the deliberate opposite decision, so lift the block first. No-op in
+    // every other case.
+    await _api.acceptAdminRelease(
+      machid: machid,
+      secret: secret,
+      deviceId: deviceId,
+    );
+    if (!mounted) return;
     final claim = await _api.claimMachine(
       machid: machid,
       secret: secret,
-      deviceId: await storage.deviceId(),
+      deviceId: deviceId,
     );
     if (!mounted) return;
     if (!claim.ok) {
@@ -114,6 +126,9 @@ class _PairingScreenState extends State<PairingScreen> {
   @override
   Widget build(BuildContext context) {
     final s = context.watch<Strings>();
+    // Why the tablet is standing here rather than showing the storefront,
+    // when it was not a person who unpaired it. See DeviceStorage.unpairNotice.
+    final notice = context.watch<DeviceStorage>().unpairNotice;
     return Scaffold(
       backgroundColor: AppColors.background,
       body: SafeArea(
@@ -180,6 +195,14 @@ class _PairingScreenState extends State<PairingScreen> {
                             color: AppColors.onSurfaceVariant,
                             height: 1.4),
                       ),
+                      if (notice != null) ...[
+                        const SizedBox(height: 20),
+                        _UnpairNotice(
+                          text: s.t(notice),
+                          onDismiss: () =>
+                              context.read<DeviceStorage>().dismissUnpairNotice(),
+                        ),
+                      ],
                       const SizedBox(height: 28),
                       TextField(
                         controller: _machidCtrl,
@@ -330,3 +353,56 @@ class _PairingScreenState extends State<PairingScreen> {
   }
 }
 
+
+/// Why the tablet unpaired itself, said once on the pairing screen.
+///
+/// Amber, not the red of [_PairingScreenState._error]: nothing has failed
+/// here. The machine was taken away, on purpose, by someone with a panel —
+/// and the installer standing in front of the cabinet needs to be told that
+/// before they start hunting for a fault that does not exist.
+///
+/// Dismissible, because it outlives the moment: the notice is stored, so
+/// without a way to put it down it would still be on screen weeks later.
+class _UnpairNotice extends StatelessWidget {
+  const _UnpairNotice({required this.text, required this.onDismiss});
+
+  final String text;
+  final VoidCallback onDismiss;
+
+  static const _amber = Color(0xFF8A5A00);
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.fromLTRB(12, 10, 6, 10),
+      decoration: BoxDecoration(
+        color: const Color(0x1AF59E0B),
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Icon(Icons.link_off, color: _amber, size: 20),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Text(
+              text,
+              style: const TextStyle(
+                color: _amber,
+                fontSize: 13,
+                height: 1.35,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ),
+          IconButton(
+            onPressed: onDismiss,
+            icon: const Icon(Icons.close, size: 18, color: _amber),
+            visualDensity: VisualDensity.compact,
+            tooltip: MaterialLocalizations.of(context).closeButtonLabel,
+          ),
+        ],
+      ),
+    );
+  }
+}

@@ -41,26 +41,42 @@ class FetchResult<T> {
 /// DeviceStorage; it is passed to each write RPC but never read back from the DB.
 /// Outcome of a claim attempt.
 ///
-/// [occupied] is a flag rather than something the caller sniffs out of
-/// [message]: the pairing screen only shows the text, but the heartbeat
-/// *unpairs the tablet* on it, and deciding that by matching translated prose
-/// would break silently the day the wording changes.
+/// [occupied] and [released] are flags rather than something the caller
+/// sniffs out of [message]: the pairing screen only shows the text, but the
+/// heartbeat *unpairs the tablet* on them, and deciding that by matching
+/// translated prose would break silently the day the wording changes.
 class ClaimOutcome {
   const ClaimOutcome.ok()
       : occupied = false,
+        released = false,
         message = null;
-  const ClaimOutcome.occupied(this.message) : occupied = true;
-  const ClaimOutcome.failed(this.message) : occupied = false;
+  const ClaimOutcome.occupied(this.message)
+      : occupied = true,
+        released = false;
+  const ClaimOutcome.released(this.message)
+      : occupied = false,
+        released = true;
+  const ClaimOutcome.failed(this.message)
+      : occupied = false,
+        released = false;
 
   /// Another tablet holds this machine. Distinct from a transport failure:
   /// only this one may cost the tablet its pairing.
   final bool occupied;
+
+  /// The owner unbound THIS tablet from the panel. The machine is free —
+  /// we are simply not the one who may take it back on our own.
+  final bool released;
 
   /// [Strings] KEY for the reason, null on success. The caller resolves it —
   /// this layer has no language.
   final String? message;
 
   bool get ok => message == null;
+
+  /// The claim was refused by the server, not lost on the way there. Only
+  /// these cost the tablet its pairing — a timeout must not.
+  bool get refused => occupied || released;
 }
 
 class SupabaseApi {
@@ -192,6 +208,14 @@ class SupabaseApi {
       }
       final body = jsonDecode(resp.body);
       if (body is Map && body['ok'] == true) return const ClaimOutcome.ok();
+      // The owner pressed «Отвязать планшет» while we were holding the
+      // machine. Refused only for the automatic claim: the pairing screen
+      // clears the mark first (see [acceptAdminRelease]), so an installer who
+      // types the credentials again is let straight through.
+      if (body is Map && body['reason'] == 'released') {
+        debugPrint('[claimMachine] released by owner at ${body['released_at']}');
+        return const ClaimOutcome.released('err_released');
+      }
       // last_seen_at used to be spliced into the message shown on screen.
       // It belongs in the log: an installer needs "occupied, release it in
       // the panel", not a timestamp of the other tablet's last heartbeat.
@@ -201,6 +225,37 @@ class SupabaseApi {
     } catch (e) {
       return ClaimOutcome.failed(
           (AppError.from(e)..log('claimMachine')).messageKey);
+    }
+  }
+
+  /// Acknowledge an owner-side unbind, so [claimMachine] will let this tablet
+  /// take the machine again.
+  ///
+  /// Called from the pairing screen ONLY, and only after `verify_pairing` has
+  /// accepted the machid + secret a person just typed. That is the whole
+  /// difference between this path and the automatic claim at boot: someone is
+  /// standing at the cabinet deciding to bind it, which is exactly the
+  /// decision the panel button reversed.
+  ///
+  /// Best-effort. Silent on failure, including the 404 from a project that
+  /// predates the `accept_admin_release` RPC — such a server has no mark to
+  /// clear, so there is nothing to report and nothing to retry.
+  Future<void> acceptAdminRelease({
+    required String machid,
+    required String secret,
+    required String deviceId,
+  }) async {
+    try {
+      final resp = await _rpc('accept_admin_release', {
+        'p_machid': _machidParam(machid),
+        'p_secret': secret.trim(),
+        'p_device_id': deviceId,
+      });
+      if (resp.statusCode < 200 || resp.statusCode >= 300) {
+        debugPrint('[acceptAdminRelease] HTTP ${resp.statusCode}');
+      }
+    } catch (e) {
+      debugPrint('[acceptAdminRelease] exception: $e');
     }
   }
 
@@ -232,7 +287,8 @@ class SupabaseApi {
   /// Nothing upstream should change behaviour because of it, and it must
   /// never surface an error to a customer standing at the cabinet.
   /// Returns the server's verdict: `{claim, layout}`. `claim` is 'lost' when
-  /// another tablet holds this machine — the caller must stop working.
+  /// another tablet holds this machine and 'released' when the owner unbound
+  /// this one from the panel — either way the caller must stop working.
   /// `layout` is 'ok' / 'push' / 'stale'. Null when the beat didn't land.
   Future<Map<String, dynamic>?> ping({
     required String machid,

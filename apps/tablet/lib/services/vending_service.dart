@@ -164,11 +164,18 @@ class VendingService extends ChangeNotifier {
       secret: secret,
       deviceId: await _storage.deviceId(),
     );
-    // Only an explicit "occupied" unpairs. A network failure must not: the
+    // Only an explicit refusal unpairs. A network failure must not: the
     // machine would go out of service every time it booted before its GSM
     // link came up. A retry costs one request on the next heartbeat.
-    if (claim.occupied) {
-      await _storage.clearPairing();
+    //
+    // `released` is the reason this claim can be refused at all now: it used
+    // to take the machine straight back after the owner had unbound it from
+    // the panel, so the button worked until the next reboot and then quietly
+    // undid itself.
+    if (claim.refused) {
+      await _storage.clearPairing(
+        notice: claim.released ? 'unpair_released' : 'unpair_taken',
+      );
     } else if (!claim.ok) {
       _claimAttempted = false;
     }
@@ -206,12 +213,27 @@ class VendingService extends ChangeNotifier {
     );
     if (verdict == null) return;
 
-    // The machine was handed to another tablet — the operator signed in on a
-    // replacement, or the owner unbound us from the panel. Stop dead rather
-    // than keep selling: from here on this cabinet's inventory and sales
-    // belong to the other device, and anything we wrote would corrupt them.
+    // The machine was handed to another tablet: the operator signed in on a
+    // replacement. Stop dead rather than keep selling — from here on this
+    // cabinet's inventory and sales belong to the other device, and anything
+    // we wrote would corrupt them. Immediate even mid-sale, for that reason.
     if (verdict['claim'] == 'lost') {
-      await _storage.clearPairing();
+      await _storage.clearPairing(notice: 'unpair_taken');
+      return;
+    }
+
+    // The owner pressed «Отвязать планшет» in the panel. Also a full stop,
+    // but nobody else is writing this machine's rows, so there is nothing to
+    // corrupt by finishing what is already in flight — and dropping to the
+    // pairing screen on top of a customer who has just paid would take their
+    // money and hand them nothing. Wait for the cabinet to be idle; the next
+    // beat is a minute away.
+    if (verdict['claim'] == 'released') {
+      if (_cart.isNotEmpty || _paymentId != null) {
+        debugPrint('[ping] released by owner — deferred, sale in progress');
+        return;
+      }
+      await _storage.clearPairing(notice: 'unpair_released');
       return;
     }
 
