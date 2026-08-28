@@ -25,6 +25,9 @@ class DeviceStorage extends ChangeNotifier {
   // screen to som. Set once at pairing: it describes where the cabinet
   // stands, not something an operator flips day to day.
   static const _kTerNumber = 'ter_number';
+  // Why the tablet last lost its pairing on its own, as a [Strings] key —
+  // shown once on the pairing screen and then forgotten. See [unpairNotice].
+  static const _kUnpairNotice = 'unpair_notice';
   static const _kServicePin = 'service_pin';
   static const _kLanguage = 'language';
   static const _kGridColumns = 'grid_columns';
@@ -105,6 +108,17 @@ class DeviceStorage extends ChangeNotifier {
   bool get isReady => _ready;
   String? get machid => _prefs.getString(_kMachId);
   String? get secret => _secret;
+
+  /// Why this tablet unpaired itself, as a [Strings] key, or null when it
+  /// was a person who unpaired it.
+  ///
+  /// Without it the tablet just appears on the pairing screen one morning and
+  /// nobody can tell whether the operator signed out, the owner unbound it
+  /// from the panel, or a second tablet took the machine — three situations
+  /// with three different next steps. Persisted rather than kept in memory
+  /// because the loss can be discovered during boot, before anything is on
+  /// screen to hold it.
+  String? get unpairNotice => _prefs.getString(_kUnpairNotice);
 
   /// Gateway `terNumber`. Empty means Kaspi QR — see [_kTerNumber].
   String get terNumber => _prefs.getString(_kTerNumber) ?? '';
@@ -508,6 +522,9 @@ class DeviceStorage extends ChangeNotifier {
   }) async {
     await _prefs.setString(_kMachId, machid.trim());
     await _prefs.setString(_kTerNumber, terNumber.trim());
+    // Whatever threw us off last time has just been answered by someone
+    // typing the credentials again.
+    await _prefs.remove(_kUnpairNotice);
     _secret = secret.trim();
     try {
       await _secure.write(key: _kSecret, value: _secret);
@@ -517,15 +534,30 @@ class DeviceStorage extends ChangeNotifier {
     notifyListeners();
   }
 
-  Future<void> clearPairing() async {
+  /// Drop the pairing. [notice] is a [Strings] key explaining why, set only
+  /// when the tablet unpaired ITSELF — an operator signing out in service
+  /// mode leaves it null, because they know perfectly well what they did.
+  Future<void> clearPairing({String? notice}) async {
     await _prefs.remove(_kMachId);
     await _prefs.remove(_kTerNumber);
+    if (notice == null) {
+      await _prefs.remove(_kUnpairNotice);
+    } else {
+      await _prefs.setString(_kUnpairNotice, notice);
+    }
     _secret = null;
     try {
       await _secure.delete(key: _kSecret);
     } catch (e) {
       debugPrint('[DeviceStorage] secret delete failed: $e');
     }
+    notifyListeners();
+  }
+
+  /// Forget the notice without pairing — the installer has read it.
+  Future<void> dismissUnpairNotice() async {
+    if (_prefs.getString(_kUnpairNotice) == null) return;
+    await _prefs.remove(_kUnpairNotice);
     notifyListeners();
   }
 
