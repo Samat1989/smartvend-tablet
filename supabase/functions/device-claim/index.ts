@@ -40,7 +40,15 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
 const PARTNER_URL =
   "https://partner.smartvend.kz/mb/public/question/8ef367bd-764e-4962-953b-e004df2b690d.json";
-const KINDS = ["vending", "micromarket_static", "micromarket_tablet"];
+// Mirrors the CHECK on micromarkets.kind (migration
+// 20260831120000_micromarket_screen_kind.sql) — a value accepted here but
+// missing there fails as a raw 23514 at insert time.
+const KINDS = [
+  "vending",
+  "micromarket_static",
+  "micromarket_tablet",
+  "micromarket_screen",
+];
 
 const cors = {
   "Access-Control-Allow-Origin": "*",

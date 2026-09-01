@@ -18,7 +18,7 @@
 | Кто узнаёт об оплате | Планшет сам polling'ит LV gateway | Реле — по MQTT-событию от брокера SmartVend |
 | Условие «сделка завершена» | Мотор подтвердил выдачу → бэкэнд закрывает платёж в LV | Реле дёрнуло `complete-order`, тот подтвердил оплату в LV и записал продажу; замок открывается только после 200 |
 | Как машина узнаёт «открой/выдай» | Сама же инициировала, dispense immediately после своего polling'а | **MQTT от брокера SmartVend** → реле подтверждает оплату через `complete-order` и открывает по 200 |
-| `micromarkets.kind` | `'vending'` | `'micromarket_static'` (третье значение `'micromarket_tablet'` — legacy default для старых строк) |
+| `micromarkets.kind` | `'vending'` | `'micromarket_static'` (третье значение `'micromarket_tablet'` — legacy default для старых строк; четвёртое `'micromarket_screen'` — тот же замок, но витрина на экране самого автомата, см. [esp-screen-micromarket.md](esp-screen-micromarket.md)) |
 
 Эти два потока **намеренно разделены**: их объединение в одной кодовой ветке в прошлом создавало ошибки (один тип ждал подтверждения от машины, другой нет — на static-QR это означало незакрытые платежи).
 
