@@ -87,11 +87,37 @@ static lv_obj_t *s_qr_left_label;
 // заказа на одну корзину.
 static bool s_polling;
 
-// Просьба брошенному опросу замолчать. Ставится, когда покупатель начинает
-// новую оплату: старая задача досматривает свой запрос и уходит, не трогая
-// экран. Платёж по старому коду при этом не подтверждается — значит и деньги
-// шлюз вернёт сам: захват денег и открытие двери остаются одним действием.
-static bool s_poll_stop;
+// Номер живого опроса и счётчик работающих задач.
+//
+// Одного флага «идёт опрос» не хватало: после отмены старая задача досматривает
+// свой двенадцатисекундный запрос, и всё это время покупатель уже может начать
+// новую оплату. Тогда задач становится две, и старая, закончившись, гасила флаг
+// и перерисовывала корзину поверх живого QR — покупатель терял код прямо во
+// время оплаты. Теперь у каждой задачи свой номер: новая оплата увеличивает
+// s_poll_gen, и задача с чужим номером уходит молча, не трогая ни экран, ни
+// флаг. Платёж по брошенному коду не подтверждается — значит деньги шлюз
+// вернёт сам: захват денег и открытие двери остаются одним действием.
+static uint32_t s_poll_gen;
+static int s_pollers;
+static portMUX_TYPE s_poll_mux = portMUX_INITIALIZER_UNLOCKED;
+
+static void poll_acquire(void)
+{
+    taskENTER_CRITICAL(&s_poll_mux);
+    s_pollers++;
+    s_polling = true;
+    taskEXIT_CRITICAL(&s_poll_mux);
+}
+
+static void poll_release(void)
+{
+    taskENTER_CRITICAL(&s_poll_mux);
+    if (--s_pollers <= 0) {
+        s_pollers = 0;
+        s_polling = false;
+    }
+    taskEXIT_CRITICAL(&s_poll_mux);
+}
 
 // Отдельная защёлка на само оформление. s_polling поднимается уже внутри задачи
 // опроса, и между нажатием «Оплатить» и её стартом оставалось окно: два быстрых
@@ -224,8 +250,11 @@ static void sync_catalog(void)
 static void idle_fired(lv_timer_t *t)
 {
     (void)t;
-    if (s_polling) {
-        return;   // деньги в пути — гасить корзину нельзя
+    if (s_polling || s_checkout_busy) {
+        // Деньги в пути — гасить корзину нельзя. s_checkout_busy тут не для
+        // красоты: заказ собирается по составу корзины уже в сетевой задаче, и
+        // очистка в этот момент выставила бы счёт на половину товара.
+        return;
     }
     if (cart_is_empty() && s_entry[0] == 0) {
         return;
@@ -251,6 +280,10 @@ static void any_touch_cb(lv_event_t *e)
 static lv_obj_t *shop_screen(void)
 {
     forget_screen();
+    // Любой новый экран — уже не корзина. Без этого досинхронизация каталога,
+    // начатая из корзины, дорисовывала её поверх QR: заказ жив, а кода на
+    // экране нет.
+    s_cart_open = false;
 
     lv_obj_t *scr = lv_obj_create(NULL);
     lv_obj_set_style_bg_color(scr, lv_color_hex(0x0D1117), 0);
@@ -364,8 +397,8 @@ static void show_lock_failure(void)
 // Опрос платежа блокирующий и долгий — только в своей задаче.
 static void poll_task(void *arg)
 {
-    (void)arg;
-    s_polling = true;
+    const uint32_t gen = (uint32_t)(uintptr_t)arg;
+    poll_acquire();
     ESP_LOGI(TAG, "опрос оплаты начат");
     char orderid[PAYMENT_ORDERID_LEN];
     strncpy(orderid, s_payment.orderid, sizeof(orderid) - 1);
@@ -376,12 +409,14 @@ static void poll_task(void *arg)
     // корзине навсегда застревало «проверяем оплату».
     const int64_t deadline = esp_timer_get_time() + (int64_t)QR_TIMEOUT_MS * 1000;
     s_cancel_at = 0;
-    s_poll_stop = false;
 
     while (true) {
         const payment_state_t state = payment_poll(orderid);
 
         if (state == PAYMENT_PAID) {
+            // Деньги подтверждены — дверь открываем даже если этот заказ уже
+            // бросили: покупатель заплатил именно по этому коду.
+            poll_release();
             display_lock(0);
             show_dispense();
             display_unlock();
@@ -396,7 +431,6 @@ static void poll_task(void *arg)
                 show_lock_failure();
                 display_unlock();
             }
-            s_polling = false;
             vTaskDelete(NULL);
             return;
         }
@@ -406,17 +440,19 @@ static void poll_task(void *arg)
         // целую минуту. Если он всё-таки успел заплатить в эти секунды —
         // деньги вернёт сам шлюз, он держит неподтверждённый платёж около
         // минуты. Это та же защита, что и в static-QR.
+        const bool mine = gen == s_poll_gen;
         const int64_t limit = s_cancel_at ? s_cancel_at + CANCEL_TAIL_US : deadline;
         const bool done = state == PAYMENT_UNKNOWN || esp_timer_get_time() > limit;
-        if (done || s_poll_stop) {
-            s_polling = false;
-            ESP_LOGI(TAG, "опрос оплаты закончен%s", s_poll_stop ? " (начата новая оплата)" : "");
+        if (!mine || done) {
+            poll_release();
+            ESP_LOGI(TAG, "опрос оплаты закончен%s", mine ? "" : " (начата новая оплата)");
             // Экран трогаем только если покупатель всё это время ждал на QR.
             // После отмены он уже в корзине и, возможно, набирает следующий
             // номер — перерисовка выдернула бы его оттуда на ровном месте.
+            // Чужой заказ не трогает экран тем более: там уже новый QR.
             // Состав корзины сохраняем: человек мог просто не успеть открыть
             // банковское приложение.
-            if (!s_cancel_at && !s_poll_stop) {
+            if (mine && !s_cancel_at) {
                 display_lock(0);
                 show_cart();
                 display_unlock();
@@ -545,7 +581,7 @@ static void checkout_task(void *arg)
     if (err == ESP_OK) {
         s_checkout_failed = false;
         show_qr();
-        xTaskCreate(poll_task, "poll", 16384, NULL, 4, NULL);
+        xTaskCreate(poll_task, "poll", 16384, (void *)(uintptr_t)s_poll_gen, 4, NULL);
     } else {
         s_checkout_failed = true;
         show_cart();
@@ -562,7 +598,7 @@ static void pay_cb(lv_event_t *e)
     }
     // Новая оплата отменяет брошенный опрос: два заказа на одну корзину
     // покупателю не нужны, а старый шлюз вернёт сам.
-    s_poll_stop = s_polling;
+    s_poll_gen++;
     // «Оплатить» выставляет счёт на всё, что человек выбрал.
     //
     // Набранный на нумпаде товар пропадать не должен: он выбран так же явно,
@@ -667,9 +703,8 @@ static void show_cart(void)
         show_numpad();
         return;
     }
-    s_cart_open = true;
-
     lv_obj_t *scr = shop_screen();
+    s_cart_open = true;
 
     // Заголовка «Корзина» нет намеренно: покупатель только что нажал клавишу
     // корзины и видит перед собой список товаров с ценами — подписывать это
@@ -769,6 +804,11 @@ static void show_cart(void)
     lv_label_set_text(pl, "Оплатить");
     lv_obj_center(pl);
     update_pay_state();
+    // Тот же секундный таймер, что и на нумпаде: кнопку гасит и оживляет
+    // фоновая задача, а сама она об этом не узнает.
+    if (!s_pay_state_timer) {
+        s_pay_state_timer = lv_timer_create(pay_state_tick, 1000, NULL);
+    }
 
     lv_obj_t *back = lv_button_create(scr);
     lv_obj_set_size(back, 132, 44);
@@ -970,7 +1010,6 @@ static void open_cart_cb(lv_event_t *e)
 
 static void show_numpad(void)
 {
-    s_cart_open = false;
     lv_obj_t *scr = shop_screen();
     s_entry[0] = 0;
 

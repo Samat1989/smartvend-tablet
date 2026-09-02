@@ -30,6 +30,9 @@ static const char *TAG = "cloud";
 // запрос обрывался по таймауту (в логе «ответил -1»), попытка сгорала впустую,
 // и покупатель ждал лишний круг.
 #define HTTP_TIMEOUT_MS 25000
+// Порог «запрос не дошёл»: столько живёт неудачная попытка записи в закрытый
+// сервером сокет. Всё, что дольше, — уже разговор с сервером.
+#define RETRY_MAX_MS 5000
 #define RESP_MAX 2048
 
 typedef struct {
@@ -119,11 +122,18 @@ static int request(const char *url, const char *body, char *out, size_t out_size
         esp_http_client_delete_header(s_client, "Content-Type");
     }
 
-    // Одна повторная попытка — но только на обрыве, не на ответе сервера.
+    // Одна повторная попытка — и только на быстром обрыве.
+    //
     // Сохранённое соединение сервер закрывает по своему таймауту в любой
-    // момент, и узнаём мы об этом ровно в тот запрос, который в него попал.
-    // Ошибка HTTP (4xx/5xx) — это ответ, повторять его нельзя: create-payment
-    // на второй попытке завёл бы второй заказ.
+    // момент, и узнаём мы об этом ровно в тот запрос, который в него попал:
+    // запись в мёртвый сокет падает сразу, за миллисекунды. Такой запрос до
+    // сервера не дошёл, повторить его безопасно.
+    //
+    // А вот отвалившийся по таймауту запрос повторять нельзя: он мог дойти и
+    // выполниться, просто ответ не вернулся, — и create-payment на второй
+    // попытке завёл бы второй заказ. Различаем их по времени: живой запрос к
+    // Supabase укладывается в две секунды, отвалившийся — в двадцать пять.
+    // Ошибка HTTP (4xx/5xx) — это ответ, и повторять её тем более незачем.
     int status = -1;
     for (int attempt = 0; attempt < 2; attempt++) {
         const int64_t t0 = esp_timer_get_time();
@@ -136,13 +146,17 @@ static int request(const char *url, const char *body, char *out, size_t out_size
             ESP_LOGI(TAG, "%s → %d за %lld мс", url + sizeof(SUPABASE_URL) - 1, status, ms);
             break;
         }
+        const bool retryable = attempt == 0 && ms < RETRY_MAX_MS;
         ESP_LOGW(TAG, "%s: %s за %lld мс%s", url, esp_err_to_name(err), ms,
-                 attempt ? "" : ", соединение переоткрываем");
+                 retryable ? ", соединение переоткрываем" : "");
         resp.len = 0;
         if (out && out_size) {
             out[0] = 0;
         }
         esp_http_client_close(s_client);
+        if (!retryable) {
+            break;
+        }
     }
 
     xSemaphoreGive(s_lock);

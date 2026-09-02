@@ -22,7 +22,12 @@ esp_err_t payment_create(payment_t *out)
     // Состав отдаём по uuid строк инвентаря: create-payment принимает только
     // их. Каталог перед этим перечитан (см. ui_shop), поэтому uuid свежие даже
     // если оператор только что перевесил номер ячейки на другой товар.
-    char items[512] = "[";
+    // Буфер считаем от размера корзины, а не «на глаз». В 512 байт помещалось
+    // восемь позиций из двенадцати возможных, дальше строка молча обрывалась:
+    // на экране «Итого 4200 ₸», а счёт выставлялся на восемь строк — разницу
+    // покупатель уносил бесплатно. Одна строка — это {"id":"<uuid 36>",
+    // "count":NN}, ровно 57 байт с запятой; берём 72 с запасом.
+    char items[CART_MAX_LINES * 72 + 8] = "[";
     size_t len = 1;
     for (int i = 0; i < cart_lines(); i++) {
         const cart_line_t *line = cart_line(i);
@@ -30,15 +35,20 @@ esp_err_t payment_create(payment_t *out)
         if (!catalog_get(line->cell, &item)) {
             continue;
         }
-        len += (size_t)snprintf(items + len, sizeof(items) - len, "%s{\"id\":\"%s\",\"count\":%d}",
-                                len > 1 ? "," : "", item.id, line->count);
-        if (len >= sizeof(items) - 64) {
-            break;
+        const int written = snprintf(items + len, sizeof(items) - len,
+                                     "%s{\"id\":\"%s\",\"count\":%d}",
+                                     len > 1 ? "," : "", item.id, line->count);
+        if (written < 0 || (size_t)written >= sizeof(items) - len) {
+            // Сюда попасть уже нельзя, но если когда-нибудь вырастет
+            // CART_MAX_LINES — лучше отказать, чем выставить неполный счёт.
+            ESP_LOGE(TAG, "состав заказа не поместился, позиций %d", cart_lines());
+            return ESP_ERR_INVALID_SIZE;
         }
+        len += (size_t)written;
     }
     snprintf(items + len, sizeof(items) - len, "]");
 
-    char body[640];
+    char body[sizeof(items) + 64];
     // marketId, а не token: qr_token устройству не нужен, номер аппарата у него
     // и так есть. Ветка legacy в create-payment, но для экрана она несущая.
     snprintf(body, sizeof(body), "{\"marketId\":%s,\"items\":%s}", machid, items);
