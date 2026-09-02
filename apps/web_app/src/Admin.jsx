@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { supabase } from './supabaseClient';
-import { Image, Upload, Download, Plus, Minus, Save, Trash2, X, Loader2, Pencil, Receipt, Calendar, ShoppingBag, History, Languages, CheckCircle2, XCircle, AlertTriangle, ChevronRight, ChevronLeft, ChevronDown, Package, QrCode, KeyRound, Unlink as LinkOff } from 'lucide-react';
+import { Image, Upload, Download, Plus, Minus, Save, Trash2, X, Loader2, Pencil, Receipt, Calendar, ShoppingBag, History, Languages, CheckCircle2, XCircle, AlertTriangle, ChevronRight, ChevronLeft, ChevronDown, Package, QrCode, KeyRound, Unlink as LinkOff, HelpCircle } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import './i18n';
 import Cropper from 'react-easy-crop';
@@ -1774,6 +1774,14 @@ export default function Admin() {
           </div>
         </div>
         <div className="flex items-center gap-3">
+          <a
+            href="/help"
+            title={t('help_link')}
+            className="flex items-center gap-1 text-slate-400 hover:text-primary transition-all"
+          >
+            <HelpCircle size={16} />
+            <span className="hidden sm:inline text-[10px] font-black uppercase">{t('help_link')}</span>
+          </a>
           <button onClick={toggleLanguage} className="flex items-center gap-1 hover:opacity-70 transition-all mr-2">
             <Languages size={16} className="text-slate-400" />
             <span className="text-[10px] font-black uppercase text-slate-400">{i18n.language}</span>

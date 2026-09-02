@@ -8,10 +8,12 @@ import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
 // A single deployment serves both surfaces — no separate storefront project:
 //   /admin        — operator admin panel (default landing)
 //   /micromarket  — customer storefront, opened from a machine's QR (?id=<machid>)
-// Both are lazy-loaded (separate chunks) so each route ships only its own code —
+//   /help         — user manual (owner / operator / installer), ru-kk-ky, printable
+// All three are lazy-loaded (separate chunks) so each route ships only its own code —
 // the storefront no longer downloads the (large) admin bundle and vice versa.
 const Admin = lazy(() => import('./Admin.jsx'))
 const App = lazy(() => import('./App.jsx'))
+const Help = lazy(() => import('./help/Help.jsx'))
 
 ReactDOM.createRoot(document.getElementById('root')).render(
   <React.StrictMode>
@@ -20,6 +22,7 @@ ReactDOM.createRoot(document.getElementById('root')).render(
         <Routes>
           <Route path="/admin" element={<Admin />} />
           <Route path="/micromarket" element={<App />} />
+          <Route path="/help" element={<Help />} />
           <Route path="*" element={<Navigate to="/admin" replace />} />
         </Routes>
       </Suspense>
