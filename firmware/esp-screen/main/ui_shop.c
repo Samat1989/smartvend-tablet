@@ -30,6 +30,17 @@ static const char *TAG = "shop";
 // Сколько ещё опрашиваем после нажатия «Отмена».
 #define CANCEL_TAIL_US ((int64_t)15 * 1000 * 1000)
 
+// Раскладка нумпада вынесена в константы: верхняя полоса (набор, название,
+// цена) и сетка кнопок делят по высоте один экран, и подвинуть одно, забыв про
+// другое, — значит наложить название на единицы.
+#define NAME_Y      42                       // верх полосы названия
+#define NAME_H      68                       // две строки шрифтом 28
+#define NAME_W      (LCD_H_RES - 24)
+#define PAD_TOP     160                      // верх сетки цифр
+#define PAD_PITCH   60                       // шаг строк сетки
+#define PAD_BTN_W   92
+#define PAD_BTN_H   56
+
 static char s_entry[3];          // набранные цифры номера ячейки
 static lv_obj_t *s_entry_label;
 static lv_obj_t *s_found_label;
@@ -767,6 +778,22 @@ static bool entry_is_buyable(void)
     return catalog_get(atoi(s_entry), &item) && item.stock > 0;
 }
 
+// Название товара — крупно, если помещается в строку, и обычным шрифтом в две
+// строки, если нет. Раньше шрифт был один и длинное название всегда резалось
+// многоточием; теперь «Вода 0,5» видно от кассы, а «Морс клюквенный
+// облепиховый» читается целиком.
+static void set_name_text(const char *txt)
+{
+    lv_point_t sz;
+    lv_text_get_size(&sz, txt, &ui_font_40, 0, 0, LV_COORD_MAX, LV_TEXT_FLAG_NONE);
+    const bool big = sz.x <= NAME_W;
+    lv_obj_set_style_text_font(s_found_label, big ? &ui_font_40 : &ui_font_28, 0);
+    // Одну строку центрируем в полосе, двум она и так впору.
+    lv_obj_align(s_found_label, LV_ALIGN_TOP_MID, 0,
+                 big ? NAME_Y + (NAME_H - 49) / 2 : NAME_Y);
+    lv_label_set_text(s_found_label, txt);
+}
+
 static void update_found(void)
 {
     if (!s_found_label) {
@@ -777,7 +804,7 @@ static void update_found(void)
     lv_label_set_text(s_price_label, "");
 
     if (len < 2) {
-        lv_label_set_text(s_found_label, "Наберите номер ячейки");
+        set_name_text("Наберите номер ячейки");
         lv_obj_set_style_text_color(s_found_label, lv_color_hex(0x8B949E), 0);
         lv_obj_add_state(s_add_button, LV_STATE_DISABLED);
         update_pay_state();
@@ -788,14 +815,14 @@ static void update_found(void)
     catalog_item_t item;
     if (!catalog_get(cell, &item)) {
         // Молчать нельзя: покупатель не поймёт, стирать ему или нет.
-        lv_label_set_text(s_found_label, "Нет такого номера");
+        set_name_text("Нет такого номера");
         lv_obj_set_style_text_color(s_found_label, lv_color_hex(0xE5484D), 0);
         lv_obj_add_state(s_add_button, LV_STATE_DISABLED);
         update_pay_state();
         return;
     }
 
-    lv_label_set_text(s_found_label, item.name);
+    set_name_text(item.name);
     if (item.stock <= 0) {
         // Товар видно на полке — отказывать молча тем более нельзя.
         lv_obj_set_style_text_color(s_found_label, lv_color_hex(0x8B949E), 0);
@@ -847,9 +874,13 @@ static void update_cart_badge(void)
     }
     lv_obj_t *label = lv_obj_get_child(s_cart_button, 0);
     if (cart_is_empty()) {
+        // Пустая корзина — клавиша гаснет: нажимать её не на что, а серый вид
+        // сразу говорит, что в корзине ничего нет.
         lv_label_set_text(label, UI_SYMBOL_CART);
+        lv_obj_add_state(s_cart_button, LV_STATE_DISABLED);
     } else {
-        lv_label_set_text_fmt(label, UI_SYMBOL_CART " %d", cart_total_items());
+        lv_label_set_text_fmt(label, UI_SYMBOL_CART "%d", cart_total_items());
+        lv_obj_remove_state(s_cart_button, LV_STATE_DISABLED);
     }
 
     update_pay_state();
@@ -888,7 +919,7 @@ static void add_cb(lv_event_t *e)
     (void)e;
     const int cell = atoi(s_entry);
     if (!cart_add(cell)) {
-        lv_label_set_text(s_found_label, "Больше нет в наличии");
+        set_name_text("Больше нет в наличии");
         return;
     }
     sync_catalog();   // покупатель начал собирать — сверимся с сервером
@@ -912,10 +943,12 @@ static void show_numpad(void)
     lv_obj_t *scr = shop_screen();
     s_entry[0] = 0;
 
+    // Набранные цифры — мелко: их подтверждает название товара строкой ниже,
+    // а сами кнопки с цифрами и так крупные и в поле зрения.
     s_entry_label = lv_label_create(scr);
-    lv_obj_set_style_text_font(s_entry_label, &ui_font_40, 0);
-    lv_obj_set_style_text_color(s_entry_label, lv_color_hex(0xE6EDF3), 0);
-    lv_obj_align(s_entry_label, LV_ALIGN_TOP_MID, 0, 18);
+    lv_obj_set_style_text_font(s_entry_label, &ui_font_28, 0);
+    lv_obj_set_style_text_color(s_entry_label, lv_color_hex(0x8B949E), 0);
+    lv_obj_align(s_entry_label, LV_ALIGN_TOP_MID, 0, 6);
 
     // Название и цена — двумя строками, а не одной.
     //
@@ -923,37 +956,43 @@ static void show_numpad(void)
     // цену за край экрана. Теперь название живёт в своей строке и при нехватке
     // места обрезается многоточием, а цена всегда на своём месте и крупная:
     // это второе, на что смотрит покупатель после названия.
+    //
+    // Полоса под название — во всю ширину экрана: значка корзины в правом углу
+    // больше нет (он переехал в пустую клетку нумпада), и длинное название
+    // никуда не упирается. Размер шрифта подбирается в set_name_text().
     s_found_label = lv_label_create(scr);
     lv_obj_set_style_text_font(s_found_label, &ui_font_28, 0);
     lv_obj_set_style_text_color(s_found_label, lv_color_hex(0xE6EDF3), 0);
     lv_label_set_long_mode(s_found_label, LV_LABEL_LONG_DOT);
-    lv_obj_set_width(s_found_label, LCD_H_RES - 24);
+    lv_obj_set_size(s_found_label, NAME_W, NAME_H);
     lv_obj_set_style_text_align(s_found_label, LV_TEXT_ALIGN_CENTER, 0);
-    lv_obj_align(s_found_label, LV_ALIGN_TOP_MID, 0, 62);
+    lv_obj_align(s_found_label, LV_ALIGN_TOP_MID, 0, NAME_Y);
 
     s_price_label = lv_label_create(scr);
     lv_obj_set_style_text_font(s_price_label, &ui_font_40, 0);
     lv_obj_set_style_text_color(s_price_label, lv_color_hex(0x2DA44E), 0);
-    lv_obj_align(s_price_label, LV_ALIGN_TOP_MID, 0, 98);
+    lv_obj_align(s_price_label, LV_ALIGN_TOP_MID, 0, NAME_Y + NAME_H);
 
-    s_cart_button = lv_button_create(scr);
-    lv_obj_set_size(s_cart_button, 96, 44);
-    lv_obj_align(s_cart_button, LV_ALIGN_TOP_RIGHT, -12, 12);
-    lv_obj_add_event_cb(s_cart_button, open_cart_cb, LV_EVENT_CLICKED, NULL);
-    lv_obj_t *badge = lv_label_create(s_cart_button);
-    lv_obj_center(badge);
-
-    // Сетка 3×4. Нижний ряд: пусто, ноль, стереть — как на телефонной
-    // клавиатуре, где backspace всегда справа от нуля.
+    // Сетка 3×4. Нижний ряд: корзина, ноль, стереть — как на телефонной
+    // клавиатуре, где backspace всегда справа от нуля. Корзина заняла клетку,
+    // которая раньше пустовала: наверху она отъедала место у названия товара, а
+    // здесь стоит там, куда и так тянется палец.
     static const char *keys[12] = { "1", "2", "3", "4", "5", "6",
                                     "7", "8", "9", NULL, "0", LV_SYMBOL_BACKSPACE };
     for (int i = 0; i < 12; i++) {
+        lv_obj_t *btn = lv_button_create(scr);
+        lv_obj_set_size(btn, PAD_BTN_W, PAD_BTN_H);
+        lv_obj_align(btn, LV_ALIGN_TOP_LEFT, 12 + (i % 3) * 100,
+                     PAD_TOP + (i / 3) * PAD_PITCH);
         if (!keys[i]) {
+            s_cart_button = btn;
+            lv_obj_set_style_bg_color(btn, lv_color_hex(0x21262D), 0);
+            lv_obj_add_event_cb(btn, open_cart_cb, LV_EVENT_CLICKED, NULL);
+            lv_obj_t *badge = lv_label_create(btn);
+            lv_obj_set_style_text_font(badge, &ui_font_28, 0);
+            lv_obj_center(badge);
             continue;
         }
-        lv_obj_t *btn = lv_button_create(scr);
-        lv_obj_set_size(btn, 92, 58);
-        lv_obj_align(btn, LV_ALIGN_TOP_LEFT, 12 + (i % 3) * 100, 146 + (i / 3) * 64);
         lv_obj_set_style_bg_color(btn, lv_color_hex(0x161B22), 0);
         lv_obj_t *l = lv_label_create(btn);
         lv_label_set_text(l, keys[i]);
