@@ -163,7 +163,8 @@ Android系统--setSystemBar：false
 
 ### «Показать навбар» в сервисном меню
 
-`KioskBridge.showNavBarAndReboot()` → `STATUSBAR_ON`, пауза 700 мс, ребут.
+`KioskBridge.showNavBarAndReboot()` → `STATUSBAR_ON`, отметка о сервисном
+сеансе, пауза 700 мс, ребут.
 
 Пауза нужна: property пишет system_server, пока обрабатывает broadcast, и
 ребут в тот же момент может её обогнать.
@@ -178,6 +179,78 @@ Android系统--setSystemBar：false
 
 Возвращаться в сервисное меню и что-то выключать не нужно. Так же ведёт себя
 заводская настройка — это не совпадение, а копия.
+
+#### Property возвращает только окна полос
+
+Отдельная ловушка, из-за которой пункт долго работал наполовину: после
+перезагрузки внизу появлялся навбар, а шторка сверху — нет. Property делают
+ровно одно — разрешают фреймворку создать окна полос. Всё, чем приложение
+гасит полосы у работающего киоска, продолжает работать поверх этого:
+
+| механизм | что делает с вернувшимися полосами |
+|---|---|
+| `STATUSBAR_OFF` в `onCreate` | property → `true`, SystemUI глушит шторку сразу |
+| `applyImmersive` + тикер раз в 600 мс | прячет обе |
+| `installInsetsRehideListener` | захлопывает всё, что показалось |
+| lock task `LOCKED` + `setLockTaskFeatures(0)` | отклоняет вытягивание шторки на уровне WindowManager |
+| `SystemChrome.setEnabledSystemUIMode(immersiveSticky)` в `main.dart` | прячет обе ещё до первого кадра |
+| `dismissShadeIfNeeded` (без owner) | закрывает шторку по потере фокуса |
+
+Навбар на этой прошивке спор с immersive выигрывал и оставался на экране —
+поэтому казалось, что «включается только навбар». Статусбар проигрывал, и
+шторки оператор не получал никогда.
+
+#### Property читается не только при загрузке
+
+Второе — и главное. `persist.sys.statusbar.disabled=true` действует не только
+в момент инициализации дисплея: SystemUI сверяется с ней и на работающей
+системе, и отвечает флагом `STATUS_BAR_DISABLE_EXPAND`. Замерено на планшете:
+
+```
+$ adb shell dumpsys statusbar | grep -E "mDisabled1|\[0\]"
+    mDisabled1=0x10000
+    [0] userId=0 what1=0x00010000 what2=0x00000000 pkg=com.android.systemui
+```
+
+Окно статусбара при этом остаётся на экране — гаснет только вытягивание.
+Отсюда и вся картина: навбар после перезагрузки «работал», а шторка нет.
+
+Ловушка в том, что property ставило **само приложение**: `onCreate` слал
+`STATUSBAR_OFF` безусловно, в том числе в сервисной загрузке. Оператор
+успевал опустить шторку, пока грузился киоск, — и терял её через секунду
+после того, как приложение поднималось. Сеанс убивал сам себя.
+
+Прослежено посекундно, с отключённым автозапуском:
+
+```
+t=16s  app=0  mDisabled1=0x0        полосы есть, шторка тянется
+t=30s  app=1  mDisabled1=0x0        приложение поднялось
+t=32s  app=1  mDisabled1=0x10000    шторка мертва
+```
+
+Поэтому в сервисную загрузку `STATUSBAR_OFF` больше не отправляется вовсе.
+Property возвращает на место выход из сеанса — кнопка «Перезагрузить» в
+сервисном меню шлёт `STATUSBAR_OFF`, ждёт те же 700 мс и перезагружает.
+Цена: если оператор завершит сервис не кнопкой, а питанием, следующая
+загрузка придёт с видимыми полосами и уже без шторки (приложение увидит,
+что сеанс истёк, и пошлёт `STATUSBAR_OFF`), а чистой станет та, что за ней.
+
+Поэтому сеанс теперь помечается явно. `showNavBarAndReboot` пишет флаг в
+`SharedPreferences("kiosk_state")`, а `MainActivity.onCreate` его забирает в
+`serviceBarsSession` — и на эту одну загрузку **все пять механизмов
+отключаются**: immersive и тикер не запускаются, слушатель инсетов не
+ставится, `tryEnterLockTask` выходит из lock task, шторку никто не
+закрывает, а Dart спрашивает `KioskBridge.serviceBarsSession()` и берёт
+`SystemUiMode.manual` с обеими полосами. Окно при этом раскладывается под
+полосами (`setDecorFitsSystemWindows(true)`), чтобы каталог не уезжал под
+статусбар.
+
+Флаг живёт ровно одну загрузку. Чтобы перезапуск приложения внутри сеанса
+(сторож платы, самообновление) его не съел, вместо «одноразового» флага
+пишется отметка загрузки — `System.currentTimeMillis() - elapsedRealtime()`
+плюс сам `elapsedRealtime`. Совпали обе (с допуском в минуту на поправку
+часов по NTP) — тот же сеанс; не совпали — планшет перезагружали, киоск
+возвращается сам.
 
 ### Закрепление экрана — только с device owner
 
@@ -303,6 +376,8 @@ firmware      Build.DISPLAY, для диагностики
 ```bash
 adb shell getprop persist.sys.navbar.disabled       # ждём true
 adb shell getprop persist.sys.statusbar.disabled    # ждём true
+adb logcat -d | grep "service bars"                 # сеанс: открыт/идёт/истёк
+adb shell cmd statusbar expand-notifications        # в сеансе шторка обязана открыться
 adb shell "dumpsys window windows | grep -c NavigationBar"          # ждём 0
 adb shell "dumpsys window | grep 'ITYPE_STATUS_BAR frame'"          # ждём visible=false
 adb shell "dumpsys activity activities | grep mLockTaskModeState"   # ждём LOCKED
@@ -333,7 +408,8 @@ String str = "0" + getRandom(5, 3) + ":" + getRandom(50, 10);   // 03:10 … 05:
 ## Ссылки
 
 * `MainActivity.kt` — `applyVendorBarPolicy`, `rebootTablet`,
-  `showNavBarAndReboot`, `configureDeviceOwnerKiosk`
+  `showNavBarAndReboot`, `resolveServiceBarsSession`,
+  `configureDeviceOwnerKiosk`
 * `AndroidManifest.xml` — комментарий у `SYSTEM_ALERT_WINDOW` и на месте
   снятого `CATEGORY_HOME`
 * [03_FLEET_PROVISIONING.md](03_FLEET_PROVISIONING.md) — выдача Device Owner

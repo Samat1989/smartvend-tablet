@@ -204,6 +204,25 @@ class KioskBridge {
     _caps = null;
   }
 
+  /// Whether this boot is the servicing session opened by
+  /// [showNavBarAndReboot] — bars visible, notification shade usable.
+  ///
+  /// The native side decides once at activity start and keeps the answer for
+  /// the life of the process, so this is a plain read. [main] asks before
+  /// picking a [SystemUiMode]: Flutter hides the bars on its own, and a
+  /// tablet that came back from «Показать навбар» would otherwise get the
+  /// bars from the firmware and lose them again to the first frame.
+  ///
+  /// False on anything that is not this Android app.
+  static Future<bool> serviceBarsSession() async {
+    try {
+      return await _channel.invokeMethod<bool>('serviceBarsSession') ?? false;
+    } catch (e) {
+      debugPrint('[KioskBridge] serviceBarsSession unavailable: $e');
+      return false;
+    }
+  }
+
   /// Give the operator the Android navigation and status bars back for a
   /// single servicing session, then reboot into them.
   ///
@@ -211,6 +230,13 @@ class KioskBridge {
   /// framework decides at display init from `persist.sys.navbar.disabled`
   /// and `persist.sys.statusbar.disabled`, so no amount of immersive can
   /// touch them. This flips both properties on and reboots.
+  ///
+  /// Returning the bar windows is only half of it: the app hides them again
+  /// on every start (immersive here and natively, plus lock task, which
+  /// refuses the pull-down outright — that is why the nav bar used to come
+  /// back on its own and the shade never did). So the native side also
+  /// records the session and spends that one boot standing aside; see
+  /// [serviceBarsSession].
   ///
   /// The loan expires by itself. Every start of [MainActivity] re-sends
   /// STATUSBAR_OFF, so the reboot *after* this one comes back to a bare
