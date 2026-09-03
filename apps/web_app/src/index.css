@@ -110,6 +110,8 @@
   .help-chapter { break-before: page; }
   .help-chapter:first-child { break-before: auto; }
   .help-h2, .help-table, .help-pre, .help-note, figure { break-inside: avoid; }
+  /* Карточка со ссылкой и QR печатается: по PDF человек должен попасть на вход. */
+  .help-panel-card { break-inside: avoid; break-after: avoid; }
   .help-h2, h3 { break-after: avoid; }
   .help-root a { text-decoration: none; color: inherit; }
   .help-pre { background: #f1f5f9 !important; color: #0f172a !important; }

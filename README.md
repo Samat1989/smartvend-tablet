@@ -58,6 +58,10 @@ scripts/          Релизные скрипты (Python) — см. scripts/REA
 ## Деплой-заметки
 
 - `apps/web_app` (Vercel): в настройках проекта Vercel выставить
-  **Root Directory = `apps/web_app`**.
+  **Root Directory = `apps/web_app`**. Боевой адрес панели —
+  `https://micromart-admin.vercel.app`; он зашит в инструкцию `/help` (ссылка и
+  QR-код в шапке), чтобы PDF, собранный где угодно, вёл на вход в панель, а не
+  на localhost. Переехали на другой домен — задайте `VITE_PANEL_URL` в
+  настройках Vercel, она перекрывает значение по умолчанию.
 - `apps/tablet`: релиз через `python3 scripts/release_tablet.py` (нужен `gh` CLI,
   см. `apps/tablet/android/README_RELEASE_SIGNING.md`).

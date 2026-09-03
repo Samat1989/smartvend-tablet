@@ -1,7 +1,8 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import { Languages, Printer, ArrowLeft, ShieldCheck } from 'lucide-react';
+import { Languages, Printer, ArrowLeft, ShieldCheck, LogIn } from 'lucide-react';
+import QRCode from 'qrcode';
 import { supabase } from '../supabaseClient';
 import { CHAPTERS, LANGS, TRACKS, DEFAULT_LANG, UI } from './manifest';
 import { makeComponents, slugify } from './mdComponents.jsx';
@@ -28,6 +29,30 @@ function applyAdminBlocks(markdown, isAdmin) {
   return isAdmin ? markdown.replace(ADMIN_MARKER, '') : markdown.replace(ADMIN_BLOCK, '');
 }
 
+// Инструкцию отдают ссылкой и PDF-файлом, поэтому адрес админ-панели должен
+// быть в тексте абсолютным и **боевым**: PDF, распечатанный с дев-сервера,
+// иначе унесёт владельцу localhost. Порядок поиска тот же, что у витрины в
+// Admin.jsx: явная переменная → домен продакшена от Vercel → боевой адрес по
+// умолчанию. Текущий origin намеренно не используется: инструкцию читают и
+// печатают в том числе с дев-сервера, а владельцу нужен рабочий адрес.
+// В markdown адрес подставляется на месте токена {{panel_url}}.
+const PANEL_PATH = '/admin';
+
+const PANEL_FALLBACK = 'https://micromart-admin.vercel.app';
+const VERCEL_PROD = import.meta.env.VITE_VERCEL_PROJECT_PRODUCTION_URL;
+const PANEL_ORIGIN =
+  import.meta.env.VITE_PANEL_URL ||
+  (VERCEL_PROD ? `https://${VERCEL_PROD}` : '') ||
+  PANEL_FALLBACK;
+
+function panelUrl() {
+  return `${PANEL_ORIGIN}${PANEL_PATH}`;
+}
+
+function fillTokens(markdown, url) {
+  return markdown.replaceAll('{{panel_url}}', url);
+}
+
 function tocOf(markdown) {
   const out = [];
   for (const line of markdown.split('\n')) {
@@ -50,6 +75,7 @@ export default function Help() {
   const [track, setTrack] = useState('owner');
   const [chapters, setChapters] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [panelQr, setPanelQr] = useState(null);
 
   const ui = UI[lang] || UI[DEFAULT_LANG];
 
@@ -76,21 +102,30 @@ export default function Help() {
   useEffect(() => {
     let alive = true;
     setLoading(true);
+    const url = panelUrl();
     Promise.all(
       visible.map(async chapter => {
         const own = loadChapter(lang, chapter.id);
         const text = own ? await own : null;
         if (text != null) {
-          return { ...chapter, text: applyAdminBlocks(text, isSuperadmin), fallback: false };
+          return { ...chapter, text: fillTokens(applyAdminBlocks(text, isSuperadmin), url), fallback: false };
         }
         // Перевода ещё нет — показываем русский, но честно предупреждаем об этом.
         const ru = loadChapter(DEFAULT_LANG, chapter.id);
         const fb = ru ? await ru : '';
-        return { ...chapter, text: applyAdminBlocks(fb, isSuperadmin), fallback: true };
+        return { ...chapter, text: fillTokens(applyAdminBlocks(fb, isSuperadmin), url), fallback: true };
       }),
     ).then(list => { if (alive) { setChapters(list); setLoading(false); } });
     return () => { alive = false; };
   }, [lang, visible, isSuperadmin]);
+
+  useEffect(() => {
+    let alive = true;
+    QRCode.toDataURL(panelUrl(), { width: 320, margin: 0, errorCorrectionLevel: 'M' })
+      .then(src => { if (alive) setPanelQr(src); })
+      .catch(() => {});
+    return () => { alive = false; };
+  }, []);
 
   useEffect(() => {
     localStorage.setItem('help_lang', lang);
@@ -128,6 +163,13 @@ export default function Help() {
               </button>
             ))}
           </div>
+          <a
+            href={panelUrl()}
+            className="ml-1 flex items-center gap-1.5 rounded-xl border border-slate-200 px-3 py-2 text-[11px] font-black text-slate-600 transition-all hover:border-primary hover:text-primary"
+          >
+            <LogIn size={14} />
+            <span className="hidden sm:inline">{ui.toPanelShort}</span>
+          </a>
           <button
             onClick={() => window.print()}
             className="ml-1 flex items-center gap-1.5 rounded-xl bg-primary px-3 py-2 text-[11px] font-black text-white transition-all active:scale-95"
@@ -199,6 +241,23 @@ export default function Help() {
               ))}
             </div>
           )}
+          <a
+            href={panelUrl()}
+            className="help-panel-card mb-8 flex items-center gap-4 rounded-2xl border border-slate-200 bg-white p-4 no-underline transition-all hover:border-primary"
+          >
+            <div className="min-w-0 flex-1">
+              <div className="text-[11px] font-black uppercase tracking-wide text-slate-400">
+                {ui.panelCard}
+              </div>
+              <div className="mt-0.5 break-all font-lexend text-base font-black text-primary">
+                {panelUrl()}
+              </div>
+              <div className="mt-1 text-[12px] leading-5 text-slate-500">{ui.panelHint}</div>
+            </div>
+            {panelQr && (
+              <img src={panelQr} alt={ui.panelCard} className="h-20 w-20 shrink-0 sm:h-24 sm:w-24" />
+            )}
+          </a>
           {loading && <div className="py-20 text-center text-sm text-slate-400">{ui.loading}</div>}
           {chapters.map(ch => (
             <section key={ch.id} id={ch.id} className="help-chapter mb-14 scroll-mt-20">
@@ -219,7 +278,7 @@ export default function Help() {
             </section>
           ))}
           <div className="help-print-footer hidden text-[11px] text-slate-400">
-            {ui.title} · {ui.printedAt} {printedAt}
+            {ui.title} · {panelUrl()} · {ui.printedAt} {printedAt}
           </div>
         </main>
       </div>
