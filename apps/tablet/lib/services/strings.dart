@@ -384,6 +384,18 @@ class Strings extends ChangeNotifier {
       'ky': 'Сураныч, эшикти жабыңыз',
       'en': 'Please close the door',
     },
+    'unlock_paid_ok': {
+      'ru': 'Оплачено',
+      'kk': 'Төленді',
+      'ky': 'Төлөндү',
+      'en': 'Paid',
+    },
+    'pay_checking': {
+      'ru': 'Проверяем оплату…',
+      'kk': 'Төлемді тексеріп жатырмыз…',
+      'ky': 'Төлөмдү текшерип жатабыз…',
+      'en': 'Checking the payment…',
+    },
     'unlock_failed_hint': {
       'ru': 'Замок не открылся. Оплата не подтверждена и вернётся '
           'автоматически — обратитесь в поддержку.',
@@ -952,6 +964,12 @@ class Strings extends ChangeNotifier {
     'board_firmware': {'ru': 'Прошивка', 'kk': 'Прошивка', 'ky': 'Прошивка', 'en': 'Firmware'},
     'board_status': {'ru': 'Связь с платой', 'kk': 'Платамен байланыс', 'ky': 'Плата менен байланыш', 'en': 'Board link'},
     'board_health_ok': {'ru': 'Норма', 'kk': 'Қалыпты', 'ky': 'Калыпта', 'en': 'Healthy'},
+    'board_status_standalone': {
+      'ru': 'esp-relay, автономно',
+      'kk': 'esp-relay, дербес',
+      'ky': 'esp-relay, өз алдынча',
+      'en': 'esp-relay, standalone',
+    },
     'board_health_lost': {
       'ru': 'Связь потеряна',
       'kk': 'Байланыс жоғалды',
@@ -1313,6 +1331,45 @@ class Strings extends ChangeNotifier {
           'instead of motors. Text commands PING / OPEN, 115200 8N1. '
           'The door opens after payment and the customer takes the '
           'goods themselves',
+    },
+    'diag_mm_link': {
+      'ru': 'СВЯЗЬ С ЗАМКОМ',
+      'kk': 'ҚҰЛЫППЕН БАЙЛАНЫС',
+      'ky': 'КУЛПУ МЕНЕН БАЙЛАНЫШ',
+      'en': 'LOCK LINK',
+    },
+    'diag_mm_link_usb': {
+      'ru': 'esp-serial — по USB',
+      'kk': 'esp-serial — USB арқылы',
+      'ky': 'esp-serial — USB аркылуу',
+      'en': 'esp-serial — over USB',
+    },
+    'diag_mm_link_standalone': {
+      'ru': 'esp-relay — автономно',
+      'kk': 'esp-relay — дербес',
+      'ky': 'esp-relay — өз алдынча',
+      'en': 'esp-relay — standalone',
+    },
+    'diag_mm_link_standalone_hint': {
+      'ru': 'Плата esp-relay сама в сети: подтверждает оплату и открывает '
+          'замок. Планшет — витрина и касса, USB не ищет',
+      'kk': 'esp-relay платасы желіде өзі: төлемді растайды және құлыпты '
+          'ашады. Планшет — витрина мен касса, USB іздемейді',
+      'ky': 'esp-relay платасы тармакта өзү: төлөмдү тастыктайт жана '
+          'кулпуну ачат. Планшет — витрина жана касса, USB издебейт',
+      'en': 'The esp-relay board is online on its own: it captures the '
+          'payment and opens the lock. The tablet is only the storefront '
+          'and till, and never looks for USB',
+    },
+    'diag_mm_link_odg_blocked': {
+      'ru': 'Недоступно для O!Деньги: автономная оплата идёт только '
+          'через Kaspi',
+      'kk': 'O!Деньги үшін қолжетімсіз: дербес төлем тек Kaspi арқылы '
+          'өтеді',
+      'ky': 'O!Деньги үчүн жеткиликсиз: өз алдынча төлөм Kaspi аркылуу '
+          'гана өтөт',
+      'en': 'Not available for O!Dengi: standalone payment goes through '
+          'Kaspi only',
     },
     'diag_board_protocol': {
       'ru': 'ТИП ПЛАТЫ / ПРОТОКОЛ',

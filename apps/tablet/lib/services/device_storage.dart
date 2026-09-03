@@ -49,6 +49,14 @@ class DeviceStorage extends ChangeNotifier {
   // cross-wired cabinets (see BoardClient.lytSwapRowCol).
   static const _kLytSwapRowCol = 'lyt_swap_row_col';
 
+  // Микромаркет: чем открывается замок.
+  //
+  // false (по умолчанию) — плата esp-serial на USB, команду OPEN шлёт планшет.
+  // true — плата esp-relay, та же, что стоит за статическим QR: она сама в
+  // сети, слушает MQTT и открывает замок по оплате. Планшету с ней говорить
+  // не о чем, поэтому отсутствие USB в этом режиме не авария, а норма.
+  static const _kMmStandalone = 'micromarket_standalone';
+
   // Сколько секунд держать замок открытым в режиме микромаркета.
   // Живёт на планшете, а не в прошивке: у релейной платы нет сетевого OTA,
   // перепрошить её можно только кабелем — значит настройка обязана быть там,
@@ -183,6 +191,17 @@ class DeviceStorage extends ChangeNotifier {
 
   Future<void> setLytSwapRowCol(bool v) async {
     await _prefs.setBool(_kLytSwapRowCol, v);
+    notifyListeners();
+  }
+
+  /// Микромаркет на автономной плате esp-relay — см. [_kMmStandalone].
+  /// Значим только при `boardProtocolName == 'micromarket'`; гейт живёт в
+  /// [BoardClient.isStandaloneLock], чтобы флаг пережил промах по чипу типа
+  /// платы и не подействовал на вендинг.
+  bool get micromarketStandalone => _prefs.getBool(_kMmStandalone) ?? false;
+
+  Future<void> setMicromarketStandalone(bool v) async {
+    await _prefs.setBool(_kMmStandalone, v);
     notifyListeners();
   }
 

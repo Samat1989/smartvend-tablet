@@ -26,6 +26,12 @@ import '../widgets/support_corner.dart';
 /// customer who paid for a door that never opened is not also handed a receipt
 /// saying they got their goods. The payment is left uncaptured in that case and
 /// the gateway returns it on its own.
+///
+/// На автономной плате esp-relay этого порядка нет вовсе, потому что нет ни
+/// одной из двух операций: замок открывает сама плата, получив от шлюза
+/// событие об оплате, и она же одним `complete-order` захватывает деньги и
+/// пишет продажу с остатками. Экран тогда — чек и ничего больше; см. ветку
+/// [BoardClient.isStandaloneLock] в `_run`.
 class UnlockScreen extends StatefulWidget {
   const UnlockScreen({super.key});
 
@@ -39,6 +45,10 @@ class _UnlockScreenState extends State<UnlockScreen> {
   final _api = SupabaseApi();
 
   _Phase _phase = _Phase.opening;
+
+  /// Замок открывает автономная плата esp-relay, а не мы. Тогда этот экран —
+  /// просто чек: ни команды, ни двери, за которой можно следить.
+  bool _standalone = false;
 
   /// How long the receipt stays up before the catalog comes back.
   ///
@@ -69,6 +79,31 @@ class _UnlockScreenState extends State<UnlockScreen> {
     final storage = context.read<DeviceStorage>();
     final svc = context.read<VendingService>();
     final hold = storage.lockHoldSeconds;
+
+    if (board.isStandaloneLock) {
+      // Здесь всё уже случилось без нас: плата получила от шлюза событие об
+      // оплате, сама вызвала complete-order — а это и захват денег, и запись
+      // продажи с остатками одной транзакцией (`finalize_paid_order`) — и
+      // только по 200 щёлкнула реле. Написать продажу отсюда значило бы
+      // завести вторую и списать товар дважды.
+      //
+      // Инвариант «open first, record after» не нарушен, а вырожден: обеих
+      // операций у нас нет, остаётся показать чек.
+      setState(() {
+        _standalone = true;
+        _phase = _Phase.open;
+      });
+      _scheduleReturn(_successSeconds);
+      // Забрать защёлкнутый paymentId, хотя писать им нечего: пока он висит,
+      // VendingService считает, что продажа не закончена, и откладывает
+      // отвязку машины владельцем (см. ветку 'released' в ping). Здесь
+      // продажа закончена в тот момент, когда её записал сервер.
+      svc.consumePaymentId();
+      if (!mounted) return;
+      await svc.reload(silent: true);
+      svc.clearCart();
+      return;
+    }
 
     final opened = await board.openLock(seconds: hold);
     if (!mounted) return;
@@ -172,7 +207,9 @@ class _UnlockScreenState extends State<UnlockScreen> {
                           ? s.t('dispense_failed')
                           : _phase == _Phase.opening
                               ? s.t('unlock_opening')
-                              : s.t('dispense_done'),
+                              : _standalone
+                                  ? s.t('unlock_paid_ok')
+                                  : s.t('dispense_done'),
                       textAlign: TextAlign.center,
                       style: const TextStyle(
                         fontSize: 28,
@@ -208,8 +245,15 @@ class _UnlockScreenState extends State<UnlockScreen> {
                       // способ её закрыть: датчика двери пока нет, замок
                       // защёлкнется по таймеру, и оставленная открытой дверь
                       // это окно для выноса товара.
+                      //
+                      // В автономном режиме дверью распоряжается плата, и
+                      // момент, когда она откроется, планшету неизвестен —
+                      // просить закрыть то, что при нас ещё не открывалось,
+                      // значит сбивать покупателя. Он видит «Заберите товар».
                       Text(
-                        s.t('unlock_close_door'),
+                        _standalone
+                            ? s.t('dispense_done')
+                            : s.t('unlock_close_door'),
                         textAlign: TextAlign.center,
                         style: const TextStyle(
                           fontSize: 17,
@@ -258,7 +302,12 @@ class _UnlockScreenState extends State<UnlockScreen> {
             ? Icons.lock
             : _phase == _Phase.opening
                 ? Icons.hourglass_top
-                : Icons.lock_open,
+                // Открытый замок — картинка про то, что сделали мы. В
+                // автономном режиме мы этого не делали и подтвердить не
+                // можем, поэтому галочка об оплате: ровно то, что известно.
+                : _standalone
+                    ? Icons.check_circle_outline
+                    : Icons.lock_open,
         size: 64,
         color: failed
             ? const Color(0xFFFF3B30)

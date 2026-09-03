@@ -79,6 +79,22 @@ class ClaimOutcome {
   bool get refused => occupied || released;
 }
 
+
+/// Заказ, который сервер отказался создавать.
+///
+/// Несёт КЛЮЧ [Strings], а не готовую фразу: экран оплаты покажет её на языке
+/// покупателя. Текст функции («Товар недоступен в этом аппарате») уезжает в
+/// [details] — в ту же панель «Подробнее», где живут ответы платёжного шлюза.
+class OrderException implements Exception {
+  OrderException(this.messageKey, {this.details});
+
+  final String messageKey;
+  final String? details;
+
+  @override
+  String toString() => 'OrderException($messageKey)';
+}
+
 class SupabaseApi {
   SupabaseApi({http.Client? client}) : _client = client ?? http.Client();
 
@@ -99,6 +115,10 @@ class SupabaseApi {
 
   Uri _rest(String path, [Map<String, String>? query]) =>
       Uri.parse('${SupabaseConfig.url}/rest/v1/$path').replace(queryParameters: query);
+
+  /// Edge function endpoint. Same headers as the REST calls — the anon key is
+  /// what these functions authenticate with too.
+  Uri _fn(String name) => Uri.parse('${SupabaseConfig.url}/functions/v1/$name');
 
   /// POST a SECURITY DEFINER RPC with named params.
   Future<http.Response> _rpc(String fn, Map<String, dynamic> body) {
@@ -286,6 +306,66 @@ class SupabaseApi {
       return jsonDecode(resp.body) as Map<String, dynamic>?;
     } catch (_) {
       // Offline / DNS / timeout — nothing to do, the missing beat is the signal.
+      return null;
+    }
+  }
+
+  // ---------- заказ для автономного микромаркета ----------
+
+  /// Отказ сервера при оформлении заказа. Текст приходит от edge-функции и
+  /// написан для оператора («Недостаточно товара: Gorilla»), поэтому попадает
+  /// в панель «Подробнее», а покупателю экран показывает свою фразу.
+  static const _orderFailKey = 'pay_err_declined';
+
+  /// Оформить заказ через сервер, как это делает витрина статического QR.
+  ///
+  /// Нужен ровно там, где замок открывает автономная плата esp-relay. Прямой
+  /// путь планшета (LE API `payment_request`) сюда не годится по одной
+  /// причине: строки в `pending_orders` он не создаёт, а плата по MQTT зовёт
+  /// `complete-order`, который на неизвестный заказ отвечает 404 — и дверь не
+  /// открывается. Через `create-payment` заказ появляется на сервере, и
+  /// дальше плата сама подтверждает платёж и щёлкает реле.
+  ///
+  /// Цену и остаток считает сервер по своей `inventory`; планшет присылает
+  /// только id позиции и количество. Возвращает `{paymentUrl, orderid,
+  /// torderid}`, где `paymentUrl` — тот же `twocode`, из которого рисуется QR.
+  /// Бросает [ApiException] с текстом функции («Недостаточно товара: …»),
+  /// чтобы экран оплаты показал причину отказа.
+  Future<Map<String, dynamic>> createStandaloneOrder({
+    required String machid,
+    required List<Map<String, dynamic>> items,
+  }) async {
+    final resp = await _client
+        .post(
+          _fn('create-payment'),
+          headers: _headers,
+          body: jsonEncode({'marketId': machid.trim(), 'items': items}),
+        )
+        .timeout(const Duration(seconds: 20));
+    if (resp.statusCode < 200 || resp.statusCode >= 300) {
+      throw OrderException(_orderFailKey, details: _errMessage(resp.body));
+    }
+    final json = jsonDecode(resp.body);
+    if (json is! Map<String, dynamic> || json['paymentUrl'] == null) {
+      throw OrderException(_orderFailKey, details: _errMessage(resp.body));
+    }
+    return json;
+  }
+
+  /// Пассивно посмотреть статус заказа: 'pending' | 'completed' | null.
+  ///
+  /// Именно посмотреть. Подтверждение платежа (`payment_result`) — это захват
+  /// денег, и в автономном микромаркете его делает плата внутри
+  /// `complete-order`, ровно один раз. Планшету остаётся наблюдать статус,
+  /// который она выставила; для этого и заведён `get_order_status`.
+  /// Null на любой сетевой сбой — вызывающий просто спросит снова.
+  Future<String?> orderStatus(String orderid) async {
+    try {
+      final resp = await _rpc('get_order_status', {'p_orderid': orderid});
+      if (resp.statusCode < 200 || resp.statusCode >= 300) return null;
+      final v = jsonDecode(resp.body);
+      return v is String ? v : null;
+    } catch (_) {
       return null;
     }
   }

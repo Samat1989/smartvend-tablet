@@ -189,7 +189,12 @@ class _StatusHeader extends StatelessWidget {
 
     final Color statusColor;
     final String statusLabel;
-    if (!connected) {
+    // Тот же порядок веток, что и на экране «Плата»: режим важнее связи,
+    // потому что связи в нём нет по замыслу — см. _StatusCard там.
+    if (board.isStandaloneLock) {
+      statusColor = Colors.blueGrey;
+      statusLabel = s.t('board_status_standalone');
+    } else if (!connected) {
       statusColor = Colors.redAccent;
       statusLabel = s.t('board_connect');
     } else if (!healthy) {
