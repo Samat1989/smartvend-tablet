@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { supabase } from './supabaseClient';
-import { Image, Upload, Download, Plus, Minus, Save, Trash2, X, Loader2, Pencil, Receipt, Calendar, ShoppingBag, History, Languages, CheckCircle2, XCircle, AlertTriangle, ChevronRight, ChevronLeft, ChevronDown, Package, QrCode, KeyRound, Unlink as LinkOff } from 'lucide-react';
+import { Image, Upload, Download, Plus, Minus, Save, Trash2, X, Loader2, Pencil, Receipt, Calendar, ShoppingBag, History, Languages, CheckCircle2, XCircle, AlertTriangle, ChevronRight, ChevronLeft, ChevronDown, Package, QrCode, KeyRound, Unlink as LinkOff, HelpCircle } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import './i18n';
 import Cropper from 'react-easy-crop';
@@ -281,6 +281,42 @@ function motorToSlotLabel(motorId, layout) {
   return n.toString().padStart(3, '0');
 }
 
+// Cell numbers on a screen micromarket are always two digits (10..99): the
+// numpad then searches on its own after the second key and needs no «OK», and
+// the number on the shelf sticker is the number the buyer types — no leading
+// zero to explain. Returns the lowest free one, or null when all 90 are taken
+// (the field then stays empty and the operator decides).
+//
+// Pass the machine's WHOLE inventory, not the category-filtered list: a filter
+// would hide part of the taken numbers and this would hand out a duplicate.
+const CELL_MIN = 10;
+const CELL_MAX = 99;
+
+function nextFreeCellNumber(rows, min = CELL_MIN, max = CELL_MAX) {
+  const taken = new Set();
+  for (const r of rows ?? []) {
+    // Explicit null check: Number(null) === 0 would silently take a slot.
+    if (r?.motor_id == null) continue;
+    const n = Number(r.motor_id);
+    if (Number.isInteger(n)) taken.add(n);
+  }
+  for (let n = min; n <= max; n++) if (!taken.has(n)) return n;
+  return null;
+}
+
+// Порядок списка у машины с экраном — по номеру ячейки, как товар стоит на
+// полке. motorToSlotLabel здесь применять нельзя: она переводит номер по
+// вендинговой раскладке, и «15» стало бы «085», а «10» — «?». Позиции без
+// номера уходят в конец: на экране их всё равно нет.
+function byCellNumber(a, b) {
+  const ca = a?.motor_id == null ? null : Number(a.motor_id);
+  const cb = b?.motor_id == null ? null : Number(b.motor_id);
+  if (ca == null && cb == null) return (a.name || '').localeCompare(b.name || '');
+  if (ca == null) return 1;
+  if (cb == null) return -1;
+  return ca - cb;
+}
+
 // Single notification surface for the whole admin — green when something
 // succeeded, red for a rejection or an error, and nothing else. It sits above
 // every overlay on purpose: most warnings are raised while a modal is open
@@ -331,13 +367,22 @@ function Toast({ toast, onClose }) {
 function kindTint(kind) {
   if (kind === 'micromarket_static') return 'bg-emerald-100 text-emerald-700';
   if (kind === 'micromarket_tablet') return 'bg-amber-100 text-amber-700';
+  if (kind === 'micromarket_screen') return 'bg-violet-100 text-violet-700';
   return 'bg-indigo-100 text-indigo-700';
 }
 
 function kindLabel(kind, t) {
   if (kind === 'micromarket_static') return t('badge_micromarket');
   if (kind === 'micromarket_tablet') return t('badge_micromarket_tablet');
+  if (kind === 'micromarket_screen') return t('badge_micromarket_screen');
   return t('badge_vending');
+}
+
+// Открытая полка: ни моторов, ни раскладки. Инвентарь рисуется плоским
+// списком, и позиции заводит сам владелец — планшета, который создал бы их на
+// месте, у таких машин нет.
+function isOpenShelfKind(kind) {
+  return kind === 'micromarket_static' || kind === 'micromarket_screen';
 }
 
 // Which payment rail the cabinet reported on its last heartbeat. Only drawn
@@ -380,6 +425,10 @@ function DeviceStatusDot({ status, kind, withLabel = false }) {
   // so there is nothing to draw. Showing it as permanently green would be the
   // same lie as storing `online` in a column: a claim about a device we have
   // no signal from. The lamp appears on its own once the relay starts beating.
+  //
+  // A screen micromarket is the opposite case: its ESP32 calls device_ping
+  // every five minutes exactly like a tablet, so it has a real heartbeat and
+  // hiding it would be the same lie in reverse.
   if (kind === 'micromarket_static') return null;
 
   const seen = status?.last_seen_at ? new Date(status.last_seen_at) : null;
@@ -556,13 +605,21 @@ export default function Admin() {
 
   async function openCatalogPicker() {
     setShowCatalogPicker(true);
-    if (pickerProducts == null) {
+    // Пустой список не кэшируем. Раньше условием было только `== null`, а обе
+    // ветки отказа — сетевая ошибка и «сессия ещё не поднялась» — записывают
+    // сюда []. Один такой промах, и пикер до перезагрузки страницы показывает
+    // «Каталог пуст», хотя товары есть: повторное открытие в базу уже не шло.
+    // Перезапрос стоит один select по своему owner_id и только когда показывать
+    // всё равно нечего.
+    if (pickerProducts == null || pickerProducts.length === 0) {
       try {
         // Owner-scoped — RLS enforces it server-side, the .eq() is
         // belt-and-suspenders so the query plan filters early and the
         // result is empty on dev DBs before the RLS migration is applied.
         const ownerId = session?.user?.id;
         if (!ownerId) {
+          // Не «каталог пуст», а «мы не знаем, чей каталог показывать».
+          showToast(t('catalog_load_error'), 'error');
           setPickerProducts([]);
           return;
         }
@@ -1209,7 +1266,7 @@ export default function Admin() {
       // out and would flip machines offline at random.
       const [marketsRes, statusRes] = await Promise.all([
         supabase.from('micromarkets').select('id, name, layout_json, kind, qr_token'),
-        supabase.from('device_status_view').select('machid, last_seen_at, board_ok, online, ter_number'),
+        supabase.from('device_status_view').select('machid, last_seen_at, board_ok, online, app_version, ter_number'),
       ]);
       if (marketsRes.error) throw marketsRes.error;
       const byId = new Map(
@@ -1240,15 +1297,25 @@ export default function Admin() {
     return parseLayout(market?.layout_json);
   }, [markets, selectedMarketId]);
 
-  // Static micromarkets are open-shelf: no motors/cabinet layout, so the admin
-  // shows a flat product list (with add/edit/delete) instead of the cabinet view.
+  // Static and screen micromarkets are open-shelf: no motors/cabinet layout, so
+  // the admin shows a flat product list (with add/edit/delete) instead of the
+  // cabinet view. They differ in one thing only — the screen machine's buyer
+  // picks goods by the cell number on its own numpad, so its positions carry a
+  // number and static-QR ones don't.
   const selectedMarket = markets.find(m => String(m.id) === String(selectedMarketId));
   const isStaticMarket = selectedMarket?.kind === 'micromarket_static';
+  const isScreenMarket = selectedMarket?.kind === 'micromarket_screen';
+  const isOpenShelf = isOpenShelfKind(selectedMarket?.kind);
 
   function addStaticProduct() {
     setEditingProduct({
       id: 'new', product_id: null, name: '', price: 0, stock: 0,
-      image_url: '', emoji: '', category_id: null, motor_id: null,
+      image_url: '', emoji: '', category_id: null,
+      // Предлагаем номер сразу: у машины с экраном позиция без номера покупателю
+      // недоступна, и «забыл проставить» — самый вероятный способ завести товар,
+      // которого никто не купит. products здесь — весь инвентарь машины, до
+      // фильтра по категории, иначе автономер предложил бы уже занятый.
+      motor_id: isScreenMarket ? nextFreeCellNumber(products) : null,
     });
   }
 
@@ -1406,16 +1473,39 @@ export default function Admin() {
       return showToast(t('specify_price'), 'error');
     }
 
+    // Номер ячейки правится только у машины с экраном — см. payload ниже.
+    let cellNumber = null;
+    if (isScreenMarket) {
+      const raw = editingProduct.motor_id;
+      if (raw != null && String(raw).trim() !== '') {
+        cellNumber = Number(raw);
+        if (!Number.isInteger(cellNumber) || cellNumber < CELL_MIN || cellNumber > CELL_MAX) {
+          return showToast(t('cell_number_range', { min: CELL_MIN, max: CELL_MAX }), 'error');
+        }
+        // Обычный случай — «взял номер соседа» — объясняем до похода в базу.
+        // Арбитром всё равно остаётся индекс: список в состоянии может отставать.
+        const clash = products.find(p =>
+          String(p.id) !== String(editingProduct.id) && Number(p.motor_id) === cellNumber);
+        if (clash) {
+          return showToast(t('cell_number_taken', { n: cellNumber, name: clash.name || '—' }), 'error');
+        }
+      }
+    }
+
     setLoading(true);
     try {
       // Keep name/image_url/emoji/category_id mirrored on inventory for
       // back-compat with older tablet builds that read those columns
       // directly. The catalog row is the source of truth — when admin
       // edits the product, this row will fall behind until a re-link.
-      // Wiring fields (motor_id, motor_type, curtain_mode) are not in
-      // the payload — they're owned by the tablet's Motor Setup screen.
-      // Updating them from admin could put a product on the wrong
-      // physical spiral, so we never touch them here.
+      //
+      // motor_type and curtain_mode are never in the payload, and motor_id
+      // only for a screen micromarket. For vending the ban stands: there
+      // motor_id is a physical spiral, owned by the tablet's Motor Setup
+      // screen, and editing it remotely could put a product on the wrong
+      // motor. A screen micromarket has no spirals and no tablet — motor_id
+      // there is the number written on the shelf, and this form is the only
+      // place it can be set.
       const payload = {
         product_id: editingProduct.product_id,
         name: editingProduct.name || '',
@@ -1425,6 +1515,9 @@ export default function Admin() {
         image_url: editingProduct.image_url || null,
         emoji: editingProduct.emoji || null,
       };
+      // null здесь — не «не трогать», а «снять номер»: позиция остаётся в базе,
+      // но на экран автомата не попадает.
+      if (isScreenMarket) payload.motor_id = cellNumber;
       if (editingProduct.id === 'new') {
         const { error } = await supabase.from('inventory').insert({
           ...payload,
@@ -1442,6 +1535,24 @@ export default function Admin() {
       fetchProducts(selectedMarketId);
     } catch (err) {
       console.error('Error saving product:', err);
+      // 23505 = частичный уникальный индекс inventory_market_motor_uk
+      // (micromarket_id, motor_id): номер успели занять между отрисовкой списка
+      // и сохранением — вторая вкладка, второй оператор. Имя индекса проверяем
+      // явно: на inventory это не единственное ограничение, и «номер занят»
+      // вместо чужой ошибки было бы враньём.
+      const cellClash = err?.code === '23505'
+        && `${err.message || ''} ${err.details || ''}`.includes('inventory_market_motor_uk');
+      if (cellClash) {
+        const holder = products.find(p => Number(p.motor_id) === cellNumber);
+        showToast(
+          holder
+            ? t('cell_number_taken', { n: cellNumber, name: holder.name || '—' })
+            : t('cell_number_taken_unknown', { n: cellNumber }),
+          'error',
+        );
+        fetchProducts(selectedMarketId);   // подтянуть того, кто занял номер
+        return;
+      }
       showToast(`${t('save_product_error')}: ${err.message || JSON.stringify(err)}`, 'error');
     } finally {
       setLoading(false);
@@ -1588,7 +1699,7 @@ export default function Admin() {
     ? products
     : products.filter(p => p.category_id === selectedCategoryFilter))
     .slice()
-    .sort((a, b) => {
+    .sort(isScreenMarket ? byCellNumber : (a, b) => {
       // Sort by the operator's per-machine layout so the list mirrors
       // what the cabinet view shows (MP2404 puts "01" before "11"
       // even though motor 99 > motor 89).
@@ -1663,6 +1774,14 @@ export default function Admin() {
           </div>
         </div>
         <div className="flex items-center gap-3">
+          <a
+            href="/help"
+            title={t('help_link')}
+            className="flex items-center gap-1 text-slate-400 hover:text-primary transition-all"
+          >
+            <HelpCircle size={16} />
+            <span className="hidden sm:inline text-[10px] font-black uppercase">{t('help_link')}</span>
+          </a>
           <button onClick={toggleLanguage} className="flex items-center gap-1 hover:opacity-70 transition-all mr-2">
             <Languages size={16} className="text-slate-400" />
             <span className="text-[10px] font-black uppercase text-slate-400">{i18n.language}</span>
@@ -1825,7 +1944,7 @@ export default function Admin() {
                   <p className="text-[11px] font-bold text-slate-500 uppercase tracking-widest">{t('apparatus_no')}{selectedMarketId}</p>
                 </div>
                 <div className="flex gap-2 w-full sm:w-auto items-center">
-                  {isStaticMarket && (
+                  {isOpenShelf && (
                     <button
                       onClick={addStaticProduct}
                       className="flex-1 sm:flex-none flex items-center justify-center gap-2 bg-primary text-white px-4 py-2.5 rounded-xl font-bold hover:opacity-90 transition-all text-sm"
@@ -1871,7 +1990,7 @@ export default function Admin() {
 
               {/* Vending only: admin can edit existing slots but new rows must
                   come from the tablet (the operator maps motor_id on-site). */}
-              {!isStaticMarket && (
+              {!isOpenShelf && (
               <div className="mb-3 flex items-start gap-2 bg-sky-50 border-2 border-sky-300 rounded-xl p-3">
                 <Image size={16} className="text-sky-700 mt-0.5 shrink-0" />
                 <div className="text-[12px] text-sky-900 leading-relaxed">
@@ -1881,7 +2000,7 @@ export default function Admin() {
               </div>
               )}
 
-              {!isStaticMarket && selectedMarketLayout._source === 'fallback' && (
+              {!isOpenShelf && selectedMarketLayout._source === 'fallback' && (
                 <div className="mb-6 flex items-start gap-2 bg-amber-50 border-2 border-amber-400 rounded-xl p-3">
                   <AlertTriangle size={16} className="text-amber-700 mt-0.5 shrink-0" />
                   <div className="text-[12px] text-amber-900 leading-relaxed">
@@ -1893,7 +2012,7 @@ export default function Admin() {
 
               {loading && !editingProduct ? (
                 <div className="flex justify-center p-20"><Loader2 className="animate-spin text-primary" size={32} /></div>
-              ) : isStaticMarket ? (
+              ) : isOpenShelf ? (
                 <StaticInventoryList
                   products={filteredProducts}
                   categories={categories}
@@ -1902,6 +2021,7 @@ export default function Admin() {
                   currency={currencyOf(selectedMarket)}
                   onEdit={(p) => setEditingProduct(p)}
                   onDelete={(p) => deleteProduct(p.id)}
+                  showCells={isScreenMarket}
                 />
               ) : (
                 <InventoryByLayout
@@ -2160,13 +2280,43 @@ export default function Admin() {
                 </button>
               )}
 
-              {/* Slot info — read-only. Motor wiring (id + type) is
-                  edited on the tablet's «Настройка моторов» screen so
-                  the operator standing in front of the cabinet can
-                  verify the change physically. Admin can't change it
-                  remotely (a wrong motor index = wrong product
-                  dispensed). */}
-              {editingProduct.motor_id != null && editingProduct.motor_id !== '' && (
+              {/* Cell number, two branches.
+
+                  Screen micromarket: an editable field. The number here is the
+                  one written on the shelf — the buyer types it on the machine's
+                  numpad — and there is no tablet to assign it on site, so this
+                  form is the only place it can be set at all. Empty is allowed
+                  and means «keep the position, hide it from the screen».
+
+                  Vending: read-only plaque, unchanged. Motor wiring (id + type)
+                  is edited on the tablet's «Настройка моторов» screen so the
+                  operator standing in front of the cabinet can verify the
+                  change physically. Admin can't change it remotely (a wrong
+                  motor index = wrong product dispensed). */}
+              {isScreenMarket ? (
+                <div>
+                  <label className="text-xs font-bold text-slate-700 ml-2 mb-1 block">{t('cell_number')}</label>
+                  <input
+                    type="text"
+                    inputMode="numeric"
+                    maxLength={2}
+                    placeholder={t('cell_number_none')}
+                    className="w-28 p-2.5 border-2 border-slate-300 focus:border-primary focus:outline-none rounded-xl font-black text-lg tabular-nums text-slate-900 bg-white"
+                    value={editingProduct.motor_id ?? ''}
+                    onChange={e => {
+                      // type="text" + фильтр вместо type="number": там пустое
+                      // поле схлопывается в 0, а 0 — валидный, но неверный
+                      // номер; плюс Chrome принимает «e», «+», «−» и крутит
+                      // значение колесом мыши поверх поля.
+                      const digits = e.target.value.replace(/\D/g, '').slice(0, 2);
+                      setEditingProduct({ ...editingProduct, motor_id: digits === '' ? null : Number(digits) });
+                    }}
+                  />
+                  <div className="text-[11px] text-slate-600 leading-relaxed bg-slate-100 border border-slate-300 rounded-xl p-2.5 mt-2">
+                    {t('cell_number_hint')} {t('cell_number_optional_hint')}
+                  </div>
+                </div>
+              ) : editingProduct.motor_id != null && editingProduct.motor_id !== '' ? (
                 <div className="flex items-center gap-3 bg-slate-100 border-2 border-slate-300 rounded-2xl p-3">
                   <div className="bg-indigo-600 text-white px-3 py-1.5 rounded-lg font-black text-base tabular-nums shadow-sm shrink-0">
                     {motorToSlotLabel(editingProduct.motor_id) ?? '?'}
@@ -2178,7 +2328,7 @@ export default function Admin() {
                     </div>
                   </div>
                 </div>
-              )}
+              ) : null}
 
               <div className="flex gap-4">
                 <div className="flex-1">
@@ -2634,11 +2784,12 @@ export default function Admin() {
               </div>
               <div>
                 <label className="text-xs font-bold text-slate-500 ml-1">{t('device_kind')}</label>
-                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 mt-1">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 mt-1">
                   {[
                     { value: 'vending', label: t('badge_vending'), hint: t('device_kind_vending_hint') },
                     { value: 'micromarket_tablet', label: t('badge_micromarket_tablet'), hint: t('device_kind_tablet_hint') },
                     { value: 'micromarket_static', label: t('badge_micromarket'), hint: t('device_kind_static_hint') },
+                    { value: 'micromarket_screen', label: t('badge_micromarket_screen'), hint: t('device_kind_screen_hint') },
                   ].map(opt => (
                     <button
                       key={opt.value}
@@ -3455,9 +3606,11 @@ function CatalogTab({
 // so the operator immediately sees which spirals need re-stocking.
 // Rows that point to a motor not present in the current layout get a
 // "Не привязано" section at the bottom.
-// Flat product list for open-shelf (static) micromarkets — no motors/slots.
-// Add is handled by the header button; rows support edit + delete.
-function StaticInventoryList({ products, categories, priceLabel, currency, onEdit, onDelete }) {
+// Flat product list for open-shelf micromarkets (static-QR and screen) — no
+// motors, no cabinet layout. Add is handled by the header button; rows support
+// edit + delete. `showCells` turns on the cell-number badge: only a screen
+// machine has numbers, a static-QR one has nothing to show there.
+function StaticInventoryList({ products, categories, priceLabel, currency, onEdit, onDelete, showCells = false }) {
   const { t } = useTranslation();
   if (!products || products.length === 0) {
     return (
@@ -3473,12 +3626,27 @@ function StaticInventoryList({ products, categories, priceLabel, currency, onEdi
       {products.map(p => {
         const lowStock = (p.stock ?? 0) < 5;
         const cat = categories.find(c => c.id === p.category_id)?.name_ru;
+        const cell = p.motor_id == null ? null : Number(p.motor_id);
         return (
           <div
             key={p.id}
             onClick={() => onEdit(p)}
             className="flex items-center gap-3 p-2.5 sm:p-3 rounded-2xl border-2 border-slate-200 bg-slate-50 hover:border-primary hover:bg-white hover:shadow-md cursor-pointer transition-all"
           >
+            {/* Колонка номера — только у машины с экраном: у static-QR номер ни
+                на что не влияет, и её список должен выглядеть ровно как раньше.
+                Пунктирный «—» неизбежен, пока каталог набивают; красным его не
+                метим, иначе наполовину заполненный список читался бы как
+                аварийный. Объяснение живёт в подсказке модалки. */}
+            {showCells && (
+              <div className={`rounded-xl flex items-center justify-center shrink-0 px-2 py-1.5 min-w-[44px] border-2 font-black text-base tabular-nums ${
+                cell == null
+                  ? 'bg-white text-slate-300 border-dashed border-slate-300'
+                  : 'bg-indigo-600 text-white border-indigo-700'
+              }`}>
+                {cell ?? '—'}
+              </div>
+            )}
             <div className="w-12 h-12 sm:w-14 sm:h-14 rounded-xl flex items-center justify-center overflow-hidden shrink-0 border-2 border-slate-200 bg-white">
               {p.image_url ? (
                 <img src={p.image_url} alt={p.name} loading="lazy" className="w-full h-full object-contain p-1" />
