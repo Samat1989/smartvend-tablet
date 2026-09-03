@@ -242,7 +242,13 @@ class VendingService extends ChangeNotifier {
       // whether the board answers. Reporting that as a healthy board would
       // put a green light on a machine that can't dispense. Only M102 has a
       // real verdict (its watchdog counts consecutive command failures).
-      boardOk: board.isLyt ? null : board.isHealthy,
+      //
+      // Автономный микромаркет — тот же случай, только честнее некуда: плата
+      // esp-relay отчитывается о себе своим каналом, а планшет к ней даже не
+      // подключён. `true` было бы выдумкой о железе, которого мы не видим, а
+      // `false` — ложной тревогой. С null панель владельца рисует лампу за
+      // сам планшет и подписывает «плата не опрашивается».
+      boardOk: (board.isLyt || board.isStandaloneLock) ? null : board.isHealthy,
       appVersion: _appVersion,
       terNumber: _storage.terNumber,
     );

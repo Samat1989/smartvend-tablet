@@ -186,6 +186,28 @@ class _BoardDiagScreenState extends State<BoardDiagScreen> {
     if (p == BoardProtocol.micromarket) await _offerMicromarketLayout();
   }
 
+  /// Переключить способ связи с замком в микромаркете.
+  ///
+  /// Порядок здесь единственно возможный: флаг встаёт первым, и только потом
+  /// мы трогаем соединение. Наоборот — [BoardClient.autoConnect] ушёл бы
+  /// искать плату, которой на проводе нет, и повесил бы системный диалог
+  /// разрешения USB поверх экрана.
+  Future<void> _setStandaloneLock(bool v) async {
+    final board = context.read<BoardClient>();
+    final storage = context.read<DeviceStorage>();
+    board.setStandaloneLock(v);
+    if (v) {
+      await board.disconnect();
+      return;
+    }
+    final path = storage.serialPortPath;
+    if (path != null) {
+      await board.connectNative(path);
+    } else {
+      await board.autoConnect();
+    }
+  }
+
   /// Раскладка микромаркета при переключении на этот тип платы.
   ///
   /// Пустую применяем молча — это настройка новой машины, и заставлять
@@ -253,6 +275,9 @@ class _BoardDiagScreenState extends State<BoardDiagScreen> {
               holdSeconds: context.watch<DeviceStorage>().lockHoldSeconds,
               onHoldChanged: (v) =>
                   context.read<DeviceStorage>().setLockHoldSeconds(v),
+              standalone: board.isStandaloneLock,
+              standaloneAllowed: !context.watch<DeviceStorage>().isOdengi,
+              onStandaloneChanged: _setStandaloneLock,
             ),
             _ControlsCard(
               board: board,
@@ -262,13 +287,16 @@ class _BoardDiagScreenState extends State<BoardDiagScreen> {
               onLytTest: _lytTest,
               onLockTest: _lockTest,
             ),
-            _SerialModeCard(
-              selectedPath: context.watch<DeviceStorage>().serialPortPath,
-              nodes: _nativePorts,
-              detecting: _detecting,
-              onSelectPort: _selectPort,
-              onAutoDetect: _autoDetect,
-            ),
+            // Порт и автопоиск — про то, где искать плату. В автономном
+            // режиме искать нечего, и пустой список нод только путал бы.
+            if (!board.isStandaloneLock)
+              _SerialModeCard(
+                selectedPath: context.watch<DeviceStorage>().serialPortPath,
+                nodes: _nativePorts,
+                detecting: _detecting,
+                onSelectPort: _selectPort,
+                onAutoDetect: _autoDetect,
+              ),
             const SizedBox(height: 8),
             Expanded(
               child: _LogPanel(
@@ -294,7 +322,20 @@ class _ProtocolCard extends StatelessWidget {
     required this.onSwapChanged,
     required this.holdSeconds,
     required this.onHoldChanged,
+    required this.standalone,
+    required this.standaloneAllowed,
+    required this.onStandaloneChanged,
   });
+
+  /// Микромаркет на автономной плате esp-relay: планшет замком не управляет.
+  final bool standalone;
+
+  /// Автономный вариант вообще предлагается. Ложь для O!Деньги: заказ там
+  /// пришлось бы оформлять через `create-payment`, а она умеет только Kaspi,
+  /// и покупатель в Кыргызстане получил бы не тот QR.
+  final bool standaloneAllowed;
+
+  final ValueChanged<bool> onStandaloneChanged;
 
   final BoardProtocol selected;
 
@@ -367,7 +408,65 @@ class _ProtocolCard extends StatelessWidget {
             _hint(s, selected),
             style: const TextStyle(color: Colors.white38, fontSize: 11),
           ),
-          if (selected == BoardProtocol.micromarket)
+          if (selected == BoardProtocol.micromarket) ...[
+            const SizedBox(height: 14),
+            Text(
+              s.t('diag_mm_link'),
+              style: const TextStyle(
+                color: Colors.white70,
+                fontSize: 11,
+                fontWeight: FontWeight.bold,
+                letterSpacing: 1.2,
+              ),
+            ),
+            const SizedBox(height: 8),
+            Wrap(
+              spacing: 6,
+              runSpacing: 6,
+              children: [
+                for (final mode in const [false, true])
+                  ChoiceChip(
+                    label: Text(s.t(mode
+                        ? 'diag_mm_link_standalone'
+                        : 'diag_mm_link_usb')),
+                    selected: standalone == mode,
+                    // Заблокированный чип не молчит: подпись под ним говорит,
+                    // почему автономный вариант недоступен.
+                    onSelected: (mode && !standaloneAllowed)
+                        ? null
+                        : (_) {
+                            if (standalone != mode) onStandaloneChanged(mode);
+                          },
+                    labelStyle: TextStyle(
+                      color: (mode && !standaloneAllowed)
+                          ? Colors.black38
+                          : Colors.black,
+                      fontSize: 12,
+                      fontWeight: FontWeight.w600,
+                    ),
+                    backgroundColor: Colors.grey.shade300,
+                    disabledColor: Colors.grey.shade700,
+                    selectedColor: Colors.amberAccent,
+                  ),
+              ],
+            ),
+            const SizedBox(height: 6),
+            Text(
+              standaloneAllowed
+                  ? s.t('diag_mm_link_standalone_hint')
+                  : s.t('diag_mm_link_odg_blocked'),
+              style: TextStyle(
+                color: standaloneAllowed
+                    ? Colors.white38
+                    : Colors.orangeAccent.shade100,
+                fontSize: 11,
+              ),
+            ),
+          ],
+          // Секунды удержания уезжают в команду OPEN. В автономном режиме её
+          // не будет — плата держит замок своим таймером, и настройка здесь
+          // означала бы влияние, которого у планшета нет.
+          if (selected == BoardProtocol.micromarket && !standalone)
             Padding(
               padding: const EdgeInsets.only(top: 6),
               child: Row(
@@ -554,7 +653,13 @@ class _StatusCard extends StatelessWidget {
     final healthy = board.isHealthy;
     final Color dot;
     final String label;
-    if (!connected) {
+    // Автономный режим — первой веткой, иначе он читался бы как «не
+    // подключено» красным. И не зелёным: зелёный тут значит «плата отвечает»,
+    // а мы её не спрашиваем — оператор должен видеть режим, а не «норму».
+    if (board.isStandaloneLock) {
+      dot = Colors.blueGrey;
+      label = s.t('board_status_standalone');
+    } else if (!connected) {
       dot = Colors.redAccent;
       label = s.t('board_connect');
     } else if (!healthy) {
@@ -662,14 +767,20 @@ class _ControlsCard extends StatelessWidget {
                     ? Colors.redAccent
                     : Colors.green,
               ),
-              onPressed: onToggleConnection,
+              // В автономном режиме подключаться не к чему: autoConnect
+              // всё равно вышел бы сразу, а живая кнопка обещала бы связь,
+              // которой нет.
+              onPressed: board.isStandaloneLock ? null : onToggleConnection,
             ),
           ),
           // The CRC password is an M102-family concept; BarysVend V27.2
           // frames carry a plain XOR — its slot hosts the link test
           // instead (the board answers nothing but a dispense, so a
           // tiny row-1/col-1 twitch is the only health check there is).
-          if (board.isMicromarket) ...[
+          // Кнопку прячем, а не гасим: в автономном режиме она гарантированно
+          // вернула бы красное «Замок не открылся», и монтажник решил бы, что
+          // сломан планшет, хотя команду там слать некому.
+          if (board.isMicromarket && !board.isStandaloneLock) ...[
             const SizedBox(width: 8),
             Expanded(
               child: FilledButton.icon(

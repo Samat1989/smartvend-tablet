@@ -179,6 +179,35 @@ class BoardClient extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// Микромаркет на автономной плате: замок открывает не планшет.
+  ///
+  /// Два монтажа одного и того же холодильника. По умолчанию за замком стоит
+  /// esp-serial на USB, и команду `OPEN` шлём мы. Второй вариант — esp-relay,
+  /// та же плата, что стоит за статическим QR: она сама в сети, слушает MQTT
+  /// `vending/<uuid>/in`, по событию об оплате подтверждает платёж через
+  /// `complete-order` и щёлкает реле. Разговаривать с ней планшету нечем и
+  /// незачем — провода между ними нет.
+  ///
+  /// Гейт по [isMicromarket] намеренный: флаг переживает промах по чипу типа
+  /// платы, но на M102/BarysVend мёртв и не может отключить там проверку
+  /// живости настоящей платы.
+  bool _standaloneLock = false;
+  bool get isStandaloneLock => _standaloneLock && isMicromarket;
+
+  /// Переключить способ связи с замком. Вызывающий сам разрывает или
+  /// поднимает соединение — порядок важен, флаг должен встать раньше, иначе
+  /// [autoConnect] уйдёт искать плату, которой нет.
+  void setStandaloneLock(bool v) {
+    if (_standaloneLock == v) return;
+    _standaloneLock = v;
+    // ignore: unawaited_futures — fire-and-forget prefs write
+    _storage?.setMicromarketStandalone(v);
+    _info(v
+        ? 'Замок → esp-relay (автономно): USB не ищем, OPEN не шлём'
+        : 'Замок → esp-serial (USB): плата снова обязательна');
+    notifyListeners();
+  }
+
   /// "Password" appended to the frame body before CRC-16 is computed.
   /// The factory app calls this "M102 encryption mode" (`m964getM102()`)
   /// and it is **enabled by default** (`getBoolean("IS_M102GOTOCODE", true)`).
@@ -259,8 +288,14 @@ class BoardClient extends ChangeNotifier {
   /// У микромаркета порог ниже: пинг раз в 10 с, значит два промаха — это
   /// 20 секунд молчания, чего достаточно, чтобы поймать отошедший разъём, но
   /// мало, чтобы среагировать на одну потерянную строку.
-  bool get isHealthy => isConnected &&
-      (isLyt || _consecutiveFailures < (isMicromarket ? 2 : 4));
+  ///
+  /// Автономный микромаркет отвечает «здоров» без всякой шины: платы на нашем
+  /// конце провода нет вовсе, и мерить нечего — см. [isStandaloneLock]. Это
+  /// одна строка гасит и шторку «Технический перерыв», и снекбары «USB-адаптер
+  /// не найден» на витрине.
+  bool get isHealthy =>
+      isStandaloneLock ||
+      (isConnected && (isLyt || _consecutiveFailures < (isMicromarket ? 2 : 4)));
 
   List<UsbDevice> get devices => List.unmodifiable(_devices);
   UsbDevice? get selectedDevice => _selected;
@@ -282,7 +317,12 @@ class BoardClient extends ChangeNotifier {
     _protocol = BoardProtocol.fromStorageName(storage?.boardProtocolName);
     _baud = _protocol.defaultBaud;
     _lytSwapRowCol = storage?.lytSwapRowCol ?? false;
+    _standaloneLock = storage?.micromarketStandalone ?? false;
     _usbEventSub = UsbSerial.usbEventStream?.listen((event) async {
+      // Автономный микромаркет: провода нет, и любое USB-событие тут чужое —
+      // флешка монтажника, зарядка. Без этого выхода мы бы вывесили системный
+      // диалог «Разрешить доступ к USB-устройству?» поверх витрины.
+      if (isStandaloneLock) return;
       _info('USB event: ${event.event} ${event.device?.productName ?? ""}');
       // On any USB attach, refresh and try to auto-connect if we're not already.
       await refreshDevices();
@@ -312,6 +352,7 @@ class BoardClient extends ChangeNotifier {
     // open service-mode → Плата → Connect manually.
     _usbPermissionSub = KioskBridge.usbPermissionResultStream.listen(
       (granted) async {
+        if (isStandaloneLock) return;
         _info('USB permission ${granted ? "granted" : "denied"}');
         if (granted && !isConnected && _storage?.serialPortPath == null) {
           await refreshDevices();
@@ -327,6 +368,12 @@ class BoardClient extends ChangeNotifier {
     // either. Forcing the request here gets the dialog on first launch
     // and then connects immediately if permission already exists.
     Future.delayed(const Duration(milliseconds: 800), () async {
+      // Автономный микромаркет: ни USB, ни нативный UART не трогаем — иначе
+      // сохранённый /dev/ttySX увёл бы нас открывать порт, за которым никого.
+      if (isStandaloneLock) {
+        _info('esp-relay автономно: плату не ищем');
+        return;
+      }
       // Native-UART tablets: skip the USB probe entirely and open the
       // configured /dev/ttySX. The health watchdog keeps it re-opened.
       final nativePath = _storage?.serialPortPath;
@@ -394,7 +441,7 @@ class BoardClient extends ChangeNotifier {
     _healthWatchdog = Timer.periodic(
       const Duration(seconds: 10),
       (_) async {
-        if (_transport == null || _selfHealing) {
+        if (_transport == null || _selfHealing || isStandaloneLock) {
           _unhealthySince = null;
           return;
         }
@@ -491,6 +538,10 @@ class BoardClient extends ChangeNotifier {
   /// Falls back to any other known USB-Serial chip if no CH340 is present
   /// (useful on bench tablets with FTDI dongles).
   Future<bool> autoConnect() async {
+    if (isStandaloneLock) {
+      _info('esp-relay автономно: USB-плату не ищем');
+      return false;
+    }
     if (isConnected) return true;
     await refreshDevices();
     final ch340 = _devices.where(
@@ -1103,6 +1154,14 @@ class BoardClient extends ChangeNotifier {
       _err('openLock вызван не в режиме микромаркета');
       return false;
     }
+    // Замком распоряжается сама плата esp-relay. Возвращаем false, а не
+    // «успех»: врать про открытие того, чем мы не управляем, нельзя — ветка
+    // на автономный режим стоит выше по стеку, в UnlockScreen, и если её
+    // однажды сломают, честный отказ безопаснее выдуманного успеха.
+    if (isStandaloneLock) {
+      _err('esp-relay автономно: команда OPEN не отправлена');
+      return false;
+    }
     final sec = seconds.clamp(1, 600);
     final reply = await _mmCommand('OPEN $sec',
         timeout: Duration(seconds: sec + 5));
@@ -1408,6 +1467,10 @@ class BoardClient extends ChangeNotifier {
   /// came back. Used by cart/pay flows so payment can't be initiated
   /// against a dead bus.
   Future<bool> ping({Duration timeout = const Duration(milliseconds: 600)}) async {
+    // Автономный микромаркет: спрашивать некого, и это не повод отказывать в
+    // оплате. Здесь же гаснут предоплатные проверки в корзине и на экране
+    // оплаты — обе зовут именно ping().
+    if (isStandaloneLock) return true;
     if (_transport == null) return false;
     // LiYuTai answers nothing but a real dispense (doc §7) — a
     // non-actuating probe doesn't exist, so an open port is the best

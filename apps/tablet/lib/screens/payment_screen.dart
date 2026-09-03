@@ -9,6 +9,7 @@ import '../services/payment_service.dart';
 import '../board/board_client.dart';
 import '../services/app_error.dart';
 import '../services/strings.dart';
+import '../services/supabase_api.dart';
 import '../services/vending_service.dart';
 import '../theme.dart';
 import '../widgets/close_circle_button.dart';
@@ -34,7 +35,18 @@ class PaymentScreen extends StatefulWidget {
 
 class _PaymentScreenState extends State<PaymentScreen> {
   final _service = PaymentService();
+  final _api = SupabaseApi();
   PaymentRequest? _request;
+
+  /// Автономный микромаркет: заказ оформляет сервер, а деньги подтверждает
+  /// плата esp-relay. Считывается один раз на входе, чтобы экран не поменял
+  /// платёжный путь под ногами, если оператор переключит тумблер посреди
+  /// покупки.
+  bool _standalone = false;
+
+  /// Окно QR истекло, но платёж мог уйти в последнюю секунду: ждём, пока
+  /// плата подтвердит его и выставит статус. Влияет только на подпись.
+  bool _checking = false;
   _State _state = _State.creating;
   String _statusMsg = '';
   String? _statusDetails;
@@ -50,6 +62,15 @@ class _PaymentScreenState extends State<PaymentScreen> {
 
   static const _pollInterval = Duration(seconds: 3);
   static const _overallTimeout = Duration(seconds: 60);
+
+  /// Сколько ещё ждать статус после того, как окно QR истекло.
+  ///
+  /// Только для автономного микромаркета, и не из осторожности: заплатить
+  /// можно на 59-й секунде, а дальше событие идёт по цепочке MQTT →
+  /// `complete-order` (там до четырёх попыток захвата по 3 с) →
+  /// `finalize_paid_order`. Без этой паузы покупатель, чьи деньги уже
+  /// списаны и чья дверь вот-вот откроется, читал бы «время истекло».
+  static const _standaloneGrace = Duration(seconds: 45);
   static const _expiredReturnDelay = Duration(seconds: 7);
 
   @override
@@ -76,6 +97,8 @@ class _PaymentScreenState extends State<PaymentScreen> {
       _state = _State.creating;
       _statusMsg = '';
       _statusDetails = null;
+      _checking = false;
+      _standalone = context.read<BoardClient>().isStandaloneLock;
     });
     final storage = context.read<DeviceStorage>();
     final vending = context.read<VendingService>();
@@ -117,13 +140,20 @@ class _PaymentScreenState extends State<PaymentScreen> {
     final total = vending.cartTotalTenge;
     final names = vending.cartItems.map((i) => i.product.name).join(', ');
     try {
-      final req = await _service.createPayment(
-        machid: machid,
-        secret: secret,
-        priceTenge: total,
-        name: names.isEmpty ? 'Order' : names,
-        terNumber: storage.terNumber,
-      );
+      // Автономный микромаркет платит через сервер, а не напрямую в шлюз.
+      // Дело не в удобстве: `payment_result` — это захват денег, и делать
+      // его должен ровно один, тот же, кто открывает дверь. Заказ, созданный
+      // мимо `create-payment`, платой не опознаётся (`complete-order` ответит
+      // ей 404), и холодильник останется закрытым при списанных деньгах.
+      final req = _standalone
+          ? await _createStandaloneRequest(machid, vending)
+          : await _service.createPayment(
+              machid: machid,
+              secret: secret,
+              priceTenge: total,
+              name: names.isEmpty ? 'Order' : names,
+              terNumber: storage.terNumber,
+            );
       if (!mounted) return;
       _request = req;
       _startedAt = DateTime.now();
@@ -135,15 +165,48 @@ class _PaymentScreenState extends State<PaymentScreen> {
       // a transport failure: classify it, show the sentence, and keep the
       // exception text in the log — the customer sees neither hostnames nor
       // errno, and the operator panel stays for gateway payloads.
-      final key = e is PaymentException
-          ? e.messageKey
-          : (AppError.from(e)..log('PaymentScreen.start')).messageKey;
+      final key = switch (e) {
+        PaymentException(:final messageKey) => messageKey,
+        OrderException(:final messageKey) => messageKey,
+        _ => (AppError.from(e)..log('PaymentScreen.start')).messageKey,
+      };
       setState(() {
         _state = _State.failed;
         _statusMsg = context.read<Strings>().t(key);
-        _statusDetails = e is PaymentException ? e.details : null;
+        _statusDetails = switch (e) {
+          PaymentException(:final details) => details,
+          OrderException(:final details) => details,
+          _ => null,
+        };
       });
     }
+  }
+
+  /// Оформить заказ на сервере и вернуть его в том же виде, в каком экран
+  /// ждёт ответ шлюза: `paymentUrl` — это тот же `twocode`, из которого
+  /// рисуется QR, так что ниже по экрану ничего не меняется.
+  ///
+  /// Цену и остаток считает `create-payment` по своей `inventory` — планшет
+  /// присылает только позицию и количество, и подделанная витрина не продаст
+  /// колу за тенге.
+  Future<PaymentRequest> _createStandaloneRequest(
+    String machid,
+    VendingService vending,
+  ) async {
+    final items = [
+      for (final line in vending.cartItems)
+        if (line.product.id != null)
+          {'id': line.product.id, 'count': line.quantity},
+    ];
+    if (items.isEmpty) {
+      throw OrderException('pay_err_amount');
+    }
+    final order = await _api.createStandaloneOrder(machid: machid, items: items);
+    return PaymentRequest(
+      twocode: order['paymentUrl']?.toString() ?? '',
+      orderid: order['orderid']?.toString() ?? '',
+      torderid: order['torderid']?.toString() ?? '',
+    );
   }
 
   void _startPolling() {
@@ -161,12 +224,19 @@ class _PaymentScreenState extends State<PaymentScreen> {
 
     _pollTimer = Timer.periodic(_pollInterval, (_) async {
       if (!mounted) return;
-      final status = await _service.pollResult(
-        machid: machid,
-        secret: secret,
-        orderid: req.orderid,
-        torderid: req.torderid,
-      );
+      // В автономном режиме мы НАБЛЮДАЕМ, а не подтверждаем: pollResult бьёт
+      // в `payment_result`, а это захват денег, и его делает плата внутри
+      // `complete-order` — ровно один раз, перед тем как открыть дверь. Наш
+      // захват отобрал бы у неё код 1, она получила бы «уже завершено», не
+      // увидела успеха и оставила бы холодильник закрытым.
+      final status = _standalone
+          ? await _pollOrderStatus(req.orderid)
+          : await _service.pollResult(
+              machid: machid,
+              secret: secret,
+              orderid: req.orderid,
+              torderid: req.torderid,
+            );
       if (!mounted) return;
       switch (status) {
         case PaymentStatus.success:
@@ -217,13 +287,38 @@ class _PaymentScreenState extends State<PaymentScreen> {
 
     _overallTimer = Timer(_overallTimeout, () {
       if (!mounted) return;
-      _stopTimers();
-      setState(() {
-        _state = _State.expired;
-        _statusMsg = context.read<Strings>().t('pay_time_expired');
+      // Обычный режим: шлюз сам сказал бы «истекло», окно закрываем сразу.
+      if (!_standalone) {
+        _stopTimers();
+        setState(() {
+          _state = _State.expired;
+          _statusMsg = context.read<Strings>().t('pay_time_expired');
+        });
+        _scheduleExpiredReturn();
+        return;
+      }
+      // Автономный: опрос не глушим — деньги могли уйти в последнюю секунду,
+      // и статус выставит плата, когда пройдёт по своей цепочке.
+      setState(() => _checking = true);
+      _overallTimer = Timer(_standaloneGrace, () {
+        if (!mounted) return;
+        _stopTimers();
+        setState(() {
+          _checking = false;
+          _state = _State.expired;
+          _statusMsg = context.read<Strings>().t('pay_time_expired');
+        });
+        _scheduleExpiredReturn();
       });
-      _scheduleExpiredReturn();
     });
+  }
+
+  /// Статус заказа глазами планшета: 'completed' → успех, всё прочее —
+  /// «ещё ждём». Отдельного «истекло» тут нет и быть не может: заказ живёт на
+  /// сервере, пока его не закроет плата, а срок QR держит наш таймер.
+  Future<PaymentStatus> _pollOrderStatus(String orderid) async {
+    final status = await _api.orderStatus(orderid);
+    return status == 'completed' ? PaymentStatus.success : PaymentStatus.waiting;
   }
 
   /// Pops the payment screen after [_expiredReturnDelay] so the
@@ -295,8 +390,9 @@ class _PaymentScreenState extends State<PaymentScreen> {
                   const SizedBox(height: 24),
                   if (_state == _State.waiting && _startedAt != null)
                     _WaitingHint(
-                      waitingLabel: s.t('waiting_payment'),
-                      remaining: _remaining(),
+                      waitingLabel:
+                          _checking ? s.t('pay_checking') : s.t('waiting_payment'),
+                      remaining: _checking ? null : _remaining(),
                     )
                   else if (_state == _State.failed ||
                       _state == _State.expired)
@@ -582,10 +678,14 @@ class _QrLogo extends StatelessWidget {
 }
 
 class _WaitingHint extends StatelessWidget {
-  const _WaitingHint({required this.waitingLabel, required this.remaining});
+  const _WaitingHint({required this.waitingLabel, this.remaining});
 
   final String waitingLabel;
-  final String remaining;
+
+  /// Секунды до конца окна QR, или null — когда считать больше нечего:
+  /// в автономном микромаркете окно уже вышло, а мы ещё ждём подтверждения
+  /// от платы, и обратный отсчёт в минус пугал бы зря.
+  final String? remaining;
 
   @override
   Widget build(BuildContext context) {
@@ -611,10 +711,10 @@ class _WaitingHint extends StatelessWidget {
             ),
           ],
         ),
-        if (remaining.isNotEmpty) ...[
+        if (remaining case final left? when left.isNotEmpty) ...[
           const SizedBox(height: 6),
           Text(
-            remaining,
+            left,
             style: const TextStyle(
               fontSize: 12,
               color: AppColors.iosGray,
