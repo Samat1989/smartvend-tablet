@@ -11,6 +11,7 @@ import 'services/climate_controller.dart';
 import 'services/device_storage.dart';
 import 'services/supabase_api.dart';
 import 'services/idle_service.dart';
+import 'services/kiosk_bridge.dart';
 import 'services/media_service.dart';
 import 'services/strings.dart';
 import 'services/vending_service.dart';
@@ -26,9 +27,18 @@ Future<void> main() async {
   // Sticky immersive: hide system bars; a swipe shows them transiently and
   // they re-hide on their own. The native MainActivity also enforces this,
   // we set it here too so the very first frame already comes up clean.
+  //
+  // Except on the one boot the operator asked for in «Системные настройки →
+  // Показать навбар»: there the firmware brings both bars back and the whole
+  // point is that they stay: status bar and shade included, not just the
+  // navigation buttons. Hiding them here would undo it before the first
+  // frame, whatever the native side does afterwards.
+  final serviceBars = await KioskBridge.serviceBarsSession();
   SystemChrome.setEnabledSystemUIMode(
-    SystemUiMode.immersiveSticky,
-    overlays: [],
+    serviceBars ? SystemUiMode.manual : SystemUiMode.immersiveSticky,
+    overlays: serviceBars
+        ? const [SystemUiOverlay.top, SystemUiOverlay.bottom]
+        : const [],
   );
   final storage = DeviceStorage();
   await storage.init();

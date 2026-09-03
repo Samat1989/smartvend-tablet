@@ -33,6 +33,7 @@ import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
 import java.io.File
 import java.io.FileInputStream
+import kotlin.math.abs
 import kotlin.system.exitProcess
 
 /**
@@ -102,6 +103,22 @@ private const val ACTION_VENDOR_REBOOT =
  */
 private const val PROP_NAVBAR_DISABLED = "persist.sys.navbar.disabled"
 
+/**
+ * Where the one-session "bars are on loan" state lives across the reboot.
+ *
+ * [KEY_SERVICE_BARS_PENDING] is armed the moment the operator taps «Показать
+ * навбар», i.e. still on the boot that is about to die; the first start after
+ * the reboot trades it for a stamp of the boot it belongs to —
+ * [KEY_SERVICE_BARS_BOOT] and [KEY_SERVICE_BARS_ELAPSED], the two clocks
+ * read together. The stamp is what makes the loan survive an app restart
+ * inside the session (the board watchdog does relaunch us) while still
+ * expiring on the very next boot, which no longer matches it.
+ */
+private const val PREFS_KIOSK = "kiosk_state"
+private const val KEY_SERVICE_BARS_PENDING = "service_bars_pending"
+private const val KEY_SERVICE_BARS_BOOT = "service_bars_boot"
+private const val KEY_SERVICE_BARS_ELAPSED = "service_bars_elapsed"
+
 class MainActivity : FlutterActivity() {
 
     /**
@@ -135,6 +152,30 @@ class MainActivity : FlutterActivity() {
 
     /** Main-thread handler for the immersive ticker. */
     private val uiHandler = Handler(Looper.getMainLooper())
+
+    /**
+     * This boot is the servicing session the operator asked for: leave both
+     * system bars alone and let the shade open.
+     *
+     * The firmware properties bring the bar *windows* back on the boot after
+     * «Показать навбар» — but only the windows. Everything the app does to a
+     * running kiosk still applies on top: immersive hides both bars again,
+     * the insets listener snaps shut anything that appears, and lock task
+     * with `setLockTaskFeatures(0)` refuses the pull-down at the window
+     * manager. That is why the navigation bar used to come back and the
+     * notification shade did not — the nav bar survives as a visible strip
+     * on this ROM, the status bar loses the argument with immersive.
+     *
+     * So a returned property is only half the loan; this flag is the other
+     * half, and it turns off every one of those defences for exactly one
+     * boot. Resolved in [onCreate] from [resolveServiceBarsSession].
+     */
+    private var serviceBarsSession = false
+
+    /** Small persistent store for the one-session bar loan. */
+    private val kioskPrefs by lazy {
+        getSharedPreferences(PREFS_KIOSK, Context.MODE_PRIVATE)
+    }
 
     /**
      * When [dismissShadeIfNeeded] last fired.
@@ -296,7 +337,16 @@ class MainActivity : FlutterActivity() {
                     "rebootDevice" -> {
                         // Whole-tablet reboot: device owner first, then the
                         // RY firmware broadcast for tablets we never owned.
-                        if (rebootTablet()) {
+                        //
+                        // This is also how a servicing session ends. The
+                        // session start deliberately skips STATUSBAR_OFF —
+                        // it would kill the shade on the spot — so the
+                        // properties have to be re-armed here, or the tablet
+                        // would come back with the bars still on.
+                        if (serviceBarsSession && applyVendorBarPolicy(hidden = true)) {
+                            result.success(null)
+                            uiHandler.postDelayed({ rebootTablet() }, VENDOR_BAR_SETTLE_MS)
+                        } else if (rebootTablet()) {
                             result.success(null)
                         } else {
                             result.error(
@@ -322,6 +372,13 @@ class MainActivity : FlutterActivity() {
                                 null,
                             )
                         }
+                    }
+                    "serviceBarsSession" -> {
+                        // Flutter hides the bars too (SystemChrome in
+                        // main.dart), and it does so before the first frame,
+                        // so the native side standing aside is not enough on
+                        // its own — Dart has to know as well.
+                        result.success(serviceBarsSession)
                     }
                     "clearDeviceOwner" -> {
                         // Hand the device back. `dpm remove-active-admin`
@@ -628,6 +685,9 @@ class MainActivity : FlutterActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         instance = this
+        // Before anything reaches for the bars: is this the one boot where
+        // they belong to the operator?
+        serviceBarsSession = resolveServiceBarsSession()
         // Keep the display on while the activity is in the foreground.
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
 
@@ -638,7 +698,21 @@ class MainActivity : FlutterActivity() {
         // Re-arm the firmware's bar properties on every single start, the
         // way the factory app does. Costs one broadcast and is what makes
         // the service menu's "show nav bar" expire by itself.
-        applyVendorBarPolicy(hidden = true)
+        //
+        // Not during a servicing session, and this is the whole reason the
+        // shade used to stay dead: `persist.sys.statusbar.disabled = true`
+        // is not only read at display init. SystemUI re-reads it while the
+        // system runs and answers with STATUS_BAR_DISABLE_EXPAND — measured
+        // on the tablet as `mDisabled1=0x10000`, held by com.android.systemui.
+        // The bar window survives (so the nav bar looked like it "worked"),
+        // but the pull-down is refused. Sending STATUSBAR_OFF here therefore
+        // ended the loan a second after it began. The session re-arms the
+        // properties on its way out instead — see the rebootDevice handler.
+        if (serviceBarsSession) {
+            Log.i(TAG_KIOSK, "service session: vendor bar policy left alone")
+        } else {
+            applyVendorBarPolicy(hidden = true)
+        }
 
         // Show over keyguard / wake the screen for boot-launches.
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
@@ -647,8 +721,10 @@ class MainActivity : FlutterActivity() {
         }
 
         // Tell the framework we're drawing edge-to-edge so the system bars
-        // can be properly hidden by the WindowInsetsController below.
-        WindowCompat.setDecorFitsSystemWindows(window, false)
+        // can be properly hidden by the WindowInsetsController below. In a
+        // servicing session the bars are meant to be there, so we let the
+        // decor fit around them instead and the UI keeps clear of both.
+        WindowCompat.setDecorFitsSystemWindows(window, serviceBarsSession)
         applyImmersive()
         installInsetsRehideListener()
     }
@@ -664,6 +740,7 @@ class MainActivity : FlutterActivity() {
      * the customer to tap a back button.
      */
     private fun installInsetsRehideListener() {
+        if (serviceBarsSession) return
         val decor = window.decorView
         ViewCompat.setOnApplyWindowInsetsListener(decor) { v, insets ->
             val barsVisible = insets.isVisible(WindowInsetsCompat.Type.systemBars())
@@ -767,6 +844,82 @@ class MainActivity : FlutterActivity() {
     }
 
     /**
+     * Roughly when this boot started, in wall-clock terms.
+     *
+     * Nothing in the framework hands an app a boot id it is allowed to read,
+     * but the difference between the two clocks is stable within a boot and
+     * necessarily different across one — which is all we need to tell "the
+     * app was restarted inside the servicing session" from "the tablet has
+     * been rebooted since, the loan is over".
+     *
+     * It drifts when the clock is corrected (a tablet that boots without
+     * network starts in 1970 and jumps once NTP lands), hence the tolerance
+     * in [resolveServiceBarsSession]: a drift larger than that ends the loan
+     * early, which is the old behaviour and costs the operator one more tap.
+     */
+    private fun approximateBootTimeMs(): Long =
+        System.currentTimeMillis() - SystemClock.elapsedRealtime()
+
+    /**
+     * Arm the servicing session for the boot that [showNavBarAndReboot] is
+     * about to trigger.
+     *
+     * `commit()` rather than `apply()` on purpose — the reboot is 700 ms
+     * away and an asynchronous write can lose that race, which would bring
+     * the tablet back with the bars visible and the app hiding them again.
+     */
+    private fun armServiceBarsSession() {
+        kioskPrefs.edit().putBoolean(KEY_SERVICE_BARS_PENDING, true).commit()
+    }
+
+    /**
+     * Decide whether this start belongs to a servicing session, and keep the
+     * bookkeeping honest for the next one.
+     *
+     * Three cases, in order:
+     *  • armed and not yet claimed — this is the boot the operator asked
+     *    for. Stamp it with [approximateBootTimeMs] and take the loan.
+     *  • already stamped with this same boot — the app was restarted inside
+     *    the session (board watchdog, self-update). The loan continues.
+     *  • stamped with an older boot — the operator rebooted, which is
+     *    exactly how the loan is meant to end. Forget it.
+     */
+    private fun resolveServiceBarsSession(): Boolean {
+        val boot = approximateBootTimeMs()
+        val elapsed = SystemClock.elapsedRealtime()
+        if (kioskPrefs.getBoolean(KEY_SERVICE_BARS_PENDING, false)) {
+            kioskPrefs.edit()
+                .remove(KEY_SERVICE_BARS_PENDING)
+                .putLong(KEY_SERVICE_BARS_BOOT, boot)
+                .putLong(KEY_SERVICE_BARS_ELAPSED, elapsed)
+                .apply()
+            Log.i(TAG_KIOSK, "service bars: loan opens on this boot")
+            return true
+        }
+        if (!kioskPrefs.contains(KEY_SERVICE_BARS_BOOT)) return false
+        val stampedBoot = kioskPrefs.getLong(KEY_SERVICE_BARS_BOOT, 0L)
+        val stampedElapsed = kioskPrefs.getLong(KEY_SERVICE_BARS_ELAPSED, 0L)
+        // Two independent ways of saying "still the same boot", because
+        // either one alone has a blind spot: the clock difference drifts with
+        // NTP, and uptime only ever runs backwards across a reboot — a
+        // reboot so quick that the clocks barely moved is caught by the
+        // uptime, a long session by the clocks.
+        val sameBoot = abs(stampedBoot - boot) <= SERVICE_BARS_BOOT_TOLERANCE_MS &&
+            elapsed >= stampedElapsed
+        if (sameBoot) {
+            kioskPrefs.edit().putLong(KEY_SERVICE_BARS_ELAPSED, elapsed).apply()
+            Log.i(TAG_KIOSK, "service bars: same boot, loan still running")
+            return true
+        }
+        kioskPrefs.edit()
+            .remove(KEY_SERVICE_BARS_BOOT)
+            .remove(KEY_SERVICE_BARS_ELAPSED)
+            .apply()
+        Log.i(TAG_KIOSK, "service bars: loan expired with the reboot")
+        return false
+    }
+
+    /**
      * Reboot the tablet, best path first.
      *
      * 1. [DevicePolicyManager.reboot] — clean, synchronous, needs device owner.
@@ -814,13 +967,20 @@ class MainActivity : FlutterActivity() {
      * Hand the operator a tablet with visible system bars for one servicing
      * session, mirroring the factory app's «показать навбар» switch.
      *
-     * Sends STATUSBAR_ON (properties → false), then reboots. The bars come
-     * back on that boot; [applyVendorBarPolicy] then re-arms the properties
-     * during startup, so the *following* reboot returns the tablet to a bare
-     * kiosk with no second visit to the service menu.
+     * Sends STATUSBAR_ON (properties → false), records the servicing
+     * session, then reboots. The bars come back on that boot and the app
+     * stands aside for it — immersive, the re-hide listener and lock task
+     * all step down, so the notification shade pulls down as well, not just
+     * the navigation bar. [applyVendorBarPolicy] re-arms the properties
+     * during that same startup, so the *following* reboot returns the tablet
+     * to a bare kiosk with no second visit to the service menu.
      */
     private fun showNavBarAndReboot(): Boolean {
         if (!applyVendorBarPolicy(hidden = false)) return false
+        // The properties only give the bar windows back. Without this the
+        // app would spend the whole servicing session hiding them again —
+        // see [serviceBarsSession].
+        armServiceBarsSession()
         // The property write happens inside system_server as it handles the
         // broadcast. Rebooting in the same breath can outrun it, so let the
         // handler land before pulling the floor out.
@@ -858,6 +1018,9 @@ class MainActivity : FlutterActivity() {
      * permission prompt above all, which the board needs to work.
      */
     private fun dismissShadeIfNeeded() {
+        // The shade is the point of a servicing session; closing it here
+        // would undo the loan on the operator's first pull-down.
+        if (serviceBarsSession) return
         if (isDeviceOwner()) return
         val now = SystemClock.elapsedRealtime()
         if (now < suppressLockUntilMs) return
@@ -887,6 +1050,7 @@ class MainActivity : FlutterActivity() {
     }
 
     private fun applyImmersive() {
+        if (serviceBarsSession) return
         val controller = WindowInsetsControllerCompat(window, window.decorView)
         // Sticky immersive: bars stay hidden, swipe shows them as
         // transparent overlay that auto-hides. This is the original
@@ -903,6 +1067,29 @@ class MainActivity : FlutterActivity() {
         // catalog shows through whenever they do appear.
         window.statusBarColor = android.graphics.Color.TRANSPARENT
         window.navigationBarColor = android.graphics.Color.TRANSPARENT
+    }
+
+    /**
+     * Drop out of lock task when we are in it, naming [reason] for the log.
+     *
+     * With [pinnedOnly] this only touches PINNED — the mode a tablet without
+     * device owner falls into, which puts the navigation bar back and tells
+     * the customer how to leave. Otherwise it also releases LOCKED, which is
+     * what a servicing session needs: nothing else gives the notification
+     * shade back to the operator.
+     */
+    private fun leaveLockTaskIfActive(reason: String, pinnedOnly: Boolean = false) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) return
+        val am = getSystemService(Context.ACTIVITY_SERVICE) as? ActivityManager
+        val state = am?.lockTaskModeState ?: ActivityManager.LOCK_TASK_MODE_NONE
+        if (state == ActivityManager.LOCK_TASK_MODE_NONE) return
+        if (pinnedOnly && state != ActivityManager.LOCK_TASK_MODE_PINNED) return
+        try {
+            stopLockTask()
+            Log.i(TAG_KIOSK, "left lock task ($reason)")
+        } catch (t: Throwable) {
+            Log.w(TAG_KIOSK, "stopLockTask ($reason) failed: ${t.message}")
+        }
     }
 
     /**
@@ -930,23 +1117,21 @@ class MainActivity : FlutterActivity() {
      * should not take the app down with it.
      */
     private fun tryEnterLockTask() {
+        if (serviceBarsSession) {
+            // The whole point of the session is a tablet an operator can
+            // work on, and LOCKED with `setLockTaskFeatures(0)` refuses the
+            // pull-down at the window manager: the status bar would be back
+            // on screen and still dead to the touch. Standing down for this
+            // one boot is what finally hands the shade over — the next
+            // reboot re-locks the kiosk without anyone doing anything.
+            leaveLockTaskIfActive("service session")
+            return
+        }
         if (!isDeviceOwner()) {
             // Not owned → pinning is the only mode on offer, and it costs
             // more than it buys. If we somehow arrived here already pinned,
             // leave: the toast and the nav bar go with it.
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-                val am = getSystemService(Context.ACTIVITY_SERVICE) as? ActivityManager
-                val state = am?.lockTaskModeState
-                    ?: ActivityManager.LOCK_TASK_MODE_NONE
-                if (state == ActivityManager.LOCK_TASK_MODE_PINNED) {
-                    try {
-                        stopLockTask()
-                        Log.i(TAG_KIOSK, "left PINNED mode (no device owner)")
-                    } catch (t: Throwable) {
-                        Log.w(TAG_KIOSK, "stopLockTask (unpin) failed: ${t.message}")
-                    }
-                }
-            }
+            leaveLockTaskIfActive("no device owner", pinnedOnly = true)
             return
         }
         if (suppressLockOnce) {
@@ -1197,6 +1382,16 @@ class MainActivity : FlutterActivity() {
          * operator staring at the same bare screen they just asked to change.
          */
         private const val VENDOR_BAR_SETTLE_MS = 700L
+
+        /**
+         * How far the recorded boot moment may drift before a servicing
+         * session is treated as belonging to an earlier boot. A minute
+         * absorbs an NTP correction of the usual size; a real reboot moves
+         * it by however long the tablet was down, which is never that small
+         * — the RY firmware takes the better part of a minute just to reach
+         * the launcher.
+         */
+        private const val SERVICE_BARS_BOOT_TOLERANCE_MS = 60L * 1000L
 
         /**
          * How long the system USB-permission dialog is protected from
