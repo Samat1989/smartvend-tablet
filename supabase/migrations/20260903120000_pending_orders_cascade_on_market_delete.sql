@@ -24,8 +24,10 @@
 --   from pg_constraint
 --   where confrelid = 'public.micromarkets'::regclass;
 --
--- НЕ применено к проду на момент коммита: гнать через Supabase SQL Editor
--- или MCP, вместе с деплоем device-admin — порознь они не помогут.
+-- Applied to prod on 2026-09-04 (Supabase Management API, тем же токеном,
+-- каким ходит MCP). Аудит до применения показал ровно одну проблемную
+-- ссылку: pending_orders confdeltype='a', остальные три уже 'c'.
+-- Деплой device-admin — отдельным шагом, порознь они не помогают.
 -- ============================================================
 alter table public.pending_orders
   drop constraint if exists pending_orders_micromarket_id_fkey;
