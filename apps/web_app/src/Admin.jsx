@@ -378,6 +378,25 @@ function kindLabel(kind, t) {
   return t('badge_vending');
 }
 
+// Тот же бейдж типа, но его можно переключить — только в списке флота, где
+// действует суперадмин. Селект, а не кнопка с диалогом: значений четыре, все
+// известны заранее, и подтверждать нечего — смена типа обратима и ничего не
+// удаляет, в отличие от прежнего способа «удалить и завести заново».
+function KindSelect({ kind, t, onChange }) {
+  return (
+    <select
+      value={kind || 'vending'}
+      onChange={(e) => onChange(e.target.value)}
+      title={t('device_kind_change')}
+      className={`text-[9px] font-black uppercase tracking-wider px-2 py-1 rounded-lg border-0 cursor-pointer appearance-none ${kindTint(kind)}`}
+    >
+      {['vending', 'micromarket_tablet', 'micromarket_static', 'micromarket_screen'].map((k) => (
+        <option key={k} value={k}>{kindLabel(k, t)}</option>
+      ))}
+    </select>
+  );
+}
+
 // Открытая полка: ни моторов, ни раскладки. Инвентарь рисуется плоским
 // списком, и позиции заводит сам владелец — планшета, который создал бы их на
 // месте, у таких машин нет.
@@ -891,6 +910,31 @@ export default function Admin() {
       showToast(`${t('device_transfer_error')}: ${err.message}`, 'error');
     } finally {
       setTransferring(false);
+    }
+  }
+
+  // Сменить тип аппарата, не заводя его заново. Раньше «переехал с планшета
+  // на статический QR» стоило всей истории продаж: единственным способом было
+  // удалить машину и создать новую.
+  async function changeDeviceKind(machid, kind) {
+    try {
+      const data = await invokeAdminFn('device-admin', {
+        body: { action: 'kind', machid, kind },
+      });
+      await Promise.all([fetchAdminDevices(), fetchMarkets()]);
+      // Предупреждение о ненумерованных ячейках приходит вместе с успехом:
+      // тип сменился, но витрина screen-машины покажет не всё, и узнать об
+      // этом лучше здесь, чем со звонка с точки.
+      if (data?.warn?.code === 'cells_need_numbers') {
+        showToast(t('device_kind_cells_warn', {
+          unnumbered: data.warn.unnumbered ?? 0,
+          out: data.warn.out_of_range ?? 0,
+        }), 'error');
+      } else {
+        showToast(t('device_kind_changed'));
+      }
+    } catch (err) {
+      showToast(`${t('device_kind_error')}: ${err.message}`, 'error');
     }
   }
 
@@ -1820,6 +1864,7 @@ export default function Admin() {
               devicesLoading={devicesLoading}
               onTransfer={(m) => setTransferTarget(m)}
               onDelete={(machid) => deleteDevice(machid)}
+              onChangeKind={changeDeviceKind}
               onRename={(m) => setRenamingMarket({ ...m, viaAdmin: true })}
             />
           ) : activeTab === 'catalog' ? (
@@ -3086,11 +3131,14 @@ export default function Admin() {
             <p className="text-sm text-slate-600 mb-2">
               {deleteTarget.name || `${t('apparatus_no')}${deleteTarget.machid}`}
             </p>
-            {(deleteTarget.sales > 0 || deleteTarget.inventory > 0) && (
+            {(deleteTarget.sales > 0 ||
+              deleteTarget.inventory > 0 ||
+              deleteTarget.orders > 0) && (
               <p className="text-xs font-bold text-red-600 bg-red-50 border border-red-200 rounded-xl p-3 mb-4">
                 {t('delete_device_cascade', {
                   sales: deleteTarget.sales ?? 0,
                   inventory: deleteTarget.inventory ?? 0,
+                  orders: deleteTarget.orders ?? 0,
                 })}
               </p>
             )}
@@ -3210,6 +3258,7 @@ function UsersTab({
   devicesLoading,
   onTransfer,
   onDelete,
+  onChangeKind,
   onRename,
 }) {
   const { t, i18n } = useTranslation();
@@ -3239,17 +3288,13 @@ function UsersTab({
             Status and type move under the name on a phone. */}
         <div className="flex sm:hidden items-center gap-2 mt-1.5 flex-wrap">
           <DeviceStatusDot status={m.heartbeat} kind={m.kind} />
-          <span className={`text-[9px] font-black uppercase tracking-wider px-2 py-1 rounded-lg ${kindTint(m.kind)}`}>
-            {kindLabel(m.kind, t)}
-          </span>
+          <KindSelect kind={m.kind} t={t} onChange={(k) => onChangeKind(m.id, k)} />
           <PayChannelBadge status={m.heartbeat} />
         </div>
       </div>
       <div className="hidden sm:flex items-center gap-3 shrink-0">
         <DeviceStatusDot status={m.heartbeat} kind={m.kind} />
-        <span className={`text-[9px] font-black uppercase tracking-wider px-2 py-1 rounded-lg ${kindTint(m.kind)}`}>
-          {kindLabel(m.kind, t)}
-        </span>
+        <KindSelect kind={m.kind} t={t} onChange={(k) => onChangeKind(m.id, k)} />
         <PayChannelBadge status={m.heartbeat} />
       </div>
       <div className="flex gap-1.5 shrink-0">
