@@ -52,8 +52,8 @@ static const char *TAG = "pulse_mart";
 // bistable-relay driver would leave this board's lock line dead) and vice versa,
 // so these two constants are the only thing keeping the fleets apart. Do not
 // reuse the relay prefix/asset here.
-#define FW_VERSION_NAME    "1.0.1"
-#define FW_VERSION_CODE    10001
+#define FW_VERSION_NAME    "1.0.2"
+#define FW_VERSION_CODE    10002
 #define OTA_OWNER_REPO     "Samat1989/smartvend-tablet"
 #define OTA_TAG_PREFIX     "pulse-v"
 #define OTA_ASSET_NAME     "pulse-mart.bin"
@@ -739,12 +739,14 @@ static void gsm_provision_task(void *pv) {
     esp_wifi_stop();
     if (!gsm_start() || !net_wait_ip(60000)) {
         ESP_LOGE(TAG, "[Setup/GSM] modem/IP failed — rebooting to portal");
+        lock_close();
         vTaskDelay(pdMS_TO_TICKS(1500));
         esp_restart();
     }
     esp_netif_set_default_netif(s_ppp_netif);
     if (!provision_fetch_and_store(g_pend_machid)) {
         ESP_LOGE(TAG, "[Setup/GSM] machid lookup failed — rebooting to portal");
+        lock_close();
         vTaskDelay(pdMS_TO_TICKS(1500));
         esp_restart();
     }
@@ -754,6 +756,7 @@ static void gsm_provision_task(void *pv) {
     cfg_set("machid", g_pend_machid);
     cfg_set("opensec", osstr);
     ESP_LOGI(TAG, "[Setup/GSM] provisioned OK, rebooting");
+    lock_close();
     vTaskDelay(pdMS_TO_TICKS(800));
     esp_restart();
 }
@@ -976,6 +979,7 @@ static void portal_timeout_task(void *pv) {
         if (idle_ms >= PORTAL_TIMEOUT_MS) {
             ESP_LOGW(TAG, "[Setup] portal idle %d s — rebooting into normal mode",
                      PORTAL_TIMEOUT_MS / 1000);
+            lock_close();                     // leave service mode with IO2 parked
             vTaskDelay(pdMS_TO_TICKS(200));   // let the log line flush
             esp_restart();
         }
@@ -1226,6 +1230,7 @@ static esp_err_t send_msg(httpd_req_t *req, const char *title, const char *body)
 // mode. The firmware update check runs there (ota_boot_task), not here.
 static void provision_finish_task(void *pv) {
     vTaskDelay(pdMS_TO_TICKS(2000));
+    lock_close();                    // leave service mode with IO2 parked
     esp_restart();
 }
 
@@ -1311,6 +1316,15 @@ static esp_err_t save_post_handler(httpd_req_t *req) {
 // board short of the BOOT-button window right after power-on.
 static void start_setup_portal(bool can_time_out) {
     g_provisioning = true;   // LED task picks this up: 5 fast blinks, then solid ON
+
+    // Service mode also shows on the lock line: IO2 goes to the active level and
+    // stays there for as long as the portal is up, so the installer can work the
+    // mechanism without the cloud. Every way out of service mode is a reboot, and
+    // each of those calls [lock_close] first (and app_main parks the line closed
+    // again on the way back up), so the line returns to its normal state on exit.
+    lock_open();
+    ESP_LOGI(TAG, "[Setup] service mode — lock line IO%d held %s",
+             LOCK_GPIO, LOCK_ACTIVE_LEVEL ? "HIGH" : "LOW");
 
     // SoftAP (open) + STA (so we can validate WiFi and reach Supabase).
     esp_netif_t *ap_netif = esp_netif_create_default_wifi_ap();
