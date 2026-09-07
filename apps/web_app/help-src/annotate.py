@@ -68,12 +68,28 @@ SHOTS = {
     'tablet-board.png': (26, [
         (1, 35, 205), (2, 232, 417), (3, 40, 535), (4, 175, 758), (5, 200, 901),
     ]),
+    # Заводское приложение: у большинства шагов одна цель, её достаточно
+    # обвести рамкой. Номера только там, где целей две.
+    'delete_factory_app/password-screen.png': (16, [
+        (1, 30, 398), (2, 462, 612),
+    ]),
 }
 
 # Подсветка цели: овал вокруг элемента, по которому надо нажимать.
 # image -> [(x0, y0, x1, y1)]
 RINGS = {
     'tablet-login.png': [(296, 296, 504, 444)],
+}
+
+# То же самое прямоугольником — для строк меню, плиток и кнопок, которым овал
+# не идёт. image -> [(x0, y0, x1, y1)]
+BOXES = {
+    'delete_factory_app/main-screen.png': [(438, 10, 620, 48)],
+    'delete_factory_app/password-screen.png': [(16, 402, 612, 502), (468, 618, 612, 824)],
+    'delete_factory_app/choose_service-menu.png': [(330, 272, 444, 426)],
+    'delete_factory_app/choose_other_settings.png': [(102, 738, 212, 856)],
+    'delete_factory_app/show_navbar.png': [(243, 722, 309, 756)],
+    'delete_factory_app/delete_factory_app.png': [(468, 260, 616, 378)],
 }
 
 # Кадры админского раздела сняты на живом аккаунте: почты владельцев и выданные
@@ -98,6 +114,14 @@ def pixelate(img, box, block=12):
     img.paste(small.resize(crop.size, Image.NEAREST), (x0, y0))
 
 
+def rect(draw, box):
+    x0, y0, x1, y1 = box
+    r = 12
+    draw.rounded_rectangle((x0 - 4, y0 - 4, x1 + 4, y1 + 4), radius=r + 4,
+                           outline=BADGE_RING, width=9)
+    draw.rounded_rectangle(box, radius=r, outline=BADGE_FILL, width=4)
+
+
 def ring(draw, box):
     x0, y0, x1, y1 = box
     draw.ellipse((x0 - 4, y0 - 4, x1 + 4, y1 + 4), outline=BADGE_RING, width=10)
@@ -113,7 +137,11 @@ def badge(draw, n, x, y, r, font):
 
 
 def main():
-    for raw_name, (r, marks) in SHOTS.items():
+    marked = dict(SHOTS)
+    for name in list(RINGS) + list(BOXES):
+        marked.setdefault(name, (26, []))
+
+    for raw_name, (r, marks) in marked.items():
         src_name = next((k for k, v in RENAMES.items() if v == raw_name), raw_name)
         src = RAW / src_name
         if not src.exists():
@@ -126,18 +154,26 @@ def main():
         d = ImageDraw.Draw(img)
         for box in RINGS.get(raw_name, []):
             ring(d, box)
+        for box in BOXES.get(raw_name, []):
+            rect(d, box)
         for n, x, y in marks:
             badge(d, n, x, y, r, font)
-        img.save(OUT / raw_name, optimize=True)
-        print(f'{raw_name:32s} {len(marks)} выносок')
+        out = OUT / raw_name
+        out.parent.mkdir(parents=True, exist_ok=True)
+        img.save(out, optimize=True)
+        boxes = len(RINGS.get(raw_name, [])) + len(BOXES.get(raw_name, []))
+        print(f'{raw_name:42s} выносок: {len(marks)}, рамок: {boxes}')
 
-    # кадры без выносок просто копируются из исходников
-    for src in sorted(RAW.glob('*.png')):
-        name = RENAMES.get(src.name, src.name)
-        if name in SHOTS:
+    # кадры без разметки просто копируются из исходников
+    for src in sorted(RAW.rglob('*.png')):
+        rel = src.relative_to(RAW).as_posix()
+        name = RENAMES.get(rel, rel)
+        if name in marked:
             continue
-        Image.open(src).convert('RGB').save(OUT / name, optimize=True)
-        print(f'{name:32s} без выносок')
+        out = OUT / name
+        out.parent.mkdir(parents=True, exist_ok=True)
+        Image.open(src).convert('RGB').save(out, optimize=True)
+        print(f'{name:42s} без разметки')
 
 
 if __name__ == '__main__':
