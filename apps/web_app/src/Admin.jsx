@@ -180,6 +180,104 @@ function QrModal({ market, onClose }) {
   );
 }
 
+// Service unlock for refilling: pick a duration, send the request, report back.
+//
+// The wording of the result matters more than it looks. The panel CANNOT know
+// the door opened — there is no channel back from the board, only the nudge
+// going out — so it says "request sent", never "opened". The same restraint is
+// already in the tablet: BoardClient.openLock returns false rather than fake a
+// success it can't observe (apps/tablet/lib/board/board_client.dart).
+//
+// `nudge: false` from the function means the permission was stored but the
+// broker push didn't land — almost always a machine that is offline. That is a
+// materially different situation for someone standing at the fridge, so it gets
+// its own message instead of a cheerful green tick.
+function ServiceOpenModal({ market, onSubmit, onClose }) {
+  const { t } = useTranslation();
+  const [seconds, setSeconds] = useState(180);
+  const [busy, setBusy] = useState(false);
+  const [result, setResult] = useState(null);
+
+  const CHOICES = [
+    { value: 60, label: t('service_open_minutes_1') },
+    { value: 180, label: t('service_open_minutes_3') },
+    { value: 300, label: t('service_open_minutes_5') },
+  ];
+
+  async function submit() {
+    setBusy(true);
+    setResult(null);
+    try {
+      const data = await onSubmit(market.id, seconds);
+      setResult({ ok: true, nudge: data?.nudge !== false });
+    } catch (e) {
+      setResult({ error: (e && e.message) || String(e) });
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 z-[60] bg-black/50 flex items-center justify-center p-4" onClick={onClose}>
+      <div className="bg-white rounded-3xl p-6 w-full max-w-sm shadow-2xl" onClick={(e) => e.stopPropagation()}>
+        <div className="flex items-center justify-between mb-4">
+          <h3 className="text-lg font-black text-slate-900">{t('service_open_title')}</h3>
+          <button onClick={onClose} className="p-2 text-slate-400 hover:text-slate-700 rounded-lg"><X size={20} /></button>
+        </div>
+
+        <div className="font-bold text-slate-900">{market.name || `${t('apparatus_no')}${market.id}`}</div>
+        <div className="text-[11px] font-bold text-slate-500 uppercase tracking-widest">{t('apparatus_no')}{market.id}</div>
+        <p className="mt-3 text-xs text-slate-500 leading-relaxed">{t('service_open_desc')}</p>
+
+        <div className="mt-5">
+          <div className="text-[11px] font-bold text-slate-500 uppercase tracking-widest mb-2">{t('service_open_duration')}</div>
+          <div className="grid grid-cols-3 gap-2">
+            {CHOICES.map((c) => (
+              <button
+                key={c.value}
+                onClick={() => setSeconds(c.value)}
+                disabled={busy}
+                className={`py-2.5 rounded-xl font-bold text-sm border transition-all ${
+                  seconds === c.value
+                    ? 'bg-slate-900 text-white border-slate-900'
+                    : 'bg-white text-slate-700 border-slate-300 hover:bg-slate-100'
+                }`}
+              >
+                {c.label}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {result?.ok && (
+          <div className={`mt-5 rounded-xl px-3 py-3 text-xs font-bold leading-relaxed ${
+            result.nudge
+              ? 'bg-emerald-50 border border-emerald-200 text-emerald-800'
+              : 'bg-amber-50 border border-amber-200 text-amber-800'
+          }`}>
+            {result.nudge ? t('service_open_sent') : t('service_open_sent_offline')}
+          </div>
+        )}
+        {result?.error && (
+          <div className="mt-5 rounded-xl px-3 py-3 bg-rose-50 border border-rose-200 text-rose-700 text-xs font-bold break-words">
+            {t('service_open_failed')}: {result.error}
+          </div>
+        )}
+
+        <button
+          onClick={result?.ok ? onClose : submit}
+          disabled={busy}
+          className="mt-5 w-full flex items-center justify-center gap-2 bg-slate-900 text-white py-3 rounded-xl font-bold hover:bg-slate-700 transition-all disabled:bg-slate-300 disabled:cursor-wait"
+        >
+          {busy ? (<><Loader2 size={18} className="animate-spin" /> {t('service_open_sending')}</>)
+            : result?.ok ? t('service_open_done')
+            : (<><KeyRound size={18} /> {t('service_open_submit')}</>)}
+        </button>
+      </div>
+    </div>
+  );
+}
+
 // Map an M102 poll result byte → i18n key. The codes are emitted by the
 // vending tablet's `BoardClient.dispense` and persisted to
 // `sales_items.result_code` (see m102_tester migration
@@ -567,6 +665,7 @@ export default function Admin() {
   const [selectedSalesMarket, setSelectedSalesMarket] = useState('all');
   const [expandedSaleId, setExpandedSaleId] = useState(null); // which sale's items are shown
   const [qrModalMarket, setQrModalMarket] = useState(null); // machine whose QR modal is open
+  const [serviceOpenMarket, setServiceOpenMarket] = useState(null); // machine whose service-unlock dialog is open
 
   // Catalog tab — products table (SKU catalog, owner-scoped).
   // Separate from inventory: products are reusable across micromarkets
@@ -796,6 +895,14 @@ export default function Admin() {
       throw err;
     }
     return data;
+  }
+
+  // Ask the backend to authorise a payment-free unlock for refilling. Returns
+  // { ok, seconds, nudge }; `nudge:false` means the permission was stored but
+  // the board couldn't be woken (offline), which the dialog reports honestly
+  // rather than dressing up as success.
+  async function requestServiceOpen(machid, seconds) {
+    return await invokeAdminFn('service-open-request', { body: { machid, seconds } });
   }
 
   async function fetchUsers() {
@@ -1781,43 +1888,43 @@ export default function Admin() {
   return (
     <div className="min-h-screen bg-slate-200 text-slate-900 p-3 md:p-6 font-lexend">
       <header className="flex justify-between items-center mb-4 sm:mb-6 bg-white p-3 sm:p-4 rounded-2xl shadow-md border border-slate-300 flex-wrap gap-3 sm:gap-4">
-        <div className="flex items-center gap-4 flex-1 min-w-[280px]">
+        <div className="flex flex-wrap items-center gap-3 sm:gap-4 flex-1 min-w-0">
           <div className="flex flex-col">
             <h1 className="text-lg sm:text-xl font-black text-slate-900 tracking-tight">Micromart</h1>
             <span className="text-[9px] sm:text-[10px] font-bold text-slate-500 uppercase tracking-widest">{t('admin_panel')}</span>
           </div>
           <div className="h-10 w-[1px] bg-slate-300 hidden sm:block"></div>
-          <div className="flex bg-slate-200 p-1 rounded-xl border border-slate-300 w-full sm:w-auto">
+          <div className="flex bg-slate-200 p-1 rounded-xl border border-slate-300 w-full sm:w-auto overflow-x-auto no-scrollbar">
             {/* Administration first — it's the superadmin's landing tab. */}
             {isSuperadmin && (
               <button
                 onClick={() => setActiveTab('users')}
-                className={`flex-1 sm:flex-none px-2.5 sm:px-4 py-2 sm:py-1.5 rounded-lg font-bold transition-all text-xs ${activeTab === 'users' ? 'bg-white text-primary shadow-md' : 'text-slate-600 hover:text-slate-900'}`}
+                className={`flex-1 sm:flex-none shrink-0 whitespace-nowrap px-2.5 sm:px-4 py-2 sm:py-1.5 rounded-lg font-bold transition-all text-xs ${activeTab === 'users' ? 'bg-white text-primary shadow-md' : 'text-slate-600 hover:text-slate-900'}`}
               >
                 {t('tab_users')}
               </button>
             )}
             <button
               onClick={() => setActiveTab('sales')}
-              className={`flex-1 sm:flex-none px-2.5 sm:px-4 py-2 sm:py-1.5 rounded-lg font-bold transition-all text-xs ${activeTab === 'sales' ? 'bg-white text-primary shadow-md' : 'text-slate-600 hover:text-slate-900'}`}
+              className={`flex-1 sm:flex-none shrink-0 whitespace-nowrap px-2.5 sm:px-4 py-2 sm:py-1.5 rounded-lg font-bold transition-all text-xs ${activeTab === 'sales' ? 'bg-white text-primary shadow-md' : 'text-slate-600 hover:text-slate-900'}`}
             >
               {t('sales')}
             </button>
             <button
               onClick={() => { closeMarket(); setActiveTab('inventory'); }}
-              className={`flex-1 sm:flex-none px-2.5 sm:px-4 py-2 sm:py-1.5 rounded-lg font-bold transition-all text-xs ${activeTab === 'inventory' ? 'bg-white text-primary shadow-md' : 'text-slate-600 hover:text-slate-900'}`}
+              className={`flex-1 sm:flex-none shrink-0 whitespace-nowrap px-2.5 sm:px-4 py-2 sm:py-1.5 rounded-lg font-bold transition-all text-xs ${activeTab === 'inventory' ? 'bg-white text-primary shadow-md' : 'text-slate-600 hover:text-slate-900'}`}
             >
               {t('devices')}
             </button>
             <button
               onClick={() => setActiveTab('catalog')}
-              className={`flex-1 sm:flex-none px-2.5 sm:px-4 py-2 sm:py-1.5 rounded-lg font-bold transition-all text-xs ${activeTab === 'catalog' ? 'bg-white text-primary shadow-md' : 'text-slate-600 hover:text-slate-900'}`}
+              className={`flex-1 sm:flex-none shrink-0 whitespace-nowrap px-2.5 sm:px-4 py-2 sm:py-1.5 rounded-lg font-bold transition-all text-xs ${activeTab === 'catalog' ? 'bg-white text-primary shadow-md' : 'text-slate-600 hover:text-slate-900'}`}
             >
               {t('tab_catalog')}
             </button>
           </div>
         </div>
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-2 sm:gap-3 min-w-0 ml-auto">
           <a
             href="/help"
             title={t('help_link')}
@@ -1834,7 +1941,7 @@ export default function Admin() {
               Inventory tab has its own machine list to drill into. */}
           {session?.user?.email && (
             <span
-              className="text-[11px] font-medium text-slate-400 max-w-[180px] truncate"
+              className="hidden sm:block text-[11px] font-medium text-slate-400 min-w-0 max-w-[180px] truncate"
               title={session.user.email}
             >
               {session.user.email}
@@ -1842,7 +1949,7 @@ export default function Admin() {
           )}
           <button
             onClick={() => supabase.auth.signOut()}
-            className="text-xs font-bold text-on-surface-variant hover:text-red-500 transition-colors ml-4"
+            className="text-xs font-bold text-on-surface-variant hover:text-red-500 transition-colors shrink-0 ml-1 sm:ml-4"
           >
             {t('logout')}
           </button>
@@ -1988,11 +2095,11 @@ export default function Admin() {
                   <h2 className="text-2xl font-black text-slate-900">{t('inventory')}</h2>
                   <p className="text-[11px] font-bold text-slate-500 uppercase tracking-widest">{t('apparatus_no')}{selectedMarketId}</p>
                 </div>
-                <div className="flex gap-2 w-full sm:w-auto items-center">
+                <div className="flex flex-wrap gap-2 w-full sm:w-auto items-center">
                   {isOpenShelf && (
                     <button
                       onClick={addStaticProduct}
-                      className="flex-1 sm:flex-none flex items-center justify-center gap-2 bg-primary text-white px-4 py-2.5 rounded-xl font-bold hover:opacity-90 transition-all text-sm"
+                      className="flex-1 sm:flex-none whitespace-nowrap flex items-center justify-center gap-2 bg-primary text-white px-4 py-2.5 rounded-xl font-bold hover:opacity-90 transition-all text-sm"
                     >
                       <Plus size={16} /> {t('add')}
                     </button>
@@ -2000,14 +2107,23 @@ export default function Admin() {
                   {isStaticMarket && (
                     <button
                       onClick={() => setQrModalMarket(markets.find(m => String(m.id) === String(selectedMarketId)) || { id: selectedMarketId })}
-                      className="flex-1 sm:flex-none flex items-center justify-center gap-2 bg-slate-900 text-white px-4 py-2.5 rounded-xl font-bold hover:bg-slate-700 transition-all text-sm"
+                      className="flex-1 sm:flex-none whitespace-nowrap flex items-center justify-center gap-2 bg-slate-900 text-white px-4 py-2.5 rounded-xl font-bold hover:bg-slate-700 transition-all text-sm"
                     >
                       <QrCode size={16} /> QR
                     </button>
                   )}
+                  {isStaticMarket && (
+                    <button
+                      onClick={() => setServiceOpenMarket(markets.find(m => String(m.id) === String(selectedMarketId)) || { id: selectedMarketId })}
+                      title={t('service_open_title')}
+                      className="flex-1 sm:flex-none whitespace-nowrap flex items-center justify-center gap-2 bg-white text-slate-700 border border-slate-300 px-4 py-2.5 rounded-xl font-bold hover:bg-slate-100 transition-all text-sm"
+                    >
+                      <KeyRound size={16} /> <span className="hidden sm:inline">{t('service_open')}</span>
+                    </button>
+                  )}
                   <button
                     onClick={() => setShowCategoryManager(true)}
-                    className="flex-1 sm:flex-none flex items-center justify-center gap-2 bg-slate-200 text-slate-700 border border-slate-300 px-4 py-2.5 rounded-xl font-bold hover:bg-slate-300 transition-all text-sm"
+                    className="flex-1 sm:flex-none whitespace-nowrap flex items-center justify-center gap-2 bg-slate-200 text-slate-700 border border-slate-300 px-4 py-2.5 rounded-xl font-bold hover:bg-slate-300 transition-all text-sm"
                   >
                     {t('categories')}
                   </button>
@@ -2091,7 +2207,7 @@ export default function Admin() {
                 </div>
                 <div className="flex flex-wrap items-center gap-2 w-full sm:w-auto">
                   <select 
-                    className="flex-1 sm:flex-none p-2 rounded-xl border border-slate-200 bg-slate-50 text-xs font-bold outline-none"
+                    className="w-full sm:w-auto p-2 rounded-xl border border-slate-200 bg-slate-50 text-xs font-bold outline-none"
                     value={selectedSalesMarket}
                     onChange={(e) => setSelectedSalesMarket(e.target.value)}
                   >
@@ -2101,7 +2217,7 @@ export default function Admin() {
                     ))}
                   </select>
 
-                  <div className="flex-1 sm:flex-none bg-slate-100 p-1 rounded-xl flex gap-1">
+                  <div className="w-full sm:w-auto bg-slate-100 p-1 rounded-xl flex flex-wrap gap-1">
                     {[
                       { id: 'recent', label: t('recent') },
                       { id: 'day', label: t('today') },
@@ -2112,7 +2228,7 @@ export default function Admin() {
                       <button
                         key={f.id}
                         onClick={() => setTimeFilter(f.id)}
-                        className={`flex-1 sm:flex-none px-3 py-1.5 rounded-lg text-[10px] font-black uppercase tracking-wider transition-all ${timeFilter === f.id ? 'bg-white text-primary shadow-sm' : 'text-slate-400 hover:text-slate-600'}`}
+                        className={`flex-1 sm:flex-none min-w-[62px] whitespace-nowrap px-3 py-1.5 rounded-lg text-[10px] font-black uppercase tracking-wider transition-all ${timeFilter === f.id ? 'bg-white text-primary shadow-sm' : 'text-slate-400 hover:text-slate-600'}`}
                       >
                         {f.label}
                       </button>
@@ -2494,6 +2610,14 @@ export default function Admin() {
             </button>
           </div>
         </div>
+      )}
+
+      {serviceOpenMarket && (
+        <ServiceOpenModal
+          market={serviceOpenMarket}
+          onSubmit={requestServiceOpen}
+          onClose={() => setServiceOpenMarket(null)}
+        />
       )}
 
       {qrModalMarket && (
@@ -3326,12 +3450,12 @@ function UsersTab({
 
   return (
     <div>
-      <div className="flex justify-between items-start gap-3 mb-6">
+      <div className="flex flex-col sm:flex-row sm:justify-between sm:items-center gap-3 mb-6">
         <div>
           <h2 className="text-2xl font-black text-slate-900 mb-1">{t('users_section')}</h2>
           <p className="text-[11px] font-bold text-slate-500 uppercase tracking-widest">{t('users_subtitle')}</p>
         </div>
-        <div className="flex gap-2 shrink-0 flex-wrap justify-end">
+        <div className="flex gap-2 flex-wrap w-full sm:w-auto sm:justify-end">
           <button
             onClick={onRefresh}
             disabled={loading}
@@ -3341,7 +3465,7 @@ function UsersTab({
           </button>
           <button
             onClick={onCreate}
-            className="bg-primary text-white px-4 py-2.5 rounded-xl font-bold text-sm shadow-lg shadow-primary/20 flex items-center gap-2 active:scale-95 transition-all"
+            className="flex-1 sm:flex-none whitespace-nowrap bg-primary text-white px-4 py-2.5 rounded-xl font-bold text-sm shadow-lg shadow-primary/20 flex items-center justify-center gap-2 active:scale-95 transition-all"
           >
             <Plus size={16} /> {t('new_user')}
           </button>
@@ -3349,7 +3473,7 @@ function UsersTab({
               next to account creation rather than on the owner-facing tab. */}
           <button
             onClick={onAddDevice}
-            className="bg-slate-900 text-white px-4 py-2.5 rounded-xl font-bold text-sm shadow-lg shadow-slate-900/20 flex items-center gap-2 active:scale-95 transition-all"
+            className="flex-1 sm:flex-none whitespace-nowrap bg-slate-900 text-white px-4 py-2.5 rounded-xl font-bold text-sm shadow-lg shadow-slate-900/20 flex items-center justify-center gap-2 active:scale-95 transition-all"
           >
             <Plus size={16} /> {t('add_device')}
           </button>

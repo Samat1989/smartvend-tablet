@@ -136,8 +136,8 @@ export default function Help() {
 
   return (
     <div className="help-root min-h-screen bg-surface-container-lowest text-slate-800">
-      <header className="help-chrome sticky top-0 z-30 border-b border-slate-200 bg-white/90 backdrop-blur">
-        <div className="mx-auto flex max-w-6xl items-center gap-3 px-4 py-3">
+      <header className="help-chrome z-30 border-b border-slate-200 bg-white/90 backdrop-blur sm:sticky sm:top-0">
+        <div className="mx-auto flex max-w-6xl flex-wrap items-center gap-x-3 gap-y-2 px-4 py-3">
           <a
             href="/admin"
             className="flex items-center gap-1.5 text-xs font-bold text-slate-500 hover:text-primary transition-colors"
@@ -145,11 +145,13 @@ export default function Help() {
             <ArrowLeft size={16} />
             <span className="hidden sm:inline">{ui.toPanel}</span>
           </a>
-          <h1 className="flex-1 truncate font-lexend text-base font-black text-primary sm:text-lg">
+          <h1 className="min-w-0 flex-1 truncate font-lexend text-base font-black text-primary sm:text-lg">
             {ui.title}
           </h1>
-          <div className="flex items-center gap-1">
-            <Languages size={16} className="text-slate-400" />
+          {/* На телефоне вся правая группа — языки, вход и печать — уезжает
+              одной строкой под заголовок: иначе название ужимается до «Mi…». */}
+          <div className="flex w-full items-center justify-end gap-1 sm:w-auto">
+            <Languages size={16} className="shrink-0 text-slate-400" />
             {LANGS.map(l => (
               <button
                 key={l.code}
@@ -162,23 +164,36 @@ export default function Help() {
                 {l.label}
               </button>
             ))}
+            <a
+              href={panelUrl()}
+              className="ml-1 flex shrink-0 items-center gap-1.5 rounded-xl border border-slate-200 px-3 py-2 text-[11px] font-black text-slate-600 transition-all hover:border-primary hover:text-primary"
+            >
+              <LogIn size={14} />
+              <span className="hidden sm:inline">{ui.toPanelShort}</span>
+            </a>
+            <button
+              onClick={() => window.print()}
+              className="ml-1 flex shrink-0 items-center gap-1.5 rounded-xl bg-primary px-3 py-2 text-[11px] font-black text-white transition-all active:scale-95"
+            >
+              <Printer size={14} />
+              <span className="hidden sm:inline">{ui.pdf}</span>
+            </button>
           </div>
-          <a
-            href={panelUrl()}
-            className="ml-1 flex items-center gap-1.5 rounded-xl border border-slate-200 px-3 py-2 text-[11px] font-black text-slate-600 transition-all hover:border-primary hover:text-primary"
-          >
-            <LogIn size={14} />
-            <span className="hidden sm:inline">{ui.toPanelShort}</span>
-          </a>
-          <button
-            onClick={() => window.print()}
-            className="ml-1 flex items-center gap-1.5 rounded-xl bg-primary px-3 py-2 text-[11px] font-black text-white transition-all active:scale-95"
-          >
-            <Printer size={14} />
-            <span className="hidden sm:inline">{ui.pdf}</span>
-          </button>
         </div>
       </header>
+
+      <div className="help-chrome mx-auto max-w-6xl px-4 pt-4 lg:hidden">
+        <select
+          value=""
+          onChange={e => { if (e.target.value) window.location.hash = e.target.value; }}
+          className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-bold text-slate-700 outline-none"
+        >
+          <option value="">— {ui.contents} —</option>
+          {chapters.map(ch => (
+            <option key={ch.id} value={ch.id}>{ch.title[lang] || ch.title.ru}</option>
+          ))}
+        </select>
+      </div>
 
       <div className="mx-auto flex max-w-6xl gap-8 px-4 py-6">
         <nav className="help-chrome hidden w-64 shrink-0 lg:block">
@@ -249,7 +264,7 @@ export default function Help() {
               <div className="text-[11px] font-black uppercase tracking-wide text-slate-400">
                 {ui.panelCard}
               </div>
-              <div className="mt-0.5 break-all font-lexend text-base font-black text-primary">
+              <div className="mt-0.5 break-all font-lexend text-sm font-black text-primary sm:text-base">
                 {panelUrl()}
               </div>
               <div className="mt-1 text-[12px] leading-5 text-slate-500">{ui.panelHint}</div>

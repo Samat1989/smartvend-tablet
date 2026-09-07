@@ -104,17 +104,17 @@ export function makeComponents(chapterId) {
     ),
     table: ({ children }) => (
       <div className="help-table my-4 overflow-x-auto rounded-2xl border border-slate-200">
-        <table className="w-full text-sm border-collapse">{children}</table>
+        <table className="w-full border-collapse text-[13px] sm:text-sm">{children}</table>
       </div>
     ),
     thead: ({ children }) => <thead className="bg-slate-50">{children}</thead>,
     th: ({ children }) => (
-      <th className="border-b border-slate-200 px-3 py-2 text-left text-xs font-black uppercase tracking-wide text-slate-500">
+      <th className="border-b border-slate-200 px-2 py-2 text-left text-[11px] font-black uppercase tracking-wide text-slate-500 sm:px-3 sm:text-xs">
         {children}
       </th>
     ),
     td: ({ children }) => (
-      <td className="border-b border-slate-100 px-3 py-2 align-top text-slate-700">{children}</td>
+      <td className="border-b border-slate-100 px-2 py-2 align-top text-slate-700 sm:px-3">{children}</td>
     ),
     hr: () => <hr className="my-8 border-slate-200" />,
     img: HelpImage,
