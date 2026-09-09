@@ -39,6 +39,48 @@ static const char *TAG = "pulse_mart";
 #define MQTT_HOST      "mqtt.smartvend.kz"
 #define MQTT_PORT      14003
 
+// --- Service-open broker (ours, unlike MQTT_HOST above) ---
+// Second MQTT connection, used for ONE thing: waking the board when the owner
+// presses «Открыть на обслуживание» in the panel. Separate from the payment
+// broker on purpose — that one belongs to SmartVend, carries money events and
+// is not ours to publish into.
+//
+// The message is a doorbell, not a command: it carries no authority. On receipt
+// the board asks Supabase (service-open) whether a permission actually exists,
+// and opens the lock ONLY on 2xx — the same invariant the payment path lives by.
+// That is why one shared read-only credential for the whole fleet is enough:
+// overhearing another machine's topic buys nothing.
+//
+// Keepalive is 120 s rather than the payment link's 30: this connection carries
+// no money and most boards are on metered GSM, where a 2-byte ping every 30 s is
+// most of the traffic they spend. Leave SVC_MQTT_HOST empty to build a firmware
+// with service opens disabled.
+// The host is not a secret and stays here. The credential is, and does NOT:
+// this repository is public (OTA pulls GitHub Releases with no token, so it has
+// to be), and the free HiveMQ tier caps the whole account at 100 connections —
+// a published password lets anyone occupy them and push the real fleet off the
+// service channel. It lives in svc_secrets.h, which is gitignored; copy
+// svc_secrets.h.example over and fill it in.
+#define SVC_MQTT_HOST  "55e988bf88a449f3a2dd612bd472230e.s1.eu.hivemq.cloud"
+#define SVC_MQTT_PORT  8883               // MQTT over TLS
+#define SVC_KEEPALIVE  120
+
+#if defined(__has_include)
+#  if __has_include("svc_secrets.h")
+#    include "svc_secrets.h"
+#  endif
+#endif
+#ifndef SVC_MQTT_USER
+// A fresh clone builds and runs exactly as before, just without service opens
+// (svc_mqtt_start bails on the empty user). The #warning is deliberate: this
+// firmware is cut by release_fw.py on a developer machine, and a release that
+// silently shipped the feature disabled would look identical to one that works
+// until somebody stands at a fridge pressing a button that does nothing.
+#  warning "svc_secrets.h missing — service open disabled in this build (see svc_secrets.h.example)"
+#  define SVC_MQTT_USER  ""
+#  define SVC_MQTT_PASS  ""
+#endif
+
 #define SUPABASE_BASE      "https://cgvfhtvdtdjsyluhlcbq.supabase.co/functions/v1"
 #define SUPABASE_ANON_KEY  "sb_publishable_84RnaNCrFwxKicybxLGL2w_StEYpHnD"
 
@@ -118,10 +160,32 @@ static char g_machid[16]      = {0};
 static char g_mqtt_uuid[48]   = {0};   // MQTT username / client_id
 static char g_mqtt_secret[40] = {0};   // MQTT password
 static char g_mqtt_topic[80]  = {0};   // vending/<uuid>/in
+static char g_svc_topic[48]   = {0};   // svc/<machid>/in
 
 static bool g_provisioning = false;
 static bool is_lock_active = false;
 static char last_order_id[64] = {0};
+
+// Claim on the lock, shared by the two things that can open it.
+//
+// Until the service-open channel existed, `is_lock_active` was read and written
+// from a single MQTT task, and the code said so: "the MQTT task is serial, so
+// this is atomic". A second MQTT client means a second task, and that sentence
+// stopped being true — a payment and a service open landing together could both
+// see the flag clear and both drive the lock line. The window is microseconds
+// and the outcome is mild, but it is a race we would be introducing knowingly.
+//
+// Take the claim through lock_slot_take() and release it by clearing the flag
+// in the task that took it (as both open-tasks already do).
+static portMUX_TYPE s_lock_slot_mux = portMUX_INITIALIZER_UNLOCKED;
+
+static bool lock_slot_take(void) {
+    bool taken = false;
+    taskENTER_CRITICAL(&s_lock_slot_mux);
+    if (!is_lock_active) { is_lock_active = true; taken = true; }
+    taskEXIT_CRITICAL(&s_lock_slot_mux);
+    return taken;
+}
 
 // Live connection state for the diagnostic LED. The LED task derives the blink
 // pattern from these flags every cycle, so it always reflects the ACTUAL state
@@ -184,6 +248,9 @@ static bool cfg_load(void) {
     if (g_mqtt_uuid[0] == 0 || g_mqtt_secret[0] == 0) return false;
     if (!gsm && g_wifi_ssid[0] == 0) return false;   // WiFi mode needs an SSID
     snprintf(g_mqtt_topic, sizeof(g_mqtt_topic), "vending/%s/in", g_mqtt_uuid);
+    // Keyed by machid, not uuid: the panel knows machines by machid, and the
+    // backend would otherwise have to resolve uuid on every button press.
+    snprintf(g_svc_topic, sizeof(g_svc_topic), "svc/%s/in", g_machid);
     return true;
 }
 
@@ -235,6 +302,74 @@ static esp_err_t post_order_once(const char* orderid) {
     } else {
         ESP_LOGE(TAG, "HTTP POST request failed: %s", esp_err_to_name(err));
     }
+    esp_http_client_cleanup(client);
+    return (err == ESP_OK && status >= 200 && status < 300) ? ESP_OK : ESP_FAIL;
+}
+
+// ============================ service-open confirm ============================
+// Ask the backend whether a service open is actually authorised for this
+// machine. Same contract as post_order_once — 2xx means open, anything else
+// means keep the lock shut — with one addition: the reply carries how long to
+// hold the door, because refilling a fridge is a matter of minutes while the
+// buyer's window is seconds.
+//
+// Hence the open/write/read dance instead of esp_http_client_perform(): the
+// order path only ever needed the status code, this one needs the body too.
+// [out_seconds] is left untouched unless the server named a sane value, so the
+// caller's default survives a truncated or unparsable reply.
+static esp_err_t post_service_open_once(int *out_seconds) {
+    char url[96];
+    snprintf(url, sizeof(url), "%s/service-open", SUPABASE_BASE);
+    char post_data[192];
+    // machid as a string: an unprovisioned board would otherwise emit
+    // {"machid":} — malformed JSON the server can only answer with 400, which
+    // hides the real problem. As a string it arrives as "" and reads as bad input.
+    snprintf(post_data, sizeof(post_data),
+             "{\"machid\":\"%s\",\"uuid\":\"%s\",\"secret\":\"%s\"}",
+             g_machid, g_mqtt_uuid, g_mqtt_secret);
+
+    esp_http_client_config_t config = {
+        .url = url,
+        .method = HTTP_METHOD_POST,
+        .crt_bundle_attach = esp_crt_bundle_attach,
+        .timeout_ms = 15000,
+    };
+    esp_http_client_handle_t client = esp_http_client_init(&config);
+    esp_http_client_set_header(client, "Content-Type", "application/json");
+    esp_http_client_set_header(client, "apikey", SUPABASE_ANON_KEY);
+    esp_http_client_set_header(client, "Authorization", "Bearer " SUPABASE_ANON_KEY);
+
+    int status = 0;
+    esp_err_t err = esp_http_client_open(client, strlen(post_data));
+    if (err == ESP_OK) {
+        if (esp_http_client_write(client, post_data, strlen(post_data)) < 0) err = ESP_FAIL;
+    }
+    if (err == ESP_OK) {
+        if (esp_http_client_fetch_headers(client) < 0) err = ESP_FAIL;
+    }
+    if (err == ESP_OK) {
+        status = esp_http_client_get_status_code(client);
+        char body[192] = {0};
+        int rd = esp_http_client_read_response(client, body, sizeof(body) - 1);
+        if (rd > 0 && status >= 200 && status < 300) {
+            cJSON *j = cJSON_ParseWithLength(body, rd);
+            if (j) {
+                cJSON *s = cJSON_GetObjectItem(j, "seconds");
+                // Clamp mirrors the CHECK on service_opens.seconds. A board that
+                // trusts this number blindly would hold a door open for as long
+                // as a bad row says to.
+                if (s && cJSON_IsNumber(s) && s->valueint >= 10 && s->valueint <= 600) {
+                    *out_seconds = s->valueint;
+                }
+                cJSON_Delete(j);
+            }
+        }
+        ESP_LOGI(TAG, "[svc] service-open HTTP %d (hold %d s)", status, *out_seconds);
+    } else {
+        ESP_LOGE(TAG, "[svc] service-open request failed: %s", esp_err_to_name(err));
+    }
+
+    esp_http_client_close(client);
     esp_http_client_cleanup(client);
     return (err == ESP_OK && status >= 200 && status < 300) ? ESP_OK : ESP_FAIL;
 }
@@ -298,6 +433,43 @@ static void handle_order_task(void *pvParameters) {
 
     is_lock_active = false;
     free(orderid);
+    vTaskDelete(NULL);
+}
+
+// Service open (refilling, maintenance) — the payment-free sibling of
+// handle_order_task, and deliberately its mirror image: confirm with the server
+// FIRST, open ONLY on 2xx, leave the lock shut on any doubt.
+//
+// Two differences from the order path, both intentional:
+//   * nothing is written to NVS. `last_order` is the payment path's replay
+//     guard; a service open is not an order and must not overwrite it, or the
+//     next redelivery of that order would be treated as already handled.
+//   * no local dedup at all. Protection against a duplicated MQTT nudge lives
+//     server-side in claim_service_open, which hands out a permission once —
+//     the second nudge gets a 404 and this task keeps the lock closed.
+static void handle_service_open_task(void *pv) {
+    (void)pv;
+    int seconds = g_open_seconds;   // fallback if the reply carries no duration
+    bool granted = false;
+
+    for (int attempt = 1; attempt <= 3; attempt++) {
+        if (post_service_open_once(&seconds) == ESP_OK) { granted = true; break; }
+        ESP_LOGW(TAG, "[svc] service-open attempt %d failed (no 2xx), retrying...", attempt);
+        vTaskDelay(pdMS_TO_TICKS(3000));
+    }
+
+    if (granted) {
+        ESP_LOGI(TAG, "🔓 LOCK OPEN (service, IO%d held %s) for %d s",
+                 LOCK_GPIO, LOCK_ACTIVE_LEVEL ? "HIGH" : "LOW", seconds);
+        lock_open();
+        vTaskDelay(pdMS_TO_TICKS((uint32_t)seconds * 1000));
+        lock_close();
+        ESP_LOGI(TAG, "🔒 LOCK CLOSED (service)");
+    } else {
+        ESP_LOGE(TAG, "❌ service open NOT granted by server — lock stays CLOSED");
+    }
+
+    is_lock_active = false;
     vTaskDelete(NULL);
 }
 
@@ -423,25 +595,22 @@ static void mqtt_event_handler(void *handler_args, esp_event_base_t base, int32_
 
                 if (msg && cJSON_IsString(msg) && strcmp(msg->valuestring, "Processed order") == 0) {
                     if (code && cJSON_IsNumber(code) && code->valueint == 1) {
-                        if (is_lock_active) {
-                            ESP_LOGI(TAG, "Already opening... ignoring request.");
-                            cJSON_Delete(json);
-                            return;
-                        }
                         if (orderid && cJSON_IsString(orderid)) {
                             if (strcmp(last_order_id, orderid->valuestring) == 0) {
                                 ESP_LOGI(TAG, "Duplicate order ID detected (%s). Skipping.", last_order_id);
+                            } else if (!lock_slot_take()) {
+                                // Dedup is checked first, on purpose: it reads no
+                                // shared state, so a redelivered order costs nothing
+                                // and never takes a claim it would have to give back.
+                                ESP_LOGI(TAG, "Already opening... ignoring request.");
                             } else {
                                 ESP_LOGI(TAG, "✅ New payment MQTT for order %s — confirming with server",
                                          orderid->valuestring);
-                                // Claim the slot before the task runs (the MQTT task
-                                // is serial, so this is atomic vs the is_lock_active
-                                // check above). The order is confirmed with Supabase
-                                // and the lock opens ONLY on HTTP 200 — see
+                                // The slot is claimed. The order is confirmed with
+                                // Supabase and the lock opens ONLY on HTTP 200 — see
                                 // handle_order_task; last_order is committed there,
                                 // only after a confirmed open, so an unconfirmed
                                 // order can be retried on MQTT redelivery.
-                                is_lock_active = true;
                                 char* id_copy = strdup(orderid->valuestring);
                                 if (!id_copy ||
                                     xTaskCreate(handle_order_task, "order_task", 8192,
@@ -480,6 +649,93 @@ static void mqtt_start(void) {
     esp_mqtt_client_register_event(client, ESP_EVENT_ANY_ID, mqtt_event_handler, NULL);
     esp_mqtt_client_start(client);
     ESP_LOGI(TAG, "MQTT started for machid=%s (%s)", g_machid, g_mqtt_uuid);
+}
+
+// ============================ Service-open MQTT ============================
+// A second, independent esp-mqtt client on OUR broker. Independent is the point:
+// esp-mqtt is not a singleton, so each client owns its task, its socket and its
+// own reconnect backoff. Our broker going down therefore cannot touch payments,
+// which keep flowing over the SmartVend link — and a mistake in the handler
+// below cannot reach the money path either.
+static void svc_mqtt_event_handler(void *handler_args, esp_event_base_t base,
+                                   int32_t event_id, void *event_data) {
+    esp_mqtt_event_handle_t event = event_data;
+    esp_mqtt_client_handle_t client = event->client;
+
+    switch ((esp_mqtt_event_id_t)event_id) {
+        case MQTT_EVENT_CONNECTED: {
+            int msg_id = esp_mqtt_client_subscribe(client, g_svc_topic, 0);
+            ESP_LOGI(TAG, "[svc] connected, subscribed to %s, msg_id=%d", g_svc_topic, msg_id);
+            break;
+        }
+        case MQTT_EVENT_DISCONNECTED:
+            // Deliberately NOT touching g_mqtt_up: the status LED reports the
+            // payment link, and a service broker outage must not make an
+            // otherwise healthy machine look offline to whoever walks past it.
+            ESP_LOGI(TAG, "[svc] disconnected");
+            break;
+        case MQTT_EVENT_DATA: {
+            cJSON *json = cJSON_ParseWithLength(event->data, event->data_len);
+            if (!json) break;
+            cJSON *cmd = cJSON_GetObjectItem(json, "cmd");
+            if (cmd && cJSON_IsString(cmd) &&
+                strcmp(cmd->valuestring, "service-open") == 0) {
+                if (!lock_slot_take()) {
+                    ESP_LOGI(TAG, "[svc] lock busy — ignoring nudge");
+                } else {
+                    ESP_LOGI(TAG, "🔔 service-open nudge — asking server for permission");
+                    if (xTaskCreate(handle_service_open_task, "svc_open", 8192,
+                                    NULL, 5, NULL) != pdPASS) {
+                        ESP_LOGE(TAG, "[svc] failed to start service open task");
+                        is_lock_active = false;
+                    }
+                }
+            }
+            cJSON_Delete(json);
+            break;
+        }
+        case MQTT_EVENT_ERROR:
+            ESP_LOGI(TAG, "[svc] MQTT error");
+            break;
+        default:
+            break;
+    }
+}
+
+static void svc_mqtt_start(void) {
+    if (SVC_MQTT_HOST[0] == '\0' || SVC_MQTT_USER[0] == '\0') {
+        ESP_LOGW(TAG, "[svc] broker not configured — service open disabled");
+        return;
+    }
+
+    char uri[96];
+    snprintf(uri, sizeof(uri), "mqtts://%s:%d", SVC_MQTT_HOST, SVC_MQTT_PORT);
+
+    // client_id must be unique across the fleet: two clients connecting with the
+    // same id kick each other off in a loop, and since every board here shares
+    // one broker credential the username can't provide that uniqueness. machid
+    // does; the MAC tail is insurance against two boards provisioned with the
+    // same machid by mistake, which is a real installer error and would
+    // otherwise present as "the lock randomly stops answering".
+    uint8_t mac[6] = {0};
+    esp_read_mac(mac, ESP_MAC_WIFI_STA);
+    static char client_id[48];
+    snprintf(client_id, sizeof(client_id), "svc-%s-%02X%02X", g_machid, mac[4], mac[5]);
+
+    esp_mqtt_client_config_t cfg = {
+        .broker.address.uri = uri,
+        // Same CA bundle the Supabase calls already use — HiveMQ Cloud serves a
+        // Let's Encrypt chain, which the bundle carries.
+        .broker.verification.crt_bundle_attach = esp_crt_bundle_attach,
+        .credentials.username = SVC_MQTT_USER,
+        .credentials.client_id = client_id,
+        .credentials.authentication.password = SVC_MQTT_PASS,
+        .session.keepalive = SVC_KEEPALIVE,
+    };
+    esp_mqtt_client_handle_t client = esp_mqtt_client_init(&cfg);
+    esp_mqtt_client_register_event(client, ESP_EVENT_ANY_ID, svc_mqtt_event_handler, NULL);
+    esp_mqtt_client_start(client);
+    ESP_LOGI(TAG, "[svc] MQTT started on %s as %s", SVC_MQTT_HOST, client_id);
 }
 
 // ============================ WiFi ============================
@@ -1507,10 +1763,18 @@ void app_main(void) {
         ESP_LOGW(TAG, "[Boot] no IP after 90 s — starting MQTT anyway (will retry)");
     }
     mqtt_start();
+    svc_mqtt_start();
 
     // Check for a firmware update once at startup (background, non-blocking).
     xTaskCreate(ota_boot_task, "ota_boot", 10240, NULL, 4, NULL);
 
     ESP_LOGI(TAG, "Pulse Mart System Started (LOCK IO%d active %s, hold %ds), machid=%s",
              LOCK_GPIO, LOCK_ACTIVE_LEVEL ? "HIGH" : "LOW", g_open_seconds, g_machid);
+    // The service link adds a second MQTT task plus a permanent TLS session
+    // (~50 KB all told) to a board that already runs WiFi or PPP, the setup
+    // httpd and OTA. Print the headroom so a tight build shows up in the log
+    // instead of as an allocation failure weeks later in the field.
+    ESP_LOGI(TAG, "[Boot] free heap %lu B (min ever %lu B)",
+             (unsigned long)esp_get_free_heap_size(),
+             (unsigned long)esp_get_minimum_free_heap_size());
 }

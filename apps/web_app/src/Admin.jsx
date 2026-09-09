@@ -589,14 +589,20 @@ function DeviceStatusDot({ status, kind, withLabel = false }) {
 }
 
 function resultLabel(t, item) {
-  if (item.result_code != null) {
-    const key = RESULT_CODE_I18N[item.result_code];
-    if (key) return t(key);
-    return `${t('result_unknown')} ${item.result_code}`;
-  }
-  // Transport-level failure: no poll byte, but the tablet attaches a
-  // free-form message ("Нет ответа от платы", "Плата занята" etc.).
-  return item.result_message || t('dispense_failed');
+  const key = item.result_code != null ? RESULT_CODE_I18N[item.result_code] : null;
+  if (key) return t(key);
+  // No mapped label for this byte. In practice that means `0`, which the
+  // board sends for "motor finished, no error" — the tablet still refunded
+  // because the drop sensor never fired or the poll loop timed out. Printing
+  // a bare "Код ошибки 0" hides that; the actual reason is the free-form
+  // message the tablet stores alongside the byte ("Мотор отработал, но
+  // датчик падения не сработал", "Таймаут выдачи (20с)"), so prefer it.
+  //
+  // Same fallback covers transport-level failures, where there is no poll
+  // byte at all ("Нет ответа от платы", "Плата занята" etc.).
+  if (item.result_message) return item.result_message;
+  if (item.result_code != null) return `${t('result_unknown')} ${item.result_code}`;
+  return t('dispense_failed');
 }
 
 export default function Admin() {

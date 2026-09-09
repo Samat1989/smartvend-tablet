@@ -5,6 +5,7 @@ import android.app.AlarmManager
 import android.app.PendingIntent
 import android.app.admin.DevicePolicyManager
 import android.content.BroadcastReceiver
+import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
@@ -1198,40 +1199,45 @@ class MainActivity : FlutterActivity() {
             Log.e(TAG_KIOSK, "setLockTaskPackages other failure", t)
             return
         }
-        // Deliberately NOT the HOME app — we match the factory machine.
+        // Be the HOME app.
         //
-        // We used to pin ourselves as the persistent launcher, because
-        // BootReceiver's startActivity looked like it was being refused by
-        // the Android 10+ background-activity-start rules. Watching a
-        // factory tablet boot showed what actually happens there:
+        // This was removed once, to copy a factory tablet whose boot log
+        // reads:
         //
         //   START {cat=[HOME] cmp=com.android.launcher3/.Launcher3QuickStepGo}
         //   Start proc com.shengma.shouhj.sy.world for broadcast BootReceiver
         //   START {cmp=.../ShanpingYeActivity} from uid 10131
-        //   W/ActivityTaskManager: Background activity start for
-        //       com.shengma.shouhj.sy.world allowed because
-        //       SYSTEM_ALERT_WINDOW permission is granted.
         //
-        // Declaring SYSTEM_ALERT_WINDOW is enough on its own: it carries the
-        // `appop` protection flag, so the permission is granted at install
-        // and `hasSystemAlertWindowPermission()` falls back to that grant
-        // when the app-op is still MODE_DEFAULT. Nobody has to tick
-        // "Display over other apps" — the earlier blocked boot was the
-        // Android 14 tablet, where this exemption no longer applies.
+        // — the factory app is not HOME there, it merely covers launcher3 a
+        // few seconds after boot, and the argument for copying that was the
+        // escape hatch: a tablet whose kiosk will not start still lands on a
+        // launcher instead of needing a site visit.
         //
-        // The cost is honest: the stock launcher is on screen for the ~6 s
-        // it takes us to come up, exactly as on the factory machine. The
-        // gain is a tablet that can still be reached when the kiosk will not
-        // start, which on a machine standing in a mall is worth more.
+        // The RY board we actually ship on has no launcher3. Its only HOME
+        // activities are the factory app itself (ShanpingYe.apk, /system/app)
+        // and com.android.settings.FallbackHome, the blank screen the system
+        // shows while user data unlocks. So once the factory app is disabled
+        // there is nothing to fall back to and the hatch buys nothing — not
+        // being HOME just trades a straight boot into the kiosk for a boot
+        // into a blank screen. Being HOME is also what removes the ~6 s of
+        // launcher the old comment charged as the price.
         //
-        // Clearing matters as much as not adding: a tablet provisioned by an
-        // earlier build already carries the HOME binding, and it survives
-        // reinstalls. Without this it would quietly keep winning.
+        // Setting it matters as much as declaring the filter: without a
+        // persistent preference the framework asks the operator to pick a
+        // launcher, and a kiosk has nobody to ask.
+        val home = IntentFilter(Intent.ACTION_MAIN).apply {
+            addCategory(Intent.CATEGORY_HOME)
+            addCategory(Intent.CATEGORY_DEFAULT)
+        }
         try {
-            dpm.clearPackagePersistentPreferredActivities(admin, packageName)
-            Log.i(TAG_KIOSK, "cleared persistent HOME binding (factory parity)")
+            dpm.addPersistentPreferredActivity(
+                admin,
+                home,
+                ComponentName(this, MainActivity::class.java),
+            )
+            Log.i(TAG_KIOSK, "persistent HOME binding set")
         } catch (t: Throwable) {
-            Log.e(TAG_KIOSK, "clearPackagePersistentPreferredActivities failed", t)
+            Log.e(TAG_KIOSK, "addPersistentPreferredActivity failed", t)
         }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
             try {

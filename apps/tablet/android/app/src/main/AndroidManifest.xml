@@ -66,15 +66,36 @@
                 <action android:name="android.intent.action.MAIN"/>
                 <category android:name="android.intent.category.LAUNCHER"/>
             </intent-filter>
-            <!-- No CATEGORY_HOME on purpose. The factory app is not a
-                 launcher either: the stock launcher3 comes up at boot and
-                 the vending app covers it a few seconds later, started by
-                 its BOOT_COMPLETED receiver. Matching that leaves a way
-                 back into Android on a tablet whose kiosk refuses to start,
-                 which is the difference between a phone call and a site
-                 visit. Restoring the filter also means restoring
-                 addPersistentPreferredActivity in MainActivity — one is
-                 useless without the other. -->
+            <!-- CATEGORY_HOME: we are the launcher.
+                 Dropped once to copy the factory machine, restored because
+                 the machine we actually ship on is not the one that was
+                 measured. On the RY board (ShanpingYe.apk in /system/app,
+                 03.45.0) there is no stock launcher3 at all — the only two
+                 HOME activities on a fresh tablet are the factory app and
+                 com.android.settings.FallbackHome, which is the blank
+                 hand-off screen shown while user data unlocks, not a
+                 launcher anybody can use. Verified with
+                 `cmd package query-activities -c android.intent.category.HOME`.
+
+                 That removes the escape hatch the old comment was buying:
+                 once the factory app is disabled, not being HOME does not
+                 leave a way back into Android, it leaves FallbackHome and a
+                 tablet that needs the cable regardless. Being HOME at least
+                 boots the kiosk straight, with no launcher flash.
+
+                 The way back in is now the service menu's «Выйти в Android»
+                 plus, over a cable:
+                   adb shell cmd package set-home-activity \
+                       com.shengma.shouhj.ruiy/com.example.shuai.vendingmachine.activity.ShanpingYeActivity
+
+                 Paired with addPersistentPreferredActivity in
+                 MainActivity.configureDeviceOwnerKiosk — one is useless
+                 without the other. -->
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN"/>
+                <category android:name="android.intent.category.HOME"/>
+                <category android:name="android.intent.category.DEFAULT"/>
+            </intent-filter>
             <!-- Auto-launch the app when the M109E's CH340 USB-Serial
                  adapter is plugged in. The exact VID/PID is in
                  res/xml/device_filter.xml (matches the factory app's

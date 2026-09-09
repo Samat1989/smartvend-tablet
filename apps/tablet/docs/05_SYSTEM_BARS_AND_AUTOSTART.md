@@ -86,8 +86,9 @@ adb reboot
 
 ## Как заводское приложение стартует после включения
 
-Оно **не лаунчер**. HOME на заводском планшете — стоковый
-`com.android.launcher3/.Launcher3QuickStepGo`. Приложение поднимается поверх
+Оно **не лаунчер** — на том экземпляре, с которого снят разбор
+(`com.shengma.shouhj.sy.world`). HOME там стоковый
+`com.android.launcher3/.Launcher3QuickStepGo`, а приложение поднимается поверх
 него через `BOOT_COMPLETED`. Живой лог загрузки:
 
 ```
@@ -127,26 +128,98 @@ if (mode == MODE_DEFAULT) {
 
 ## Что из этого сделано у нас
 
-### Приложение убрано из HOME
+### Приложение снова HOME (09.09.2026)
 
-Раньше `configureDeviceOwnerKiosk()` прописывал
-`addPersistentPreferredActivity(HOME)`, и планшет загружался сразу в киоск, без
-мигания лаунчера. Красивее, но:
+25.08.2026 `CATEGORY_HOME` был убран, а `configureDeviceOwnerKiosk()` вместо
+`addPersistentPreferredActivity(HOME)` стал звать
+`clearPackagePersistentPreferredActivities`. Доводом была не красота, а запасной
+выход: планшет, у которого киоск не стартует, всё равно попадает на стоковый
+лаунчер и остаётся управляемым без кабеля. Цена — ~6 секунд лаунчера на экране,
+ровно как на заводском автомате.
 
-* поведение расходилось с заводским автоматом, на который мы ориентируемся;
-* планшет, у которого киоск не стартует, становился недостижим без кабеля.
+**Довод не выдержал встречи с платой RY.** Замерено на живом планшете:
 
-Теперь вместо этого вызывается
-`clearPackagePersistentPreferredActivities(admin, packageName)`.
-**Просто перестать прописывать было недостаточно** — привязка, выданная
-прошлой сборкой, живёт в системе и переживает переустановку приложения. Её
-нужно снимать явно.
+```
+$ adb shell cmd package query-activities \
+      -c android.intent.category.HOME -a android.intent.action.MAIN
+  com.shengma.shouhj.ruiy/com.example.shuai.vendingmachine.activity.ShanpingYeActivity
+  com.android.settings/com.android.settings.FallbackHome
+$ adb shell pm list packages | grep -i launcher
+  package:com.sprd.powersavemodelauncher
+```
 
-`CATEGORY_HOME` убран и из манифеста. Возвращать эти две вещи имеет смысл
-только вместе — по отдельности они бесполезны.
+Никакого `launcher3` здесь нет. HOME на этом планшете — **само заводское
+приложение** (`/system/app/ShanpingYe/ShanpingYe.apk`, 03.45.0), а второй
+кандидат `FallbackHome` — не лаунчер, а пустой экран-пересадка, который система
+показывает, пока расшифровываются пользовательские данные.
 
-Цена решения честная: **~6 секунд стокового лаунчера** на экране после
-загрузки, ровно как на заводском автомате.
+То есть разбор из этого документа снят с другого экземпляра
+(`com.shengma.shouhj.sy.world` + `launcher3`), и на нашем железе его вывод
+переворачивается: как только заводское приложение отключено, «не быть HOME»
+не оставляет пути назад в Android — оно оставляет пустой `FallbackHome`.
+Запасного выхода нет ни при каком выборе, кабель нужен в обоих случаях. Значит
+выбирать надо по тому, что остаётся: с `CATEGORY_HOME` планшет грузится прямо в
+киоск и те самые ~6 секунд исчезают.
+
+Возвращены **обе** половины сразу — по отдельности они бесполезны:
+
+* `CATEGORY_HOME` + `CATEGORY_DEFAULT` в манифесте у `MainActivity`;
+* `dpm.addPersistentPreferredActivity(admin, HOME, MainActivity)` в
+  `configureDeviceOwnerKiosk()`.
+
+Без device owner привязка ставится по кабелю:
+
+```bash
+adb shell cmd package set-home-activity kz.smartvend.m102_tester/.MainActivity
+```
+
+Она переживает переустановку APK — проверено `adb install -r`, после которого
+`resolve-activity` по-прежнему отвечает нашим пакетом. Значит самообновление
+киоска её не теряет и «выберите лаунчер» посреди зала не появится.
+
+Живая загрузка после переключения:
+
+```
+07:13:20.593 START u0 {act=MAIN cat=[HOME] cmp=kz.smartvend.m102_tester/.MainActivity} from uid 0
+07:13:22.490 Input focus has changed to kz.smartvend.m102_tester
+                 from com.android.settings/FallbackHome
+```
+
+Между `FallbackHome` и киоском нет ничего — ни лаунчера, ни заводского экрана.
+
+### Заводское приложение отключено
+
+`ShanpingYe` лежит в `/system/app`, поэтому удалить его без root нельзя —
+только снять с пользователя:
+
+```bash
+adb shell am force-stop com.shengma.shouhj.ruiy
+adb shell pm disable-user --user 0 com.shengma.shouhj.ruiy
+```
+
+После этого `dumpsys package` показывает `enabled=3` (`DISABLED_USER`) и
+`stopped=true`, процесса в `ps -A` нет, автозапуск по `BOOT_COMPLETED` не
+срабатывает. Обратимо в одну команду, APK никуда не девается:
+
+```bash
+adb shell pm enable com.shengma.shouhj.ruiy
+```
+
+Альтернатива — `pm uninstall --user 0` (возврат через
+`cmd package install-existing`). Ощутимой разницы нет, `disable-user` выбран
+потому, что состояние видно в `dumpsys` и не путается с настоящей установкой.
+
+**Порядок обязателен.** Сначала наш HOME, потом отключение заводского. Наоборот
+— это планшет, у которого единственный оставшийся HOME это `FallbackHome`,
+то есть чёрный экран до следующего кабеля.
+
+Чтобы вернуть заводское приложение лаунчером:
+
+```bash
+adb shell pm enable com.shengma.shouhj.ruiy
+adb shell cmd package set-home-activity \
+    com.shengma.shouhj.ruiy/com.example.shuai.vendingmachine.activity.ShanpingYeActivity
+```
 
 ### Полосы гасятся при каждом старте
 
@@ -384,10 +457,20 @@ adb shell "dumpsys activity activities | grep mLockTaskModeState"   # ждём L
 adb logcat -d | grep "Background activity start"                    # причина автозапуска
 ```
 
-Выход в Android, когда полос нет и кнопки Home не существует:
+Выход в Android, когда полос нет и кнопки Home не существует. HOME теперь наш,
+поэтому этот путь ведёт обратно в киоск, а не наружу — открывать настройки надо
+явно:
 
 ```bash
-adb shell am start -a android.intent.action.MAIN -c android.intent.category.HOME
+adb shell am start -a android.settings.SETTINGS
+```
+
+Тот же экран даёт сервисное меню («Выйти в Android»), и в логе он выглядит
+запуском от uid самого приложения — не пугайтесь, это не самопроизвольный
+переход:
+
+```
+START u0 {act=android.settings.SETTINGS ...} from uid 10106, pid 1765
 ```
 
 ## Что осталось от заводского аппарата не скопированным

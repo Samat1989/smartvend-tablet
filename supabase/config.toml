@@ -55,3 +55,21 @@ entrypoint = "./functions/device-claim/index.ts"
 enabled = true
 verify_jwt = false
 entrypoint = "./functions/device-admin/index.ts"
+
+# Service unlock, device side: the board POSTs { machid, uuid, secret } after an
+# MQTT nudge and opens the lock ONLY on a 2xx. Same shape and the same danger as
+# complete-order — everything that is not "open" must answer non-2xx, because
+# the firmware reads the status code and nothing else.
+[functions.service-open]
+enabled = true
+verify_jwt = false
+entrypoint = "./functions/service-open/index.ts"
+
+# Service unlock, panel side: the owner's «Открыть на обслуживание» button.
+# Writes the permission into service_opens (the RPC checks ownership) and then
+# nudges the board over our own MQTT broker. The nudge is best-effort — the
+# permission is what actually opens the lock.
+[functions.service-open-request]
+enabled = true
+verify_jwt = false
+entrypoint = "./functions/service-open-request/index.ts"

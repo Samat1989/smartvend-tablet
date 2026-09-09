@@ -12,6 +12,8 @@ import {
   CheckCircle2,
   Loader2,
   MapPin,
+  QrCode,
+  RefreshCw,
   Flame,
   Zap,
   Leaf,
@@ -20,6 +22,20 @@ import {
 import { useTranslation } from 'react-i18next';
 import './i18n';
 import { supabase } from './supabaseClient';
+
+// Centered full-page message — the storefront's only layout for "there is no
+// catalog to draw", shared by the no-QR, bad-QR and load-failed screens.
+function FullScreenNotice({ icon: Icon, children }) {
+  return (
+    <div className="min-h-screen bg-background text-on-surface flex flex-col items-center justify-center px-6 text-center">
+      <div className="w-20 h-20 rounded-full bg-primary/10 flex items-center justify-center mb-6">
+        <Icon className="text-primary" size={36} />
+      </div>
+      <h1 className="text-primary font-lexend font-black text-2xl mb-3">Micromart</h1>
+      {children}
+    </div>
+  );
+}
 
 function App() {
   const { t, i18n } = useTranslation();
@@ -34,6 +50,12 @@ function App() {
   const [paymentStatus, setPaymentStatus] = useState('idle');
   const [errorMessage, setErrorMessage] = useState('');
   const [paymentData, setPaymentData] = useState(null);
+  // Why the storefront has nothing to show, when it has nothing to show.
+  // null | 'legacy' (pre-2026-06 sticker with the machid in it) | 'unknown'
+  // (token matches no machine) | 'network'. Before this existed all three
+  // rendered an identical blank grid and the customer had no way to tell a
+  // dead sticker from a sold-out fridge.
+  const [storefrontError, setStorefrontError] = useState(null);
   const [currentMarketId, setCurrentMarketId] = useState(null);  // machid, for display only (from get_storefront)
   const [marketToken, setMarketToken] = useState(null);          // unguessable QR token — the real key
   const pollingRef = useRef(null);
@@ -148,16 +170,31 @@ function App() {
       } catch (_) {}
     }
     if (!hadCache) setLoading(true);
+    setStorefrontError(null);
     try {
       const { data, error } = await supabase.rpc('get_storefront', { p_token: token });
       if (error) throw error;
-      if (!data) { setItems([]); return; }   // unknown token
+      if (!data) {
+        // The RPC matches on qr_token only. An all-digits token is a machid,
+        // i.e. a sticker printed before the token migration (2026-06-05) when
+        // the QR still carried `?id=<machid>` — worth naming, because the fix
+        // is "owner reprints the label", not "scan again".
+        setStorefrontError(/^\d+$/.test(String(token)) ? 'legacy' : 'unknown');
+        setItems([]);
+        setMarketInfo(null);
+        setCurrentMarketId(null);
+        if (cacheKey) { try { localStorage.removeItem(cacheKey); } catch (_) {} }
+        return;
+      }
       setItems(data.items || []);
       setCurrentMarketId(data.machid);
       setMarketInfo({ name: data.name, kind: data.kind });
       if (cacheKey) { try { localStorage.setItem(cacheKey, JSON.stringify(data)); } catch (_) {} }
     } catch (error) {
       console.error('Error fetching storefront:', error.message);
+      // A cached catalog is better than an error screen: the customer can still
+      // browse, and checkout re-prices server-side anyway.
+      if (!hadCache) setStorefrontError('network');
     } finally {
       setLoading(false);
     }
@@ -265,6 +302,10 @@ function App() {
   const cartTotal = Object.values(cart).reduce((s, i) => s + (i.price * i.count), 0);
   const cartItemCount = Object.values(cart).reduce((s, i) => s + i.count, 0);
 
+  // Split in two: `inStockItems` answers "is the fridge empty?", the filtered
+  // list answers "did this search match?". Collapsing them made a sold-out
+  // machine and a typo in the search box look identical.
+  const inStockItems = items.filter(i => i.stock > 0);
   const filteredItems = items.filter(i => {
     const matchesSearch = i.name.toLowerCase().includes(search.toLowerCase());
     const matchesCategory = selectedCategory === 'All' || i.category_id === selectedCategory;
@@ -277,15 +318,41 @@ function App() {
   // Don't show any machine's catalog; prompt the customer to scan the code.
   if (!marketToken) {
     return (
-      <div className="min-h-screen bg-background text-on-surface flex flex-col items-center justify-center px-6 text-center">
-        <div className="w-20 h-20 rounded-full bg-primary/10 flex items-center justify-center mb-6">
-          <ShoppingBag className="text-primary" size={36} />
-        </div>
-        <h1 className="text-primary font-lexend font-black text-2xl mb-3">Micromart</h1>
+      <FullScreenNotice icon={ShoppingBag}>
         <p className="text-on-surface-variant font-lexend max-w-xs">
           {t('scan_qr_prompt', { defaultValue: 'Отсканируйте QR-код на аппарате, чтобы открыть витрину.' })}
         </p>
-      </div>
+      </FullScreenNotice>
+    );
+  }
+
+  // The token resolved to nothing (or the load failed outright). Say which of
+  // the three it was: a customer staring at an empty grid can't tell a dead
+  // sticker from an empty fridge, and neither can the owner they complain to.
+  if (storefrontError) {
+    const notice = {
+      legacy:  { icon: QrCode,     title: 'sf_legacy_qr_title', desc: 'sf_legacy_qr_desc' },
+      unknown: { icon: QrCode,     title: 'sf_unknown_title',   desc: 'sf_unknown_desc' },
+      network: { icon: RefreshCw,  title: 'sf_load_failed',     desc: 'sf_load_failed_desc' },
+    }[storefrontError];
+    return (
+      <FullScreenNotice icon={notice.icon}>
+        <h2 className="font-lexend font-black text-xl text-on-surface mb-2">{t(notice.title)}</h2>
+        <p className="text-on-surface-variant font-lexend max-w-xs mb-8">{t(notice.desc)}</p>
+        <button
+          onClick={() => fetchStorefront(marketToken)}
+          className="signature-gradient text-white font-lexend font-bold px-8 py-4 rounded-xl shadow-lg active:scale-95 transition-all"
+        >
+          {t('sf_retry')}
+        </button>
+        {/* The machid is what an owner needs to find the machine in the panel,
+            and on a legacy sticker the URL is the only place it survives. */}
+        {storefrontError === 'legacy' && (
+          <p className="mt-6 text-[10px] font-lexend font-bold uppercase tracking-widest opacity-40">
+            {t('apparatus_no', { defaultValue: 'Аппарат №' })}{marketToken}
+          </p>
+        )}
+      </FullScreenNotice>
     );
   }
 
@@ -349,6 +416,25 @@ function App() {
             </button>
           ))}
         </div>
+
+        {/* Nothing to show: name the reason instead of leaving a blank page. */}
+        {!loading && filteredItems.length === 0 && (
+          <div className="flex flex-col items-center justify-center text-center py-20 px-6">
+            <div className="w-16 h-16 rounded-full bg-surface-container-high flex items-center justify-center mb-5">
+              <Package className="text-on-surface-variant opacity-50" size={28} />
+            </div>
+            <h3 className="font-lexend font-black text-lg text-on-surface mb-2">
+              {items.length === 0 ? t('sf_empty_title')
+                : inStockItems.length === 0 ? t('sf_sold_out_title')
+                : t('nothing_found')}
+            </h3>
+            <p className="text-on-surface-variant font-lexend text-sm max-w-xs opacity-70">
+              {items.length === 0 ? t('sf_empty_desc')
+                : inStockItems.length === 0 ? t('sf_sold_out_desc')
+                : t('nothing_found_desc')}
+            </p>
+          </div>
+        )}
 
         {/* Product Grid */}
         <div className="grid grid-cols-2 md:grid-cols-4 gap-6">

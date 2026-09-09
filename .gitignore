@@ -85,6 +85,13 @@ firmware/vm_12_GP/
 *.pem
 *.key
 
+# Broker credentials compiled into the service-open firmware. The repo is
+# PUBLIC (OTA pulls GitHub Releases without a token, so it has to stay that
+# way), and the free HiveMQ tier allows 100 connections total — a published
+# credential lets anyone exhaust them and knock the whole fleet off the
+# service channel. Template lives next to it as svc_secrets.h.example.
+firmware/*/main/svc_secrets.h
+
 # --- OS / editors -------------------------------------------------------
 .DS_Store
 Thumbs.db
