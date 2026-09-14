@@ -1364,7 +1364,7 @@ export default function Admin() {
         blob = Array.isArray(out) ? out[0] : out;
       } catch (err) {
         console.error('HEIC decode failed:', err);
-        throw new Error(t('photo_heic_failed'));
+        throw new Error(t('photo_heic_failed'), { cause: err });
       }
     }
 
@@ -3730,9 +3730,9 @@ function CatalogTab({
   });
 
   const counts = {
-    active: mine.filter(p => !p.is_draft && !p.is_archived).length,
-    drafts: mine.filter(p => p.is_draft && !p.is_archived).length,
-    archived: mine.filter(p => p.is_archived).length,
+    active: products.filter(p => !p.is_draft && !p.is_archived).length,
+    drafts: products.filter(p => p.is_draft && !p.is_archived).length,
+    archived: products.filter(p => p.is_archived).length,
   };
 
   return (
