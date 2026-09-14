@@ -223,6 +223,17 @@ def build_index(products: list[dict], out: Path) -> bytes:
 def upload_all(key: str, products: list[dict], out: Path, index: bytes,
                workers: int) -> None:
     """Push files first, index last, skipping whatever already landed."""
+    # Check this BEFORE spending four minutes on photos. The bucket was
+    # narrowed to image/webp alone in 20260603200000, back when nothing but
+    # photos went into it, and the index is the first object that is not one.
+    allowed = _supabase.bucket_info(key, bucket=BUCKET).get("allowed_mime_types")
+    if allowed and "application/json" not in allowed:
+        fail(f"'{BUCKET}' accepts only {', '.join(allowed)}, so the index cannot "
+             f"be published.\n"
+             f"  Apply supabase/migrations/"
+             f"20260914130000_storage_product_images_allow_index.sql, then re-run.\n"
+             f"  Photos already uploaded are skipped, so a re-run is cheap.")
+
     step("Checking what is already in the bucket")
     have_full = {n.removesuffix(".webp")
                  for n in _supabase.list_objects(key, PREFIX, bucket=BUCKET)}
@@ -263,16 +274,24 @@ def upload_all(key: str, products: list[dict], out: Path, index: bytes,
 
 
 def _upload_one(key: str, src: Path, path: str) -> None:
-    """One upload, retried -- a single 502 should not abandon 5000 files."""
-    last = ""
-    for attempt in range(3):
+    """One upload, retried -- a single 504 should not abandon 2000 files.
+
+    _supabase.upload() reports a non-2xx through fail(), which prints and
+    raises SystemExit. Catching that is what makes a retry possible; the warn
+    below is so the ERROR line it already printed does not read as a lost
+    file when the next attempt succeeds.
+    """
+    for attempt in range(1, 4):
         try:
             _supabase.upload(key, path, src.read_bytes(),
                              cache=PHOTO_CACHE, bucket=BUCKET)
+            if attempt > 1:
+                warn(f"{path} went through on attempt {attempt} "
+                     f"(the error above was transient)")
             return
-        except SystemExit as e:        # _supabase.fail() on a non-2xx
-            last = str(e)
-    raise RuntimeError(f"upload of {path} failed after 3 attempts ({last})")
+        except SystemExit:             # non-2xx, already printed by fail()
+            if attempt == 3:
+                raise RuntimeError(f"upload of {path} failed after 3 attempts")
 
 
 def main() -> None:

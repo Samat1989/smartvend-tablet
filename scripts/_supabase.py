@@ -167,6 +167,15 @@ def publish(key: str, stream: str, artifact: Path, manifest: dict) -> str:
     return public_url(man_path)
 
 
+def bucket_info(key: str, bucket: str = BUCKET) -> dict:
+    """The bucket's own settings -- public flag, size cap, allowed MIME types."""
+    status, body = _request("GET", f"{BASE}/storage/v1/bucket/{bucket}", key=key)
+    if status != 200:
+        fail(f"Bucket lookup for '{bucket}' failed ({status}): "
+             f"{body.decode(errors='replace')}")
+    return json.loads(body)
+
+
 def list_objects(key: str, prefix: str, *, bucket: str = BUCKET) -> set[str]:
     """Every object name directly under `prefix`, as a set.
 
