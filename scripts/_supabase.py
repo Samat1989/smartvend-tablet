@@ -191,7 +191,18 @@ def list_objects(key: str, prefix: str, *, bucket: str = BUCKET) -> set[str]:
             fail(f"List of {bucket}/{prefix} failed ({status}): "
                  f"{body.decode(errors='replace')}")
         batch = json.loads(body)
-        names.update(o["name"] for o in batch)
+        for o in batch:
+            # A sub-folder comes back as an entry with a null id. Skip those:
+            # only real objects count as "already uploaded".
+            if o.get("id") is None:
+                continue
+            # Names are documented as relative to the prefix, but normalising
+            # is one line and the alternative failure is silent -- a resume
+            # that matches nothing re-uploads the whole set.
+            name = o["name"]
+            if name.startswith(prefix + "/"):
+                name = name[len(prefix) + 1:]
+            names.add(name)
         if len(batch) < page:
             return names
         offset += page
