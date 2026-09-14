@@ -1172,14 +1172,10 @@ export default function Admin() {
         setCatalogProducts([]);
         return;
       }
-      // Shared starter templates (owner_id IS NULL) are readable by every
-      // owner under the RLS added in 20260819120000_shared_starter_catalog —
-      // list them here so they can be copied. Only the superadmin can edit
-      // them; the policy refuses everyone else.
       const { data, error } = await supabase
         .from('products')
         .select('*')
-        .or(`owner_id.eq.${ownerId},owner_id.is.null`)
+        .eq('owner_id', ownerId)
         .order('is_draft', { ascending: false })
         .order('name', { ascending: true });
       if (error) throw error;
@@ -1188,26 +1184,6 @@ export default function Admin() {
       console.error('Error fetching catalog:', err);
       if (await handleAuthFailure(err)) return;
       showToast(t('catalog_load_error'), 'error');
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  // Pulls every published template into this owner's catalog. Idempotent by
-  // products.source_product_id, so pressing it twice adds nothing the second
-  // time. The RPC runs SECURITY INVOKER — RLS is what keeps one owner out of
-  // another's rows.
-  async function copyStarterProducts() {
-    setLoading(true);
-    try {
-      const { data, error } = await supabase.rpc('copy_starter_products');
-      if (error) throw error;
-      const n = Number(data) || 0;
-      showToast(n > 0 ? t('copy_starter_done', { count: n }) : t('copy_starter_none'));
-      if (n > 0) fetchCatalogProducts();
-    } catch (err) {
-      console.error('Copy starter set error:', err);
-      showToast(t('copy_starter_error') + ': ' + err.message, 'error');
     } finally {
       setLoading(false);
     }
@@ -1229,15 +1205,9 @@ export default function Admin() {
         is_draft: !!editingCatalog.is_draft,
       };
       if (editingCatalog.id === 'new') {
-        // owner_id is auto-filled by RLS to auth.uid() of the inserter
-        // (or null; we leave it to the DB-level default + policy chain).
         const { error } = await supabase.from('products').insert({
           ...payload,
-          // Ticking "shared" (superadmin only) stores the row with a NULL
-          // owner, which is what makes it a template every owner can copy.
-          owner_id: (isSuperadmin && editingCatalog.is_shared)
-            ? null
-            : (session?.user?.id || null),
+          owner_id: session?.user?.id || null,
           is_draft: false, // admin-created rows are published immediately
         });
         if (error) throw error;
@@ -1994,18 +1964,14 @@ export default function Admin() {
                 emoji: '',
                 // Default to no category rather than whichever one happens
                 // to sort first: silently filing every new product under it was
-                // wrong more often than right, and for a shared template a
-                // personal category would be unreadable to the owners copying it.
+                // wrong more often than right.
                 category_id: null,
                 volume_ml: '',
                 description: '',
                 is_draft: false,
                 is_archived: false,
-                is_shared: false,
               })}
-              onEdit={(p) => setEditingCatalog({ ...p, is_shared: p.owner_id === null })}
-              isSuperadmin={isSuperadmin}
-              onCopyStarter={copyStarterProducts}
+              onEdit={(p) => setEditingCatalog({ ...p })}
               onArchive={archiveCatalogProduct}
               onPublish={publishDraft}
               onDelete={deleteCatalogProduct}
@@ -2837,21 +2803,6 @@ export default function Admin() {
                 />
               </div>
 
-              {isSuperadmin && (
-                <label className="flex items-start gap-3 bg-indigo-50 border-2 border-indigo-300 rounded-xl px-3 py-2.5 cursor-pointer">
-                  <input
-                    type="checkbox"
-                    className="mt-0.5 w-4 h-4 accent-indigo-600"
-                    checked={!!editingCatalog.is_shared}
-                    onChange={e => setEditingCatalog({ ...editingCatalog, is_shared: e.target.checked })}
-                  />
-                  <span className="flex flex-col">
-                    <span className="text-xs font-black text-indigo-900">{t('shared_product')}</span>
-                    <span className="text-[11px] font-semibold text-indigo-700">{t('shared_hint')}</span>
-                  </span>
-                </label>
-              )}
-
               {editingCatalog.is_draft && editingCatalog.id !== 'new' && (
                 <div className="flex items-center gap-2 bg-amber-100 border-2 border-amber-400 rounded-xl px-3 py-2.5">
                   <AlertTriangle size={16} className="text-amber-700" />
@@ -3592,19 +3543,10 @@ function CatalogTab({
   onArchive,
   onPublish,
   onDelete,
-  isSuperadmin,
-  onCopyStarter,
 }) {
   const { t } = useTranslation();
 
-  // Templates (owner_id NULL) are the platform's, not this owner's. They are
-  // fetched so the copy button knows they exist, but they do not belong in the
-  // list: the owner's own copy shows up there the moment they press Copy, and
-  // showing both would read as a duplicate. The superadmin is the exception —
-  // for them this list IS the template library.
-  const mine = isSuperadmin ? products : products.filter(p => p.owner_id !== null);
-
-  const visible = mine.filter(p => {
+  const visible = products.filter(p => {
     if (filter === 'drafts') return p.is_draft && !p.is_archived;
     if (filter === 'archived') return p.is_archived;
     return !p.is_draft && !p.is_archived;
@@ -3626,17 +3568,6 @@ function CatalogTab({
           </p>
         </div>
         <div className="flex gap-2 flex-wrap">
-          {/* Only worth offering when templates exist and this owner has not
-              taken them all yet — otherwise the button always reports "nothing
-              new" and reads as broken. */}
-          {products.some(p => p.owner_id === null && !p.is_archived && !p.is_draft) && (
-            <button
-              onClick={onCopyStarter}
-              className="flex items-center justify-center gap-2 bg-white text-indigo-700 px-4 py-2.5 rounded-xl font-bold hover:bg-indigo-50 transition-all text-sm border-2 border-indigo-300"
-            >
-              <Plus size={16} /> {t('copy_starter')}
-            </button>
-          )}
           <button
             onClick={onCreate}
             className="flex items-center justify-center gap-2 bg-primary text-white px-5 py-2.5 rounded-xl font-bold hover:brightness-110 transition-all shadow-lg shadow-primary/30 text-sm border-2 border-primary"
@@ -3706,11 +3637,6 @@ function CatalogTab({
               <div className="flex-1 min-w-0">
                 <div className="flex items-center gap-2 flex-wrap">
                   <h4 className="font-bold text-sm text-slate-900 truncate pr-1">{p.name}</h4>
-                  {p.owner_id === null && (
-                    <span className="text-[9px] uppercase font-black bg-indigo-600 text-white px-1.5 py-0.5 rounded">
-                      {t('shared_badge')}
-                    </span>
-                  )}
                   {p.is_draft && (
                     <span className="text-[9px] uppercase font-black bg-amber-600 text-white px-1.5 py-0.5 rounded">
                       {t('badge_draft')}
@@ -3732,10 +3658,7 @@ function CatalogTab({
                 </div>
               </div>
 
-              {/* A template belongs to the platform, not to this owner: the
-                  RLS policy would reject every one of these writes anyway, so
-                  hide the controls rather than offer buttons that error. */}
-              <div className={`flex gap-1 ${p.owner_id === null && !isSuperadmin ? 'hidden' : ''}`}>
+              <div className="flex gap-1">
                 {p.is_draft && (
                   <button
                     onClick={() => onPublish(p)}
