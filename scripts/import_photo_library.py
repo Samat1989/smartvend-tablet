@@ -146,7 +146,18 @@ def convert_one(job: tuple[str, str, str]) -> tuple[str, str, int, int]:
 
 
 def read_library(source: Path, limit: int | None) -> list[dict]:
-    """Parse library.json and check every referenced photo is actually there."""
+    """Parse library.json, keeping the products whose photo is still on disk.
+
+    Deleting a file under images/ is how you drop a product from the library:
+    the scrape carries things nobody wants on a vending machine, and pruning
+    the folder is more direct than maintaining a list of exceptions beside it.
+    So a missing photo is a deliberate act, reported and skipped, not an error
+    -- library.json is left exactly as it was scraped.
+
+    An empty result still fails: that means a wrong --source, or a pruning
+    that went further than intended, and silently publishing nothing would
+    look like success.
+    """
     manifest = source / "library.json"
     if not manifest.exists():
         fail(f"No library.json in {source}")
@@ -154,16 +165,19 @@ def read_library(source: Path, limit: int | None) -> list[dict]:
     if not products:
         fail(f"{manifest} has no 'products'")
 
-    missing = []
+    kept, dropped = [], []
     for p in products:
         p["_path"] = source / "images" / p["category"] / p["image_name"]
-        if not p["_path"].exists():
-            missing.append(p["image_name"])
-    if missing:
-        fail(f"{len(missing)} photos listed in library.json are missing on disk, "
-             f"first few: {', '.join(missing[:5])}")
+        (kept if p["_path"].exists() else dropped).append(p)
 
-    return products[:limit] if limit else products
+    if dropped:
+        info(f"{len(dropped)} photo(s) deleted from images/ -- skipping those "
+             f"products (e.g. {dropped[0]['name']})")
+    if not kept:
+        fail(f"No photos left under {source / 'images'} -- wrong --source, or "
+             f"everything was deleted?")
+
+    return kept[:limit] if limit else kept
 
 
 def convert_all(products: list[dict], out: Path, workers: int) -> None:
