@@ -30,7 +30,7 @@ from _common import REPO_ROOT, fail, info, ok, step
 
 PROJECT_REF = "cgvfhtvdtdjsyluhlcbq"          # SupabaseConfig.url in the app
 BASE = f"https://{PROJECT_REF}.supabase.co"
-BUCKET = "updates"
+BUCKET = "updates"                            # default; other buckets passed per call
 
 # The manifest must go stale fast -- it is the only way a device learns a
 # release exists, and Storage serves objects through a CDN. The binaries are
@@ -44,6 +44,7 @@ _CONTENT_TYPES = {
     ".apk": "application/vnd.android.package-archive",
     ".bin": "application/octet-stream",
     ".json": "application/json; charset=utf-8",
+    ".webp": "image/webp",
 }
 
 
@@ -88,33 +89,34 @@ def _request(method: str, url: str, *, key: str, data: bytes | None = None,
         fail(f"Supabase unreachable: {e.reason}")
 
 
-def ensure_bucket(key: str, *, public: bool = True) -> None:
+def ensure_bucket(key: str, *, public: bool = True, bucket: str = BUCKET) -> None:
     """Create the bucket if it isn't there. Idempotent."""
-    status, body = _request("GET", f"{BASE}/storage/v1/bucket/{BUCKET}", key=key)
+    status, body = _request("GET", f"{BASE}/storage/v1/bucket/{bucket}", key=key)
     if status == 200:
         existing = json.loads(body)
         if existing.get("public") is not public:
-            fail(f"Bucket '{BUCKET}' exists but public={existing.get('public')}, "
+            fail(f"Bucket '{bucket}' exists but public={existing.get('public')}, "
                  f"expected public={public}. Fix it in the dashboard.")
         return
     if status not in (400, 404):
         fail(f"Bucket lookup failed ({status}): {body.decode(errors='replace')}")
 
-    step(f"Creating bucket '{BUCKET}' (public={public})")
+    step(f"Creating bucket '{bucket}' (public={public})")
     status, body = _request(
         "POST", f"{BASE}/storage/v1/bucket", key=key,
-        data=json.dumps({"name": BUCKET, "id": BUCKET, "public": public}).encode(),
+        data=json.dumps({"name": bucket, "id": bucket, "public": public}).encode(),
         headers={"Content-Type": "application/json"})
     if status not in (200, 201):
         fail(f"Bucket create failed ({status}): {body.decode(errors='replace')}")
-    ok(f"Bucket '{BUCKET}' created")
+    ok(f"Bucket '{bucket}' created")
 
 
-def upload(key: str, path: str, data: bytes, *, cache: int) -> str:
+def upload(key: str, path: str, data: bytes, *, cache: int,
+           bucket: str = BUCKET) -> str:
     """Upload one object, overwriting if present. Returns its public URL."""
     ctype = _CONTENT_TYPES.get(Path(path).suffix, "application/octet-stream")
     status, body = _request(
-        "POST", f"{BASE}/storage/v1/object/{BUCKET}/{path}", key=key, data=data,
+        "POST", f"{BASE}/storage/v1/object/{bucket}/{path}", key=key, data=data,
         headers={
             "Content-Type": ctype,
             "cache-control": f"max-age={cache}",
@@ -122,11 +124,11 @@ def upload(key: str, path: str, data: bytes, *, cache: int) -> str:
         })
     if status not in (200, 201):
         fail(f"Upload of {path} failed ({status}): {body.decode(errors='replace')}")
-    return public_url(path)
+    return public_url(path, bucket=bucket)
 
 
-def public_url(path: str) -> str:
-    return f"{BASE}/storage/v1/object/public/{BUCKET}/{path}"
+def public_url(path: str, *, bucket: str = BUCKET) -> str:
+    return f"{BASE}/storage/v1/object/public/{bucket}/{path}"
 
 
 def manifest_url(stream: str) -> str:
@@ -163,3 +165,33 @@ def publish(key: str, stream: str, artifact: Path, manifest: dict) -> str:
            json.dumps(body, ensure_ascii=False, indent=2).encode("utf-8"),
            cache=MANIFEST_CACHE)
     return public_url(man_path)
+
+
+def list_objects(key: str, prefix: str, *, bucket: str = BUCKET) -> set[str]:
+    """Every object name directly under `prefix`, as a set.
+
+    Used to make a bulk upload resumable: the caller diffs this against what
+    it is about to send and skips what already landed. Storage's list API is
+    one flat page per call (it does not recurse into sub-prefixes), so this
+    pages until a short page comes back.
+    """
+    names: set[str] = set()
+    offset, page = 0, 100
+    while True:
+        status, body = _request(
+            "POST", f"{BASE}/storage/v1/object/list/{bucket}", key=key,
+            data=json.dumps({
+                "prefix": prefix,
+                "limit": page,
+                "offset": offset,
+                "sortBy": {"column": "name", "order": "asc"},
+            }).encode(),
+            headers={"Content-Type": "application/json"})
+        if status != 200:
+            fail(f"List of {bucket}/{prefix} failed ({status}): "
+                 f"{body.decode(errors='replace')}")
+        batch = json.loads(body)
+        names.update(o["name"] for o in batch)
+        if len(batch) < page:
+            return names
+        offset += page

@@ -1,6 +1,7 @@
 # scripts/
 
-Релизные скрипты проекта. **Python 3, только stdlib, Linux.**
+Релизные скрипты проекта. **Python 3, Linux.** Всё, кроме
+`import_photo_library.py`, обходится только stdlib.
 
 Заменяют четыре PowerShell-скрипта, которые лежали в корне до переезда с
 Windows. Python, а не bash, потому что пайплайны — это в основном арифметика
@@ -12,7 +13,9 @@ Windows. Python, а не bash, потому что пайплайны — это
 | `release_tablet.py` | `apps/tablet/scripts/release.ps1` | Релиз APK планшета |
 | `release_fw.py` | `release-pulse.ps1` + `release-relay.ps1` | Релиз прошивки ESP32 |
 | `make_web_flasher.py` | `make-web-flasher.ps1` | Браузерный флешер в `docs/flash/` |
+| `import_photo_library.py` | — | Заливка банка фотографий товаров в Storage |
 | `_common.py` | — | Общее: git, gh, версии, ESP-IDF env |
+| `_supabase.py` | — | Клиент Supabase Storage на urllib |
 
 ## Использование
 
@@ -30,6 +33,11 @@ python3 scripts/release_fw.py pulse -m "..." --dry-run     # ничего не �
 
 # Браузерный флешер
 python3 scripts/make_web_flasher.py --commit --push
+
+# Банк фотографий товаров (нужен Pillow, см. ниже)
+python3 scripts/import_photo_library.py --source ~/photos --dry-run
+python3 scripts/import_photo_library.py --source ~/photos --limit 20
+python3 scripts/import_photo_library.py --source ~/photos
 ```
 
 У каждого скрипта `--help` с полной документацией.
@@ -64,6 +72,11 @@ Dashboard → Project Settings → API Keys → Secret keys. Файл gitignored
 **GitHub.** Достаточно `gh auth login` — токен в файле не нужен. Если когда-то
 понадобится запускать релиз с машины без keyring, положи fine-grained PAT
 (Contents: read+write) в `.github_token` в корне, скрипты его подхватят сами.
+
+**Pillow** — только для `import_photo_library.py`, единственная зависимость вне
+stdlib во всей папке: `sudo apt install python3-pil`. Декодировать JPEG/PNG и
+кодировать WebP stdlib не умеет, а `cwebp`/ImageMagick на машине тоже нет — так что
+импорт Python дешевле системного пакета. Сеть у скрипта по-прежнему через urllib.
 
 **Планшет.** Flutter SDK + два gitignored-файла, которые переносятся руками:
 
