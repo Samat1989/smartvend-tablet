@@ -6,6 +6,32 @@ import './i18n';
 import Cropper from 'react-easy-crop';
 import QRCode from 'qrcode';
 
+// Longest side handed to the cropper. Canvas stops rendering somewhere around
+// 16.7 Mpx on Safari/iOS and phones shoot well past that, so anything bigger
+// is downscaled first. The crop is re-encoded to 600px anyway.
+const MAX_SOURCE_PX = 2000;
+const MAX_SOURCE_BYTES = 40 * 1024 * 1024;
+
+// What the file dialog offers. `image/*` alone let through HEIC and TIFF,
+// which the browser then refused to decode; the explicit list puts the
+// formats that work first and keeps `image/*` as the fallback for Android's
+// file picker, which narrows badly on a strict list.
+const PHOTO_ACCEPT =
+  'image/jpeg,image/png,image/webp,image/avif,image/gif,image/heic,image/heif,image/*';
+
+// The shared photo bank, published by scripts/import_photo_library.py. Names
+// are the md5 of the file, so these URLs are immutable and cache for a year:
+//   <base>/<md5>.webp      600px, what a shopper sees
+//   <base>/t/<md5>.webp     200px, the grid below
+//   <base>/index.json       [{ n: name, f: md5 }, ...]
+const LIBRARY_BASE =
+  `${import.meta.env.VITE_SUPABASE_URL}/storage/v1/object/public/product-images/library`;
+
+// How many tiles are added per page. The whole bank is ~3000 entries and
+// rendering them at once would mean ~3000 image requests; the index itself is
+// only names, so searching stays instant regardless.
+const LIBRARY_PAGE = 60;
+
 // Build a minimal one-page A4 PDF Blob embedding `canvas` as a JPEG image.
 // Dependency-free (no jsPDF) — bundling jsPDF produced an unusable constructor
 // in the Vercel/Node production build, so we emit the PDF bytes ourselves.
@@ -643,14 +669,9 @@ export default function Admin() {
   const [password, setPassword] = useState('');
   const [authLoading, setAuthLoading] = useState(false);
   const [toast, setToast] = useState(null); // { message, type }
-  const fileInputRef = useRef(null);
 
   // Состояния для обрезки
   const [cropImageSrc, setCropImageSrc] = useState(null);
-  // Where the uploaded image URL should be written: 'inventory' (legacy
-  // inventory modal) or 'catalog' (new catalog modal). Defaults to
-  // 'inventory' for back-compat.
-  const [cropTarget, setCropTarget] = useState('inventory');
   const [crop, setCrop] = useState({ x: 0, y: 0 });
   const [zoom, setZoom] = useState(1);
   const [croppedAreaPixels, setCroppedAreaPixels] = useState(null);
@@ -687,6 +708,14 @@ export default function Admin() {
   // for the rest of the session, with no clue that anything was suppressed.
   const [confirmAction, setConfirmAction] = useState(null); // {message, onYes}
   const catalogFileInputRef = useRef(null);
+
+  // Photo source menu + the shared library picker behind it. The index is
+  // fetched once per session and kept here rather than in the modal, so
+  // closing and reopening the picker costs nothing.
+  const [photoMenuOpen, setPhotoMenuOpen] = useState(false);
+  const [libraryOpen, setLibraryOpen] = useState(false);
+  const [libraryIndex, setLibraryIndex] = useState(null);
+  const [libraryLoading, setLibraryLoading] = useState(false);
 
   // Picker overlay used by the inventory edit modal to pick a catalog
   // SKU. The product list is loaded lazily on first open.
@@ -1293,16 +1322,137 @@ export default function Admin() {
 
   // Catalog modal uses its own file-input handler so the shared crop
   // modal knows to route the resulting URL into editingCatalog.
-  const onCatalogFileChange = (e) => {
-    if (e.target.files && e.target.files.length > 0) {
-      const file = e.target.files[0];
-      const reader = new FileReader();
-      reader.readAsDataURL(file);
-      reader.onload = () => {
-        setCropTarget('catalog');
-        setCropImageSrc(reader.result);
-      };
+  const onCatalogFileChange = async (e) => {
+    const file = e.target.files?.[0];
+    // Clear the input right away: otherwise picking the SAME file again after
+    // an error fires no change event and the operator thinks nothing happened.
+    e.target.value = '';
+    if (!file) return;
+
+    setUploadingImage(true);
+    try {
+      setCropImageSrc(await prepareForCrop(file));
+    } catch (err) {
+      console.error('Photo pick failed:', err);
+      showToast(err.message, 'error');
+    } finally {
+      setUploadingImage(false);
     }
+  };
+
+  /**
+   * Turn a picked file into something <Cropper> can actually display — or
+   * throw a message worth showing to a human.
+   *
+   * Everything here exists because the previous version had no failure path
+   * at all: a file the browser cannot decode used to leave the cropper open
+   * full-screen and black until the operator pressed Cancel, with no hint of
+   * what went wrong. An iPhone photo hit that every time.
+   */
+  async function prepareForCrop(file) {
+    if (file.size > MAX_SOURCE_BYTES) throw new Error(t('photo_too_large'));
+
+    let blob = file;
+
+    // HEIC/HEIF is what an iPhone hands over by default and what nothing but
+    // Safari decodes. heic2any carries a libheif build (~1 MB), so it is
+    // imported only once one actually shows up.
+    if (/hei[cf]/i.test(file.type) || /\.hei[cf]$/i.test(file.name)) {
+      try {
+        const { default: heic2any } = await import('heic2any');
+        const out = await heic2any({ blob: file, toType: 'image/png' });
+        blob = Array.isArray(out) ? out[0] : out;
+      } catch (err) {
+        console.error('HEIC decode failed:', err);
+        throw new Error(t('photo_heic_failed'));
+      }
+    }
+
+    // Decode once, up front. TIFF, a truncated download, a .jpg that is not
+    // one — all fail here, and the modal never opens.
+    let bmp;
+    try {
+      bmp = await createImageBitmap(blob, { imageOrientation: 'from-image' });
+    } catch {
+      throw new Error(t('photo_format_unsupported'));
+    }
+
+    try {
+      // Small enough already: hand the original over untouched. The <img> the
+      // cropper renders applies EXIF orientation on its own, same as the
+      // bitmap above, so a portrait phone shot stays upright either way.
+      if (Math.max(bmp.width, bmp.height) <= MAX_SOURCE_PX) {
+        return URL.createObjectURL(blob);
+      }
+
+      // Canvas tops out near 16.7 Mpx on Safari/iOS and a modern phone shoots
+      // well past that, so a 50 Mpx photo would simply never render.
+      const scale = MAX_SOURCE_PX / Math.max(bmp.width, bmp.height);
+      const canvas = document.createElement('canvas');
+      canvas.width = Math.round(bmp.width * scale);
+      canvas.height = Math.round(bmp.height * scale);
+      canvas.getContext('2d').drawImage(bmp, 0, 0, canvas.width, canvas.height);
+      const small = await new Promise((resolve, reject) => canvas.toBlob(
+        b => (b ? resolve(b) : reject(new Error(t('photo_format_unsupported')))),
+        'image/webp', 0.92));
+      return URL.createObjectURL(small);
+    } finally {
+      bmp.close();
+    }
+  }
+
+  /**
+   * Open the library picker, fetching its index on first use.
+   *
+   * index.json is ~110 KB gzipped and holds only names and hashes — no
+   * pictures. Thumbnails are requested by the grid itself, a page at a time,
+   * and every one of them is immutable and cached for a year, so a second
+   * visit to the picker costs no network at all.
+   */
+  async function openPhotoLibrary() {
+    setPhotoMenuOpen(false);
+    setLibraryOpen(true);
+    if (libraryIndex || libraryLoading) return;
+
+    setLibraryLoading(true);
+    try {
+      const resp = await fetch(`${LIBRARY_BASE}/index.json`);
+      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+      setLibraryIndex(await resp.json());
+    } catch (err) {
+      console.error('Photo library index failed:', err);
+      showToast(t('library_error'), 'error');
+      setLibraryOpen(false);
+    } finally {
+      setLibraryLoading(false);
+    }
+  }
+
+  /**
+   * Take a library photo for the product being edited.
+   *
+   * image_url points straight at the shared object — nothing is copied or
+   * re-uploaded, which is the whole point: every owner who picks this picture
+   * ends up with the identical URL, so the tablet's disk cache fetches it once
+   * across the fleet. The name is filled in only when the field is still
+   * empty, so it never overwrites something the operator typed.
+   */
+  function pickFromLibrary(entry) {
+    setEditingCatalog(prev => prev ? {
+      ...prev,
+      image_url: `${LIBRARY_BASE}/${entry.f}.webp`,
+      name: prev.name?.trim() ? prev.name : entry.n,
+    } : prev);
+    setLibraryOpen(false);
+  }
+
+  /** Close the cropper and release the object URL behind it. */
+  const closeCropper = () => {
+    if (cropImageSrc?.startsWith('blob:')) URL.revokeObjectURL(cropImageSrc);
+    setCropImageSrc(null);
+    setCroppedAreaPixels(null);
+    setCrop({ x: 0, y: 0 });
+    setZoom(1);
   };
 
   async function fetchSales() {
@@ -1468,17 +1618,6 @@ export default function Admin() {
   }
 
   // Вызывается при выборе файла
-  const onFileChange = (e) => {
-    if (e.target.files && e.target.files.length > 0) {
-      const file = e.target.files[0];
-      const reader = new FileReader();
-      reader.readAsDataURL(file);
-      reader.onload = () => {
-        setCropImageSrc(reader.result); // Открываем модалку кроппера
-      };
-    }
-  };
-
   // Конвертация обрезанной области в Blob
   const getCroppedImg = (imageSrc, pixelCrop) => {
     return new Promise((resolve, reject) => {
@@ -1512,12 +1651,15 @@ export default function Admin() {
           resolve(blob);
         }, 'image/webp', 0.85);
       };
-      img.onerror = reject;
+      // Was `img.onerror = reject`, which rejects with an Event — and the
+      // catch below renders it as {"isTrusted":true} in the toast.
+      img.onerror = () => reject(new Error(t('photo_format_unsupported')));
     });
   };
 
   // Загрузка готового обрезанного фото
   const handleUploadCrop = async () => {
+    // The button is disabled in this state; the guard is for the stray call.
     if (!cropImageSrc || !croppedAreaPixels) return;
     setUploadingImage(true);
     try {
@@ -1540,13 +1682,8 @@ export default function Admin() {
 
       const { data } = supabase.storage.from('product-images').getPublicUrl(filePath);
 
-      if (cropTarget === 'catalog') {
-        setEditingCatalog(prev => prev ? { ...prev, image_url: data.publicUrl } : prev);
-      } else {
-        setEditingProduct(prev => prev ? { ...prev, image_url: data.publicUrl } : prev);
-      }
-      setCropImageSrc(null);
-      setCropTarget('inventory');
+      setEditingCatalog(prev => prev ? { ...prev, image_url: data.publicUrl } : prev);
+      closeCropper();
     } catch (err) {
       console.error('Error uploading image:', err);
       showToast(`${t('photo_upload_error')}: ${err.message || JSON.stringify(err)}`, 'error');
@@ -2552,6 +2689,14 @@ export default function Admin() {
         </div>
       )}
 
+      <PhotoLibraryModal
+        open={libraryOpen}
+        loading={libraryLoading}
+        index={libraryIndex}
+        onPick={pickFromLibrary}
+        onClose={() => setLibraryOpen(false)}
+      />
+
       {/* Модалка для ручной обрезки фото */}
       {cropImageSrc && (
         <div className="fixed inset-0 z-[100] bg-black flex flex-col">
@@ -2568,14 +2713,14 @@ export default function Admin() {
           </div>
           <div className="p-6 bg-white flex justify-end gap-4 items-center">
             <button
-              onClick={() => { setCropImageSrc(null); setCropTarget('inventory'); }}
+              onClick={closeCropper}
               className="px-6 py-3 font-bold text-on-surface-variant hover:text-black transition-colors"
             >
               {t('cancel')}
             </button>
             <button 
               onClick={handleUploadCrop}
-              disabled={uploadingImage}
+              disabled={uploadingImage || !croppedAreaPixels}
               className="bg-primary text-white px-8 py-3 rounded-xl font-black shadow-lg shadow-primary/20 flex items-center gap-2 active:scale-95 transition-all"
             >
               {uploadingImage ? <Loader2 className="animate-spin" /> : t('save_and_upload')}
@@ -2728,24 +2873,56 @@ export default function Admin() {
 
             <div className="space-y-4">
               <div className="flex gap-4 items-start">
-                <div
-                  onClick={() => catalogFileInputRef.current?.click()}
-                  className="w-24 h-24 bg-indigo-50 rounded-2xl flex flex-col items-center justify-center cursor-pointer border-2 border-dashed border-indigo-400 hover:bg-indigo-100 hover:border-indigo-600 transition-all overflow-hidden relative shrink-0"
-                >
-                  {uploadingImage ? (
-                    <Loader2 className="animate-spin text-primary" />
-                  ) : editingCatalog.image_url ? (
-                    <img src={editingCatalog.image_url} className="w-full h-full object-contain" alt="Preview" />
-                  ) : (
+                {/* Two sources, so the tile opens a menu instead of jumping
+                    straight into the file dialog it used to. */}
+                <div className="relative shrink-0">
+                  <div
+                    onClick={() => setPhotoMenuOpen(v => !v)}
+                    className="w-24 h-24 bg-indigo-50 rounded-2xl flex flex-col items-center justify-center cursor-pointer border-2 border-dashed border-indigo-400 hover:bg-indigo-100 hover:border-indigo-600 transition-all overflow-hidden relative"
+                  >
+                    {uploadingImage ? (
+                      <Loader2 className="animate-spin text-primary" />
+                    ) : editingCatalog.image_url ? (
+                      <img src={editingCatalog.image_url} className="w-full h-full object-contain" alt="Preview" />
+                    ) : (
+                      <>
+                        <Upload className="text-primary mb-1" size={20} />
+                        <span className="text-[10px] font-bold text-primary">{t('photo')}</span>
+                      </>
+                    )}
+                  </div>
+
+                  {photoMenuOpen && (
                     <>
-                      <Upload className="text-primary mb-1" size={20} />
-                      <span className="text-[10px] font-bold text-primary">{t('photo')}</span>
+                      {/* Catches the click that dismisses the menu. Cheaper
+                          and more reliable than a document listener that has
+                          to ignore the opening click itself. */}
+                      <div className="fixed inset-0 z-20" onClick={() => setPhotoMenuOpen(false)} />
+                      <div className="absolute z-30 top-full left-0 mt-1 w-56 bg-white rounded-xl shadow-xl border-2 border-slate-200 overflow-hidden">
+                        <button
+                          type="button"
+                          onClick={openPhotoLibrary}
+                          className="w-full flex items-center gap-2 px-3 py-2.5 text-sm font-bold text-slate-900 hover:bg-indigo-50 text-left"
+                        >
+                          <Image size={16} className="text-primary shrink-0" />
+                          {t('photo_from_library')}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => { setPhotoMenuOpen(false); catalogFileInputRef.current?.click(); }}
+                          className="w-full flex items-center gap-2 px-3 py-2.5 text-sm font-bold text-slate-900 hover:bg-indigo-50 text-left border-t border-slate-200"
+                        >
+                          <Upload size={16} className="text-primary shrink-0" />
+                          {t('photo_from_gallery')}
+                        </button>
+                      </div>
                     </>
                   )}
+
                   <input
                     type="file"
                     className="hidden"
-                    accept="image/*"
+                    accept={PHOTO_ACCEPT}
                     ref={catalogFileInputRef}
                     onChange={onCatalogFileChange}
                   />
@@ -3991,6 +4168,110 @@ function InventoryRow({ slot, product, category, stockLabel, priceLabel, currenc
               </button>
             </>
           )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Picker over the shared photo bank.
+ *
+ * Choosing a picture here writes the shared object's URL onto the product —
+ * nothing is copied, so every owner who picks the same photo ends up with the
+ * identical `image_url`. That is what lets the tablet's disk cache fetch each
+ * picture once for the whole fleet instead of once per operator.
+ *
+ * The bank is ~3000 entries, so nothing here ever renders all of it: search
+ * filters the (name-only) index in memory, and tiles are added a page at a
+ * time as the grid is scrolled. Thumbnails are the 200px variant — a full
+ * page of them is ~220 KB against ~1.5 MB of the 600px files.
+ */
+function PhotoLibraryModal({ open, loading, index, onPick, onClose }) {
+  const { t } = useTranslation();
+  const [query, setQuery] = useState('');
+  const [shown, setShown] = useState(LIBRARY_PAGE);
+
+  // A new search is a new list; keep the old scroll depth and the operator
+  // sees an arbitrary slice of it.
+  useEffect(() => { setShown(LIBRARY_PAGE); }, [query]);
+  useEffect(() => { if (open) { setQuery(''); setShown(LIBRARY_PAGE); } }, [open]);
+
+  if (!open) return null;
+
+  const q = query.trim().toLowerCase();
+  const matches = !index ? [] : (q ? index.filter(e => e.n.toLowerCase().includes(q)) : index);
+  const visible = matches.slice(0, shown);
+
+  const onScroll = (e) => {
+    const el = e.currentTarget;
+    if (el.scrollHeight - el.scrollTop - el.clientHeight < 400) {
+      setShown(v => (v >= matches.length ? v : v + LIBRARY_PAGE));
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 z-[100] bg-black/60 flex items-center justify-center p-4">
+      <div className="bg-white rounded-2xl w-full max-w-4xl h-[85vh] flex flex-col overflow-hidden">
+        <div className="flex items-center justify-between px-5 py-4 border-b-2 border-slate-200">
+          <h3 className="font-black text-lg text-slate-900">{t('library_title')}</h3>
+          <button
+            onClick={onClose}
+            className="p-2.5 bg-slate-200 border border-slate-300 text-slate-700 rounded-full hover:bg-slate-300 active:scale-95"
+          >
+            <X size={20} />
+          </button>
+        </div>
+
+        <div className="px-5 py-3 border-b border-slate-200">
+          <input
+            autoFocus
+            value={query}
+            onChange={e => setQuery(e.target.value)}
+            placeholder={t('library_search')}
+            className="w-full p-2.5 border-2 border-slate-300 focus:border-primary focus:outline-none rounded-xl font-bold text-slate-900 bg-white placeholder-slate-400"
+          />
+          {index && (
+            <p className="text-[11px] font-bold text-slate-500 mt-2">
+              {t('library_found', { count: matches.length })}
+            </p>
+          )}
+        </div>
+
+        <div className="flex-1 overflow-y-auto px-5 py-4" onScroll={onScroll}>
+          {loading && (
+            <div className="flex items-center justify-center gap-2 py-16 text-slate-500 font-bold">
+              <Loader2 className="animate-spin" size={18} /> {t('library_loading')}
+            </div>
+          )}
+
+          {!loading && index && matches.length === 0 && (
+            <p className="text-center text-sm font-bold text-slate-400 py-16">{t('library_empty')}</p>
+          )}
+
+          <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-6 gap-3">
+            {visible.map(entry => (
+              <button
+                key={entry.f + entry.n}
+                type="button"
+                onClick={() => onPick(entry)}
+                title={entry.n}
+                className="group flex flex-col gap-1 text-left focus:outline-none"
+              >
+                <div className="aspect-square bg-slate-50 rounded-xl border-2 border-slate-200 group-hover:border-primary group-focus:border-primary overflow-hidden transition-colors">
+                  <img
+                    src={`${LIBRARY_BASE}/t/${entry.f}.webp`}
+                    alt={entry.n}
+                    loading="lazy"
+                    className="w-full h-full object-contain p-1"
+                  />
+                </div>
+                <span className="text-[10px] font-bold text-slate-600 leading-tight line-clamp-2">
+                  {entry.n}
+                </span>
+              </button>
+            ))}
+          </div>
         </div>
       </div>
     </div>

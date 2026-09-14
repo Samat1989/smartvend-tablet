@@ -23,6 +23,7 @@
     "@supabase/supabase-js": "^2.103.0",
     "@tailwindcss/vite": "^4.2.2",
     "framer-motion": "^12.38.0",
+    "heic2any": "^0.0.4",
     "i18next": "^26.0.4",
     "i18next-browser-languagedetector": "^8.2.1",
     "lucide-react": "^1.8.0",
