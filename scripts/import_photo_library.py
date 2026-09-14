@@ -226,9 +226,14 @@ def upload_all(key: str, products: list[dict], out: Path, index: bytes,
     # Check this BEFORE spending four minutes on photos. The bucket was
     # narrowed to image/webp alone in 20260603200000, back when nothing but
     # photos went into it, and the index is the first object that is not one.
+    # Compare against the header the upload will actually send, not against a
+    # hardcoded "application/json": Storage matches the whole header, so a
+    # charset parameter is enough to turn an allowed type into a 415.
+    index_type = _supabase.content_type_for("index.json")
     allowed = _supabase.bucket_info(key, bucket=BUCKET).get("allowed_mime_types")
-    if allowed and "application/json" not in allowed:
-        fail(f"'{BUCKET}' accepts only {', '.join(allowed)}, so the index cannot "
+    if allowed and index_type not in allowed:
+        fail(f"'{BUCKET}' accepts only {', '.join(allowed)}, but the index is sent "
+             f"as {index_type}, so it cannot "
              f"be published.\n"
              f"  Apply supabase/migrations/"
              f"20260914130000_storage_product_images_allow_index.sql, then re-run.\n"

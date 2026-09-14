@@ -43,7 +43,12 @@ KEY_FILE = REPO_ROOT / ".supabase_key"
 _CONTENT_TYPES = {
     ".apk": "application/vnd.android.package-archive",
     ".bin": "application/octet-stream",
-    ".json": "application/json; charset=utf-8",
+    # No charset parameter: RFC 8259 defines JSON as UTF-8 and does not
+    # define `charset` for this type at all. It also has to go -- Storage
+    # matches allowed_mime_types against the whole header, so
+    # "application/json; charset=utf-8" is not "application/json" and a
+    # bucket that allows the latter rejects it with a 415.
+    ".json": "application/json",
     ".webp": "image/webp",
 }
 
@@ -165,6 +170,12 @@ def publish(key: str, stream: str, artifact: Path, manifest: dict) -> str:
            json.dumps(body, ensure_ascii=False, indent=2).encode("utf-8"),
            cache=MANIFEST_CACHE)
     return public_url(man_path)
+
+
+def content_type_for(path: str) -> str:
+    """The Content-Type this client sends for `path`. Exposed so callers can
+    check it against a bucket's allowed_mime_types before uploading."""
+    return _CONTENT_TYPES.get(Path(path).suffix, "application/octet-stream")
 
 
 def bucket_info(key: str, bucket: str = BUCKET) -> dict:
