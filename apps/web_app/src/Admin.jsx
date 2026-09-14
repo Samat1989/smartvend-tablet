@@ -2414,8 +2414,12 @@ export default function Admin() {
                           </div>
                           <div>
                             <div className="text-sm font-black text-slate-900">{sale.micromarkets?.name || `${t('apparatus_no')}${sale.micromarket_id}`}</div>
-                            <div className="flex items-center gap-2 text-[10px] font-bold text-slate-500 uppercase tracking-tighter">
-                              <Calendar size={10} />
+                            {/* Было 10px с uppercase и tracking-tighter: на
+                                цифрах даты uppercase не даёт ничего, зато
+                                «тов.» превращает в «ТОВ.», а зажатый трекинг
+                                добивал и без того мелкий шрифт. */}
+                            <div className="flex items-center gap-2 text-xs font-bold text-slate-600 tabular-nums">
+                              <Calendar size={13} className="shrink-0" />
                               {new Date(sale.created_at).toLocaleString('ru-RU')}
                               <span className="text-slate-400">· {items.length} {t('items_short')}</span>
                             </div>
