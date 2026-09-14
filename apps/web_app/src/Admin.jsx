@@ -2451,17 +2451,23 @@ export default function Admin() {
                           return (
                           <div
                             key={item.id}
-                            className={`flex justify-between items-start text-xs pb-2 border-b last:border-0 last:pb-0 ${failed ? 'border-rose-100' : 'border-slate-50'}`}
+                            className={`flex justify-between items-center gap-3 text-xs pb-2.5 border-b last:border-0 last:pb-0 ${failed ? 'border-rose-100' : 'border-slate-100'}`}
                           >
                             <div className="flex items-start gap-2 min-w-0 flex-1">
-                              <span className="shrink-0 w-5 h-5 bg-slate-50 rounded flex items-center justify-center font-black text-[9px] text-slate-400">{item.quantity}</span>
+                              {/* Был бэйдж 9px slate-400 на slate-50: и мелко,
+                                  и контраста почти нет. «×N» ещё и снимает
+                                  двусмысленность — голое число в рамке читается
+                                  как номер строки. */}
+                              <span className="shrink-0 min-w-7 h-6 px-1.5 bg-slate-100 border border-slate-200 rounded-md flex items-center justify-center font-black text-xs text-slate-700 tabular-nums">
+                                ×{item.quantity}
+                              </span>
                               {failed ? (
                                 <XCircle size={14} className="shrink-0 mt-px text-rose-500" />
                               ) : (
                                 <CheckCircle2 size={14} className="shrink-0 mt-px text-emerald-500" />
                               )}
                               <div className="min-w-0 flex-1">
-                                <div className="font-bold text-slate-600 truncate">{item.inventory?.name || t('deleted_product')}</div>
+                                <div className="font-bold text-slate-800 truncate">{item.inventory?.name || t('deleted_product')}</div>
                                 {failed && (
                                   <div className="text-[10px] font-bold text-rose-500 mt-0.5 truncate">
                                     {resultLabel(t, item)}
@@ -2469,7 +2475,7 @@ export default function Admin() {
                                 )}
                               </div>
                             </div>
-                            <span className={`font-black ml-4 ${failed ? 'text-rose-500 line-through opacity-70' : 'text-slate-800'}`}>{item.price * item.quantity} {currencyForMachine(sale.micromarket_id)}</span>
+                            <span className={`font-black ml-4 text-sm whitespace-nowrap tabular-nums ${failed ? 'text-rose-500 line-through opacity-70' : 'text-slate-900'}`}>{item.price * item.quantity} {currencyForMachine(sale.micromarket_id)}</span>
                           </div>
                           );
                         })}
