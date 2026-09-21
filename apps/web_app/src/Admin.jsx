@@ -94,6 +94,84 @@ const SALES_PAGE_SIZE = 10;
 // to the deployed storefront origin; falls back to the current origin.
 const STOREFRONT_BASE = import.meta.env.VITE_STOREFRONT_URL || (typeof window !== 'undefined' ? window.location.origin : '');
 
+// Ответ от базы или запрос, который до неё не доехал?
+//
+// postgrest-js ловит упавший fetch сам и возвращает его как обычную ошибку
+// PostgREST — только без HTTP-статуса и с пустым `code`, а в message кладёт имя
+// исходной ошибки. В Chrome это читается ровно как "TypeError: Failed to fetch",
+// и именно эта строка уезжала оператору в тост вместо чего-то осмысленного.
+//
+// Любая ошибка с `code` — это ответ Postgres (нарушен constraint, не прошла
+// RLS): её повторять бессмысленно, сервер уже всё решил. Отличаем одно от
+// другого здесь, в одном месте.
+function isNetworkFailure(err) {
+  if (!err) return false;
+  if (err.code) return false;              // настоящий ответ PostgREST/Postgres
+  if (err.status && err.status !== 0) return false;
+  return /TypeError|FetchError|Failed to fetch|Load failed|NetworkError|network request failed/i
+    .test(`${err.name || ''} ${err.message || ''}`);
+}
+
+/**
+ * Правка строки: PATCH, а если он до сервера не доехал — то же тело POST-ом.
+ *
+ * Зачем. У одного из операторов добавление товара проходило (29 строк
+ * в products за один день), а сохранение правок падало с
+ * "TypeError: Failed to fetch" — то есть ответа не было вовсе. В базе это
+ * видно без всяких логов: у всех 29 строк updated_at равен created_at, при
+ * том что у полутора десятков других владельцев правки в те же минуты
+ * ложились нормально. Значит сервер здоров, а до него не доходит конкретно
+ * PATCH: разница между работающим insert() и падающим update() только в
+ * методе. PATCH (и его CORS-preflight) режут корпоративные прокси,
+ * антивирусы с проверкой HTTPS и часть расширений браузера; POST пускают все.
+ *
+ * upsert бьётся в первичный ключ, то есть уходит ровно в ту же строку.
+ * `fullRow` — полный набор колонок на случай, если строку успели удалить и
+ * upsert окажется вставкой: без него в каталоге завёлся бы безымянный призрак.
+ * Он же несёт owner_id / micromarket_id, которые при upsert обязательны —
+ * RLS проверяет тогда и INSERT-политику, а она требует своего владельца.
+ *
+ * INSERT здесь намеренно не повторяется нигде: POST мог дойти и потерять
+ * только ответ, и второй заход создал бы дубль.
+ */
+async function patchRow(table, id, patch, fullRow) {
+  let { error } = await supabase.from(table).update(patch).eq('id', id);
+  if (isNetworkFailure(error)) {
+    console.warn(`PATCH ${table} не дошёл, повтор через upsert:`, error.message);
+    // created_at/updated_at выкидываем: их ведёт база, и слать своё значение
+    // туда, где вызывающий просто передал строку из списка, — только портить.
+    const row = { ...fullRow };
+    delete row.created_at;
+    delete row.updated_at;
+    ({ error } = await supabase.from(table).upsert({ ...row, ...patch, id }));
+  }
+  return error;
+}
+
+/**
+ * Удаление строки: DELETE, а если он до сервера не доехал — та же работа
+ * через RPC, то есть POST-ом на /rest/v1/rpc/<rpcName>.
+ *
+ * Тот же диагноз, что и у patchRow(), только лечится иначе: у PostgREST
+ * удаление — это всегда метод DELETE, подменить его на POST на клиенте
+ * нечем. Поэтому в базе лежат три security invoker функции
+ * (supabase/migrations/20260921120000_delete_rpcs_for_blocked_delete_method.sql),
+ * которые делают ровно тот же delete под теми же RLS-политиками.
+ *
+ * Возвращает количество удалённых строк — как `.select('id')` у обычного
+ * DELETE. Ноль значит «строку не отдала RLS»: PostgREST на удаление без
+ * прав отвечает не ошибкой, а пустым результатом, и без этой цифры панель
+ * бодро рапортовала бы об успехе.
+ */
+async function deleteRow(table, id, rpcName) {
+  const { data, error } = await supabase.from(table).delete().eq('id', id).select('id');
+  if (!isNetworkFailure(error)) return { error, deleted: data?.length ?? 0 };
+
+  console.warn(`DELETE ${table} не дошёл, повтор через RPC ${rpcName}:`, error.message);
+  const { data: count, error: rpcError } = await supabase.rpc(rpcName, { p_id: id });
+  return { error: rpcError, deleted: rpcError ? 0 : (count ?? 0) };
+}
+
 // Build + download a printable PDF with the machine's QR (encodes
 // <storefront>/?marketId=<id>). Rendered via canvas so Cyrillic text works
 // (jsPDF's built-in fonts don't support it).
@@ -1242,10 +1320,11 @@ export default function Admin() {
         if (error) throw error;
         showToast(t('product_added'));
       } else {
-        const { error } = await supabase
-          .from('products')
-          .update(payload)
-          .eq('id', editingCatalog.id);
+        // Обход заблокированного PATCH — см. patchRow().
+        const error = await patchRow('products', editingCatalog.id, payload, {
+          owner_id: editingCatalog.owner_id || session?.user?.id || null,
+          is_archived: !!editingCatalog.is_archived,
+        });
         if (error) throw error;
         showToast(t('product_saved'));
       }
@@ -1253,7 +1332,12 @@ export default function Admin() {
       fetchCatalogProducts();
     } catch (err) {
       console.error('Save catalog error:', err);
-      showToast(t('save_error') + ': ' + err.message, 'error');
+      // Модалка остаётся открытой со всем, что оператор ввёл, — «Сохранить»
+      // можно нажать ещё раз, ничего не набирая заново.
+      showToast(
+        isNetworkFailure(err) ? t('network_save_error') : `${t('save_error')}: ${err.message}`,
+        'error',
+      );
     } finally {
       setLoading(false);
     }
@@ -1261,10 +1345,9 @@ export default function Admin() {
 
   async function archiveCatalogProduct(p) {
     try {
-      const { error } = await supabase
-        .from('products')
-        .update({ is_archived: !p.is_archived })
-        .eq('id', p.id);
+      // Полная строка во втором аргументе — она у нас на руках из списка,
+      // и при повторе POST-ом вставлять пришлось бы именно её (см. patchRow).
+      const error = await patchRow('products', p.id, { is_archived: !p.is_archived }, p);
       if (error) throw error;
       showToast(p.is_archived ? t('restored') : t('archived_toast'));
       fetchCatalogProducts();
@@ -1275,10 +1358,7 @@ export default function Admin() {
 
   async function publishDraft(p) {
     try {
-      const { error } = await supabase
-        .from('products')
-        .update({ is_draft: false })
-        .eq('id', p.id);
+      const error = await patchRow('products', p.id, { is_draft: false }, p);
       if (error) throw error;
       showToast(t('published'));
       fetchCatalogProducts();
@@ -1296,13 +1376,12 @@ export default function Admin() {
 
   async function reallyDeleteCatalogProduct(p) {
     try {
-      // .select() matters: without it PostgREST answers 204 whether it deleted
-      // a row or RLS filtered every candidate out, and the UI cheerfully
-      // reported success while the product stayed put.
-      const { data, error } = await supabase
-        .from('products').delete().eq('id', p.id).select('id');
+      // `deleted` смотрим не для красоты: PostgREST отвечает 204 и когда
+      // удалил строку, и когда RLS отфильтровала все кандидаты, — раньше на
+      // втором панель бодро рапортовала об успехе. Подробности в deleteRow().
+      const { deleted, error } = await deleteRow('products', p.id, 'delete_product');
       if (error) throw error;
-      if (!data || data.length === 0) {
+      if (deleted === 0) {
         showToast(t('delete_catalog_no_rights'), 'error');
         return;
       }
@@ -1721,10 +1800,15 @@ export default function Admin() {
 
   async function reallyDeleteCategory(id) {
     try {
-      await supabase.from('categories').delete().eq('id', id);
+      // Ошибку здесь раньше не смотрели вовсе: supabase-js её не бросает, а
+      // возвращает в результате, так что catch не срабатывал никогда и панель
+      // рапортовала «удалено» даже когда ничего не удалилось.
+      const { error } = await deleteRow('categories', id, 'delete_category');
+      if (error) throw error;
       fetchCategories();
       showToast(t('category_deleted'));
     } catch (err) {
+      console.error('Delete category error:', err);
       showToast(t('category_delete_error'), 'error');
     }
   }
@@ -1789,10 +1873,10 @@ export default function Admin() {
         });
         if (error) throw error;
       } else {
-        const { error } = await supabase
-          .from('inventory')
-          .update(payload)
-          .eq('id', editingProduct.id);
+        // Обход заблокированного PATCH — см. patchRow().
+        const error = await patchRow('inventory', editingProduct.id, payload, {
+          micromarket_id: editingProduct.micromarket_id || selectedMarketId,
+        });
         if (error) throw error;
       }
       setEditingProduct(null);
@@ -1817,7 +1901,12 @@ export default function Admin() {
         fetchProducts(selectedMarketId);   // подтянуть того, кто занял номер
         return;
       }
-      showToast(`${t('save_product_error')}: ${err.message || JSON.stringify(err)}`, 'error');
+      showToast(
+        isNetworkFailure(err)
+          ? t('network_save_error')
+          : `${t('save_product_error')}: ${err.message || JSON.stringify(err)}`,
+        'error',
+      );
     } finally {
       setLoading(false);
     }
@@ -1848,9 +1937,7 @@ export default function Admin() {
     console.log('Попытка окончательного удаления товара с ID:', id);
     
     try {
-      const { error, status } = await supabase.from('inventory').delete().eq('id', id);
-      console.log('Статус ответа базы данных:', status);
-      
+      const { error } = await deleteRow('inventory', id, 'delete_inventory_item');
       if (error) throw error;
       
       showToast(t('product_deleted'));
