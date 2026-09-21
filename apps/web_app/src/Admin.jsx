@@ -2935,16 +2935,10 @@ export default function Admin() {
                 </div>
               ) : null}
 
+              {/* Остаток слева, цена справа — в том же порядке, в каком они
+                  стоят в строке списка. Раньше форма и список читались
+                  зеркально друг другу. */}
               <div className="flex gap-4">
-                <div className="flex-1">
-                  <label className="text-xs font-bold text-slate-700 ml-2 mb-1 block">{t('price_label')} ({currencyOf(selectedMarket)})</label>
-                  <input
-                    type="number"
-                    className="w-full p-2.5 border-2 border-slate-300 focus:border-primary focus:outline-none rounded-xl font-bold text-slate-900 bg-white"
-                    value={editingProduct.price === 0 ? '' : editingProduct.price}
-                    onChange={e => setEditingProduct({...editingProduct, price: e.target.value === '' ? 0 : Number(e.target.value)})}
-                  />
-                </div>
                 <div className="flex-1">
                   <label className="text-xs font-bold text-slate-700 ml-2 mb-1 block">{t('stock_pcs')}</label>
                   <input
@@ -2952,6 +2946,15 @@ export default function Admin() {
                     className="w-full p-2.5 border-2 border-slate-300 focus:border-primary focus:outline-none rounded-xl font-bold text-slate-900 bg-white"
                     value={editingProduct.stock === 0 ? '' : editingProduct.stock}
                     onChange={e => setEditingProduct({...editingProduct, stock: e.target.value === '' ? 0 : Number(e.target.value)})}
+                  />
+                </div>
+                <div className="flex-1">
+                  <label className="text-xs font-bold text-slate-700 ml-2 mb-1 block">{t('price_label')} ({currencyOf(selectedMarket)})</label>
+                  <input
+                    type="number"
+                    className="w-full p-2.5 border-2 border-slate-300 focus:border-primary focus:outline-none rounded-xl font-bold text-slate-900 bg-white"
+                    value={editingProduct.price === 0 ? '' : editingProduct.price}
+                    onChange={e => setEditingProduct({...editingProduct, price: e.target.value === '' ? 0 : Number(e.target.value)})}
                   />
                 </div>
               </div>
@@ -4220,7 +4223,7 @@ function CatalogTab({
 // motors, no cabinet layout. Add is handled by the header button; rows support
 // edit + delete. `showCells` turns on the cell-number badge: only a screen
 // machine has numbers, a static-QR one has nothing to show there.
-function StaticInventoryList({ products, categories, priceLabel, currency, onEdit, onDelete, showCells = false }) {
+function StaticInventoryList({ products, categories, stockLabel, priceLabel, currency, onEdit, onDelete, showCells = false }) {
   const { t } = useTranslation();
   if (!products || products.length === 0) {
     return (
@@ -4269,9 +4272,18 @@ function StaticInventoryList({ products, categories, priceLabel, currency, onEdi
             <div className="flex-1 min-w-0">
               <h4 className="font-bold text-sm text-slate-900 truncate">{p.name || '—'}</h4>
               <div className="flex items-center gap-1.5 mt-1">
-                <span className={`text-[10px] font-black px-1.5 py-0.5 rounded tabular-nums ${lowStock ? 'bg-red-100 text-red-700' : 'bg-emerald-100 text-emerald-700'}`}>×{p.stock ?? 0}</span>
                 <span className="text-[9px] uppercase font-black text-slate-500 tracking-wider truncate">{cat || t('no_category')}</span>
               </div>
+            </div>
+            {/* Остаток — колонкой слева от цены, как в списке вендинга
+                (InventoryRow). Раньше он жил бейджем под названием рядом с
+                категорией: два числа одной строки, на которые оператор
+                смотрит вместе, стояли в разных её концах. */}
+            <div className="text-right px-1 sm:px-3 shrink-0">
+              <span className="hidden sm:block text-[9px] font-black text-slate-500 uppercase tracking-tighter">{stockLabel}</span>
+              <span className={`inline-block text-sm font-black px-1.5 py-0.5 rounded tabular-nums ${lowStock ? 'bg-red-100 text-red-700' : 'bg-emerald-100 text-emerald-700'}`}>
+                ×{p.stock ?? 0}
+              </span>
             </div>
             <div className="text-right px-2 sm:px-4 shrink-0">
               <span className="hidden sm:block text-[9px] font-black text-slate-500 uppercase tracking-tighter">{priceLabel}</span>
