@@ -712,6 +712,95 @@ function resultLabel(t, item) {
   return t('dispense_failed');
 }
 
+// Локаль для даты продажи. i18n.language здесь — 'ru' | 'kz' | 'en', и 'kz'
+// сам по себе не язык, а страна: Intl на нём молча свалится в локаль браузера.
+const SALE_DATE_LOCALE = { ru: 'ru-RU', kz: 'kk-KZ', en: 'en-GB' };
+
+/**
+ * Дата продажи в списке: «21.09.2026, 14:02».
+ *
+ * Секунды убраны — это список чеков, а не журнал отладки, и третья пара цифр
+ * только удлиняла строку. Локаль раньше была захардкожена 'ru-RU' мимо
+ * переключателя языка: казахская и английская панели показывали русский формат.
+ */
+function formatSaleDate(iso, lang) {
+  return new Date(iso).toLocaleString(SALE_DATE_LOCALE[lang] || SALE_DATE_LOCALE.ru, {
+    day: '2-digit', month: '2-digit', year: 'numeric',
+    hour: '2-digit', minute: '2-digit',
+  });
+}
+
+/**
+ * Свести позиции чека к тому, что помещается в свёрнутую строку.
+ *
+ * Группировка по товару здесь обязательна: на вендинге планшет пишет каждую
+ * штуку ОТДЕЛЬНОЙ строкой с quantity = 1 — количество разворачивается в цикл
+ * по моторам, — поэтому чек на две банки одного энергетика приезжает двумя
+ * строками, и без склейки заголовок читался бы «Gorilla, Gorilla». Static-QR,
+ * наоборот, пишет настоящий count, так что units складывает оба случая.
+ *
+ * Ключ — product_id (это внешний ключ на inventory.id), с запасным вариантом
+ * на id самой строки: позиции без product_id иначе слиплись бы в одну
+ * непонятную группу. Порядок — первого появления, его Map даёт сама: чек
+ * читается в том порядке, в котором его набирали.
+ */
+function summarizeSaleItems(items) {
+  const groups = new Map();
+  let totalUnits = 0;
+
+  for (const item of items || []) {
+    const units = item.quantity || 1;
+    totalUnits += units;
+
+    const key = item.product_id ?? `#${item.id}`;
+    const seen = groups.get(key);
+    if (seen) {
+      seen.units += units;
+      seen.hasFailed = seen.hasFailed || item.dispensed === false;
+      continue;
+    }
+
+    const inv = item.inventory;
+    groups.set(key, {
+      key,
+      // Снимок имени впереди живых ссылок: product_name записан в момент
+      // продажи, и это единственное, что переживает удаление позиции из
+      // аппарата. Дальше — имя позиции, потом каталожное: имя позиции
+      // оператор правит руками под конкретный аппарат, и это законное
+      // отличие, а не протухшая копия.
+      name: item.product_name || inv?.name || inv?.products?.name || null,
+      units,
+      hasFailed: item.dispensed === false,
+      motorId: inv?.motor_id ?? null,
+    });
+  }
+
+  return { groups: [...groups.values()], totalUnits };
+}
+
+/**
+ * Номер ячейки для строки продажи — или null, когда его нет либо он соврёт.
+ *
+ * О достоверности, честно: в sales_items номера мотора нет вообще. Он берётся
+ * из ТЕКУЩЕГО inventory.motor_id по ссылке product_id, то есть показывает, где
+ * товар стоит сейчас, а не откуда его выдавали. Переставили товар в другую
+ * спираль — у старой продажи покажется новая ячейка. Ради чего номер и нужен —
+ * разбор свежего сбоя — это верно; чек месячной давности может врать. Закрыть
+ * дыру можно только колонкой в sales_items, которую планшет заполнял бы в
+ * момент выдачи.
+ *
+ * У машины с экраном motor_id — это и есть номер, написанный на полке, и
+ * переводить его нельзя: motorToSlotLabel считает по вендинговой раскладке, и
+ * «15» стало бы «085», а «10» — «?» (тот же капкан описан у byCellNumber).
+ * У статичного микромаркета спиралей нет, motor_id там всегда пустой.
+ */
+function saleSlotLabel(motorId, kind, layout) {
+  if (motorId == null) return null;
+  if (kind === 'micromarket_screen') return String(motorId);
+  if (kind !== 'vending') return null;
+  return motorToSlotLabel(motorId, layout);
+}
+
 export default function Admin() {
   const { t, i18n } = useTranslation();
   const [markets, setMarkets] = useState([]);
@@ -771,7 +860,6 @@ export default function Admin() {
   const [periodFrom, setPeriodFrom] = useState('');
   const [periodTo, setPeriodTo] = useState('');
   const [selectedSalesMarket, setSelectedSalesMarket] = useState('all');
-  const [expandedSaleId, setExpandedSaleId] = useState(null); // which sale's items are shown
   const [qrModalMarket, setQrModalMarket] = useState(null); // machine whose QR modal is open
   const [serviceOpenMarket, setServiceOpenMarket] = useState(null); // machine whose service-unlock dialog is open
 
@@ -1555,7 +1643,7 @@ export default function Admin() {
           micromarkets(name),
           sales_items(
             *,
-            inventory(name)
+            inventory(name, motor_id, products(name))
           )
         `)
         .order('created_at', { ascending: false });
@@ -2082,6 +2170,19 @@ export default function Admin() {
   // (a find over the machine list, one pass over the loaded sales page).
   const currencyForMachine = (id) =>
     currencyOf(markets.find((m) => String(m.id) === String(id)));
+  const machineFor = (id) => markets.find((m) => String(m.id) === String(id));
+
+  // Раскладки разбираются лениво и по одному разу на машину: parseLayout
+  // строит объект заново на каждый вызов, а motorToSlotLabel вешает на него
+  // карту motor → слот, так что разбирать JSON на каждую строку списка
+  // означало бы выбрасывать этот кэш пятьсот раз подряд. Обычная Map, а не
+  // useRef/useMemo — по той же причине, что и всё в этом блоке.
+  const layoutCache = new Map();
+  const layoutForMachine = (id) => {
+    const key = String(id);
+    if (!layoutCache.has(key)) layoutCache.set(key, parseLayout(machineFor(id)?.layout_json));
+    return layoutCache.get(key);
+  };
 
   // Grouped by currency, not summed flat. With the machine filter on "all" an
   // owner can have Kazakh and Kyrgyz cabinets in the same list, and adding
@@ -2500,27 +2601,107 @@ export default function Admin() {
                       0,
                     );
                     const inProgress = sale.status === 'in_progress';
+                    const { groups, totalUnits } = summarizeSaleItems(items);
+                    const market = machineFor(sale.micromarket_id);
+                    // Полный состав чека — в подсказку по наведению: в строку
+                    // влезает только первый товар и счётчик остальных.
+                    const itemsTitle = groups
+                      .map(g => {
+                        const name = g.name || t('deleted_product');
+                        return g.units > 1 ? `${name} ×${g.units}` : name;
+                      })
+                      .join(', ');
+                    // Ячейку в шапку выносим, только когда невыданная позиция
+                    // ровно одна: при двух и более ячейки разные, и один номер
+                    // из них — не подсказка, а дезинформация.
+                    const failedSlot = failedItems.length === 1
+                      ? saleSlotLabel(
+                          failedItems[0].inventory?.motor_id,
+                          market?.kind,
+                          layoutForMachine(sale.micromarket_id),
+                        )
+                      : null;
+                    // Раскрывать нечего: показываем всё сразу. У 332 чеков из
+                    // 400 ровно одна строка, и для них карточка остаётся
+                    // одной строкой — товар, статус, ячейка и сумма умещаются
+                    // в шапку, а отдельный список продублировал бы их. Список
+                    // рисуется там, где строк больше: две строки одного товара
+                    // могут разойтись по результату выдачи, и это как раз то,
+                    // что нужно видеть.
+                    const single = items.length === 1 ? items[0] : null;
+                    const singleSlot = single
+                      ? saleSlotLabel(
+                          single.inventory?.motor_id,
+                          market?.kind,
+                          layoutForMachine(sale.micromarket_id),
+                        )
+                      : null;
+                    // У одиночной позиции ячейка уже стоит рядом с суммой —
+                    // второй раз в бейдже возврата она не нужна.
+                    const refundSlot = single ? null : failedSlot;
                     return (
                     <div key={sale.id} className="bg-white border-2 border-slate-200 rounded-2xl p-4 md:p-6 hover:border-primary/40 hover:shadow-md transition-all">
-                      <div
-                        className="flex flex-wrap justify-between items-start gap-4 cursor-pointer select-none"
-                        onClick={() => setExpandedSaleId(expandedSaleId === sale.id ? null : sale.id)}
-                      >
-                        <div className="flex items-center gap-4">
-                          <div className="w-10 h-10 bg-primary/10 text-primary rounded-xl flex items-center justify-center">
+                      <div className="flex flex-wrap justify-between items-start gap-4">
+                        <div className="flex items-center gap-4 min-w-0 flex-1">
+                          <div className="w-10 h-10 bg-primary/10 text-primary rounded-xl flex items-center justify-center shrink-0">
                             <Receipt size={20} />
                           </div>
-                          <div>
-                            <div className="text-sm font-black text-slate-900">{sale.micromarkets?.name || `${t('apparatus_no')}${sale.micromarket_id}`}</div>
+                          <div className="min-w-0">
+                            {/* Заголовок записи — товар, а не аппарат: чтобы
+                                узнать, что купили, раньше приходилось
+                                раскрывать чек, хотя 332 из 400 состоят ровно
+                                из одной позиции. Аппарат уехал строкой ниже —
+                                при фильтре «Все аппараты» он нужен, но
+                                опознают продажу не по нему.
+                                min-w-0 + truncate обязательны — без них длинное
+                                имя товара не даст флексу сжаться и разорвёт
+                                шапку на телефоне. */}
+                            <div className="text-sm font-black text-slate-900 truncate" title={itemsTitle || undefined}>
+                              {groups.length === 0 ? (
+                                <span
+                                  className="font-bold italic text-slate-400"
+                                  title={t('sale_no_items_hint')}
+                                >
+                                  {t('sale_no_items')}
+                                </span>
+                              ) : (
+                                itemsTitle
+                              )}
+                            </div>
                             {/* Было 10px с uppercase и tracking-tighter: на
                                 цифрах даты uppercase не даёт ничего, зато
                                 «тов.» превращает в «ТОВ.», а зажатый трекинг
                                 добивал и без того мелкий шрифт. */}
-                            <div className="flex items-center gap-2 text-xs font-bold text-slate-600 tabular-nums">
-                              <Calendar size={13} className="shrink-0" />
-                              {new Date(sale.created_at).toLocaleString('ru-RU')}
-                              <span className="text-slate-400">· {items.length} {t('items_short')}</span>
+                            <div className="flex flex-wrap items-center gap-x-2 text-xs font-bold text-slate-600 tabular-nums">
+                              <span className="truncate">{sale.micromarkets?.name || `${t('apparatus_no')}${sale.micromarket_id}`}</span>
+                              <span className="inline-flex items-center gap-1">
+                                <Calendar size={13} className="shrink-0" />
+                                {formatSaleDate(sale.created_at, i18n.language)}
+                              </span>
+                              <span className="text-slate-400">· {totalUnits} {t('items_short')}</span>
+                              {/* Номер платежа здесь, а не отдельным подвалом:
+                                  раскрытия больше нет, и целый блок с рамкой
+                                  ради одного числа удлинял бы каждую карточку.
+                                  select-all оставлен — им сверяют возврат с
+                                  выпиской, и выделять его должно быть одним
+                                  движением. */}
+                              {sale.payment_id && (
+                                <span
+                                  className="font-mono text-[11px] text-slate-400 select-all break-all"
+                                  title={t('payment_id')}
+                                >
+                                  · #{sale.payment_id}
+                                </span>
+                              )}
                             </div>
+                            {/* Причина невыдачи для одиночной позиции: списка
+                                под шапкой у неё нет, а знать, почему товар не
+                                вышел, нужно не раскрывая ничего. */}
+                            {single && single.dispensed === false && (
+                              <div className="mt-1 text-[11px] font-bold text-rose-500 truncate" title={resultLabel(t, single)}>
+                                {resultLabel(t, single)}
+                              </div>
+                            )}
                             {inProgress && (
                               <div className="mt-1 inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-amber-50 text-amber-700 text-[10px] font-black uppercase tracking-wider">
                                 <AlertTriangle size={11} />
@@ -2530,26 +2711,60 @@ export default function Admin() {
                           </div>
                         </div>
                         <div className="flex items-center gap-3 shrink-0">
+                          {/* Статус и ячейка одиночной позиции — здесь, рядом с
+                              суммой: списка под шапкой у такого чека нет. */}
+                          {single && (
+                            <div className="flex items-center gap-2 shrink-0">
+                              {single.dispensed === false ? (
+                                <XCircle size={18} className="text-rose-500" />
+                              ) : (
+                                <CheckCircle2 size={18} className="text-emerald-500" />
+                              )}
+                              {singleSlot && (
+                                <span
+                                  title={market?.kind === 'micromarket_screen' ? t('cell_number') : t('slot_in_machine')}
+                                  className="px-2 py-1 rounded-lg border-2 border-indigo-700 bg-indigo-600 text-white font-black text-[11px] tabular-nums"
+                                >
+                                  {singleSlot}
+                                </span>
+                              )}
+                            </div>
+                          )}
                           <div className="text-right">
                             <div className="text-xl font-black text-primary">{sale.amount} {currencyForMachine(sale.micromarket_id)}</div>
                             {failedItems.length > 0 && (
                               <div className="mt-1 inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-rose-50 text-rose-600 text-[10px] font-black uppercase tracking-wider">
                                 <AlertTriangle size={11} />
+                                {refundSlot && (
+                                  <span
+                                    className="tabular-nums"
+                                    title={market?.kind === 'micromarket_screen' ? t('cell_number') : t('slot_in_machine')}
+                                  >
+                                    {refundSlot} ·
+                                  </span>
+                                )}
                                 {t('refund_due')}: {refundTotal} {currencyForMachine(sale.micromarket_id)}
                               </div>
                             )}
                           </div>
-                          <ChevronDown
-                            size={18}
-                            className={`text-slate-400 transition-transform ${expandedSaleId === sale.id ? 'rotate-180' : ''}`}
-                          />
                         </div>
                       </div>
 
-                      {expandedSaleId === sale.id && (
-                      <div className="space-y-3 mt-6 pt-4 border-t border-slate-100">
+                      {!single && items.length > 0 && (
+                      <div className="space-y-3 mt-4 pt-3 border-t border-slate-100">
+                        {/* Здесь позиции НЕ группируются, в отличие от
+                            заголовка, и это осознанно: вид диагностический, а
+                            две строки одного товара могут иметь разные
+                            result_code — одна выдалась, вторая застряла.
+                            Склейка в «Gorilla ×2» уничтожила бы ровно то, ради
+                            чего список и нужен. */}
                         {items.map(item => {
                           const failed = item.dispensed === false;
+                          const slot = saleSlotLabel(
+                            item.inventory?.motor_id,
+                            market?.kind,
+                            layoutForMachine(sale.micromarket_id),
+                          );
                           return (
                           <div
                             key={item.id}
@@ -2569,7 +2784,7 @@ export default function Admin() {
                                 <CheckCircle2 size={14} className="shrink-0 mt-px text-emerald-500" />
                               )}
                               <div className="min-w-0 flex-1">
-                                <div className="font-bold text-slate-800 truncate">{item.inventory?.name || t('deleted_product')}</div>
+                                <div className="font-bold text-slate-800 truncate">{item.product_name || item.inventory?.name || item.inventory?.products?.name || t('deleted_product')}</div>
                                 {failed && (
                                   <div className="text-[10px] font-bold text-rose-500 mt-0.5 truncate">
                                     {resultLabel(t, item)}
@@ -2577,7 +2792,19 @@ export default function Admin() {
                                 )}
                               </div>
                             </div>
-                            <span className={`font-black ml-4 text-sm whitespace-nowrap tabular-nums ${failed ? 'text-rose-500 line-through opacity-70' : 'text-slate-900'}`}>{item.price * item.quantity} {currencyForMachine(sale.micromarket_id)}</span>
+                            {/* Номера нет у микромаркетов вовсе — там не
+                                спирали, а полки, — поэтому бейдж просто не
+                                рисуется, а не показывает пустую заглушку на
+                                трёх четвертях строк. */}
+                            {slot && (
+                              <span
+                                title={market?.kind === 'micromarket_screen' ? t('cell_number') : t('slot_in_machine')}
+                                className="shrink-0 px-2 py-1 rounded-lg border-2 border-indigo-700 bg-indigo-600 text-white font-black text-[11px] tabular-nums"
+                              >
+                                {slot}
+                              </span>
+                            )}
+                            <span className={`font-black ml-1 text-sm whitespace-nowrap tabular-nums ${failed ? 'text-rose-500 line-through opacity-70' : 'text-slate-900'}`}>{item.price * item.quantity} {currencyForMachine(sale.micromarket_id)}</span>
                           </div>
                           );
                         })}
