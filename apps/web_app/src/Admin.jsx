@@ -131,6 +131,9 @@ function isNetworkFailure(err) {
  * Он же несёт owner_id / micromarket_id, которые при upsert обязательны —
  * RLS проверяет тогда и INSERT-политику, а она требует своего владельца.
  *
+ * Его можно и не передавать — тогда вставка заведомо не пройдёт RLS, и это
+ * ровно то, что нужно там, где призрак недопустим (см. renameMarket).
+ *
  * INSERT здесь намеренно не повторяется нигде: POST мог дойти и потерять
  * только ответ, и второй заход создал бы дубль.
  */
@@ -1212,8 +1215,16 @@ export default function Admin() {
           body: { action: 'rename', machid: renamingMarket.id, name },
         });
       } else {
-        const { error } = await supabase
-          .from('micromarkets').update({ name }).eq('id', renamingMarket.id);
+        // Обход заблокированного PATCH — см. patchRow(). Полная строка сюда
+        // намеренно не передаётся, в отличие от каталога, и по двум причинам.
+        // Во-первых, список машин читается частичным select — отправить его
+        // целиком значило бы записать обратно свой layout_json, а его правит
+        // планшет, и раскладка минутной давности затёрла бы свежую. Во-вторых,
+        // призрачный аппарат страшнее призрачного товара: «Owner manages
+        // micromarkets» объявлена FOR ALL без отдельного WITH CHECK, то есть
+        // для вставки Postgres требует то же owner_id = auth.uid(). Без него
+        // вставка не пройдёт RLS — а больше upsert-у тут ничего и не нужно.
+        const error = await patchRow('micromarkets', renamingMarket.id, { name });
         if (error) throw error;
       }
       setRenamingMarket(null);
