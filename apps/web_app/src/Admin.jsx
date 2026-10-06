@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { supabase } from './supabaseClient';
-import { Image, Upload, Download, Plus, Minus, Save, Trash2, X, Loader2, Pencil, Receipt, Calendar, ShoppingBag, History, Languages, CheckCircle2, XCircle, AlertTriangle, ChevronRight, ChevronLeft, ChevronDown, Package, QrCode, KeyRound, Unlink as LinkOff, HelpCircle } from 'lucide-react';
+import { Image, Upload, Download, Plus, Minus, Save, Trash2, X, Loader2, Pencil, Receipt, Calendar, ShoppingBag, History, Languages, CheckCircle2, XCircle, AlertTriangle, ChevronRight, ChevronLeft, ChevronDown, Package, QrCode, KeyRound, Unlink as LinkOff, HelpCircle, Link2 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import './i18n';
 import Cropper from 'react-easy-crop';
@@ -316,7 +316,7 @@ function ServiceOpenModal({ market, onSubmit, onClose }) {
     setResult(null);
     try {
       const data = await onSubmit(market.id, seconds);
-      setResult({ ok: true, nudge: data?.nudge !== false });
+      setResult({ ok: true, nudge: data?.nudge !== false, opened: data?.opened });
     } catch (e) {
       setResult({ error: (e && e.message) || String(e) });
     } finally {
@@ -358,11 +358,15 @@ function ServiceOpenModal({ market, onSubmit, onClose }) {
 
         {result?.ok && (
           <div className={`mt-5 rounded-xl px-3 py-3 text-xs font-bold leading-relaxed ${
-            result.nudge
+            result.nudge && result.opened !== false
               ? 'bg-emerald-50 border border-emerald-200 text-emerald-800'
               : 'bg-amber-50 border border-amber-200 text-amber-800'
           }`}>
-            {result.nudge ? t('service_open_sent') : t('service_open_sent_offline')}
+            {/* opened is set only for boards on the Realtime firmware, which
+                answer the command; MQTT-era boards keep the old wording. */}
+            {result.opened === true ? t('service_open_opened')
+              : result.opened === false ? t('service_open_lock_failed')
+              : result.nudge ? t('service_open_sent') : t('service_open_sent_offline')}
           </div>
         )}
         {result?.error && (
@@ -380,6 +384,93 @@ function ServiceOpenModal({ market, onSubmit, onClose }) {
             : result?.ok ? t('service_open_done')
             : (<><KeyRound size={18} /> {t('service_open_submit')}</>)}
         </button>
+      </div>
+    </div>
+  );
+}
+
+// Привязка платы на Realtime-прошивке (firmware/esp-rt). Владелец получает
+// одноразовый код на 30 минут и вводит его на плате вместе с номером аппарата;
+// плата обменивает код на свой канал и ключ подписи (RPC device_pair). Новая
+// привязка выдаёт новые канал и ключ, так что прежняя плата аппарата глохнет.
+function PairBoardModal({ market, onClose, onUnpair }) {
+  const { t, i18n } = useTranslation();
+  const [busy, setBusy] = useState(false);
+  const [code, setCode] = useState(null); // {code, expires_at}
+  const [error, setError] = useState(null);
+  const [now, setNow] = useState(Date.now());
+
+  useEffect(() => {
+    if (!code) return undefined;
+    const id = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(id);
+  }, [code]);
+
+  async function getCode() {
+    setBusy(true);
+    setError(null);
+    const { data, error: err } = await supabase.rpc('create_pair_code', { p_machid: market.id });
+    setBusy(false);
+    if (err) setError(err.message);
+    else setCode(data);
+  }
+
+  const left = code ? Math.max(0, Math.floor((new Date(code.expires_at).getTime() - now) / 1000)) : 0;
+  const mmss = `${Math.floor(left / 60)}:${String(left % 60).padStart(2, '0')}`;
+
+  return (
+    <div className="fixed inset-0 z-[60] bg-black/50 flex items-center justify-center p-4" onClick={onClose}>
+      <div className="bg-white rounded-3xl p-6 w-full max-w-sm shadow-2xl" onClick={(e) => e.stopPropagation()}>
+        <div className="flex items-center justify-between mb-4">
+          <h3 className="text-lg font-black text-slate-900">{t('pair_board_title')}</h3>
+          <button onClick={onClose} className="p-2 text-slate-400 hover:text-slate-700 rounded-lg"><X size={20} /></button>
+        </div>
+
+        <div className="font-bold text-slate-900">{market.name || `${t('apparatus_no')}${market.id}`}</div>
+        <div className="text-[11px] font-bold text-slate-500 uppercase tracking-widest">{t('apparatus_no')}{market.id}</div>
+
+        <div className={`mt-4 rounded-xl px-3 py-2 text-xs font-bold ${market.rt ? 'bg-emerald-50 text-emerald-800' : 'bg-slate-100 text-slate-600'}`}>
+          {market.rt
+            ? `${t('pair_board_paired')} · ${new Date(market.rt.paired_at).toLocaleString(i18n.language)}`
+            : t('pair_board_not_paired')}
+        </div>
+
+        <p className="mt-3 text-xs text-slate-500 leading-relaxed">{t('pair_board_desc')}</p>
+
+        {code && left > 0 && (
+          <div className="mt-5 text-center">
+            <div className="text-[11px] font-bold text-slate-500 uppercase tracking-widest">{t('pair_board_code')}</div>
+            <div className="text-4xl font-black tracking-[0.3em] text-slate-900 tabular-nums select-all">{code.code}</div>
+            <div className="text-xs font-bold text-slate-500 tabular-nums">{t('pair_board_expires')} {mmss}</div>
+          </div>
+        )}
+        {code && left === 0 && (
+          <div className="mt-5 rounded-xl px-3 py-3 bg-amber-50 border border-amber-200 text-amber-800 text-xs font-bold">
+            {t('pair_board_expired')}
+          </div>
+        )}
+        {error && (
+          <div className="mt-5 rounded-xl px-3 py-3 bg-rose-50 border border-rose-200 text-rose-700 text-xs font-bold break-words">
+            {error}
+          </div>
+        )}
+
+        <button
+          onClick={getCode}
+          disabled={busy}
+          className="mt-5 w-full flex items-center justify-center gap-2 bg-slate-900 text-white py-3 rounded-xl font-bold hover:bg-slate-700 transition-all disabled:bg-slate-300 disabled:cursor-wait"
+        >
+          {busy ? <Loader2 size={18} className="animate-spin" /> : <Link2 size={18} />}
+          {code ? t('pair_board_new_code') : t('pair_board_get_code')}
+        </button>
+        {market.rt && (
+          <button
+            onClick={onUnpair}
+            className="mt-2 w-full flex items-center justify-center gap-2 bg-white text-rose-600 border border-rose-200 py-3 rounded-xl font-bold hover:bg-rose-50 transition-all"
+          >
+            <LinkOff size={18} /> {t('pair_board_unpair')}
+          </button>
+        )}
       </div>
     </div>
   );
@@ -642,8 +733,25 @@ function currencyOf(market) {
   return market?.status?.ter_number === 'ODG' ? SOM : TENGE;
 }
 
-function DeviceStatusDot({ status, kind, withLabel = false }) {
+// `rt` is the live Presence of a board on the Realtime firmware: true/false,
+// null while the channel is still connecting, undefined for machines without
+// such a board. Presence is the board's last will — Realtime drops it the
+// moment the board's socket dies — so it needs no heartbeat threshold.
+function DeviceStatusDot({ status, kind, withLabel = false, rt }) {
   const { t, i18n } = useTranslation();
+
+  if (kind === 'micromarket_static' && rt !== undefined) {
+    const label = rt === true ? t('status_online') : rt === false ? t('status_offline') : t('status_checking');
+    const tone = rt === true ? 'bg-emerald-500' : rt === false ? 'bg-slate-400' : 'bg-slate-300 animate-pulse';
+    return (
+      <span className="flex items-center gap-1.5 shrink-0" title={label}>
+        <span className={`w-2.5 h-2.5 rounded-full ${tone}`} />
+        {withLabel && (
+          <span className="text-[10px] font-bold uppercase tracking-wider text-slate-500">{label}</span>
+        )}
+      </span>
+    );
+  }
 
   // A static-QR micromarket has no tablet — the ESP relay doesn't report yet,
   // so there is nothing to draw. Showing it as permanently green would be the
@@ -922,6 +1030,7 @@ export default function Admin() {
 
   // Rename, available to the owner of the machine (plain RLS-scoped UPDATE).
   const [renamingMarket, setRenamingMarket] = useState(null); // {id,name}
+  const [pairMarket, setPairMarket] = useState(null); // machine whose board-pairing dialog is open
   const [releaseTarget, setReleaseTarget] = useState(null);   // {id,name}
 
 
@@ -1711,6 +1820,57 @@ export default function Admin() {
     return true;
   }
 
+  // Live connection of boards on the Realtime firmware: one presence-only
+  // channel per board. The board tracks itself under its machid; the panel
+  // only listens.
+  const [rtOnline, setRtOnline] = useState({});
+  const rtTopicsKey = markets
+    .filter((m) => m.rt?.topic)
+    .map((m) => `${m.id}:${m.rt.topic}`)
+    .sort()
+    .join(',');
+  useEffect(() => {
+    if (!rtTopicsKey) { setRtOnline({}); return undefined; }
+    const channels = rtTopicsKey.split(',').map((pair) => {
+      const [machid, topic] = pair.split(':');
+      const ch = supabase.channel(`dev:${topic}`, { config: { presence: { key: '' } } });
+      const update = () => setRtOnline((prev) => ({
+        ...prev,
+        [machid]: Object.prototype.hasOwnProperty.call(ch.presenceState(), machid),
+      }));
+      ch.on('presence', { event: 'sync' }, update);
+      // An empty channel may never sync; settle it to "offline" after a beat.
+      ch.subscribe((st) => { if (st === 'SUBSCRIBED') setTimeout(update, 2000); });
+      return ch;
+    });
+    return () => { channels.forEach((ch) => supabase.removeChannel(ch)); };
+  }, [rtTopicsKey]);
+
+  async function unpairBoard(market) {
+    setConfirmAction({
+      message: t('pair_board_unpair_confirm'),
+      onYes: async () => {
+        const { error } = await supabase.rpc('unpair_device', { p_machid: market.id });
+        if (error) { showToast(error.message, 'error'); return; }
+        showToast(t('pair_board_unpaired'));
+        setPairMarket(null);
+        fetchMarkets();
+      },
+    });
+  }
+
+  async function restoreSaleStock(sale) {
+    setConfirmAction({
+      message: t('restore_stock_confirm'),
+      onYes: async () => {
+        const { error } = await supabase.rpc('restore_sale_stock', { p_sale_id: sale.id });
+        if (error) { showToast(error.message, 'error'); return; }
+        showToast(t('stock_restored'));
+        fetchSales();
+      },
+    });
+  }
+
   async function fetchMarkets() {
     try {
       // Two queries, merged here rather than one embedded select: PostgREST
@@ -1719,13 +1879,19 @@ export default function Admin() {
       // database clock. Computing it here would compare the tablet's beat
       // to the browser's clock, which on a kiosk network is often minutes
       // out and would flip machines offline at random.
-      const [marketsRes, statusRes] = await Promise.all([
+      const [marketsRes, statusRes, rtRes] = await Promise.all([
         supabase.from('micromarkets').select('id, name, layout_json, kind, qr_token'),
         supabase.from('device_status_view').select('machid, last_seen_at, board_ok, online, app_version, ter_number'),
+        // Boards on the Realtime firmware. Missing RPC (migration not applied
+        // yet) just means "none" — the panel keeps working.
+        supabase.rpc('my_device_rt'),
       ]);
       if (marketsRes.error) throw marketsRes.error;
       const byId = new Map(
         (statusRes.data || []).map((s) => [String(s.machid), s]),
+      );
+      const rtById = new Map(
+        (rtRes.error ? [] : rtRes.data || []).map((r) => [String(r.machid), r]),
       );
       setMarkets((marketsRes.data || []).map((m) => ({
         ...m,
@@ -1733,6 +1899,7 @@ export default function Admin() {
         // badge can say "never seen" instead of claiming it's offline —
         // a machine that isn't installed yet isn't a fault.
         status: byId.get(String(m.id)),
+        rt: rtById.get(String(m.id)),
       })));
       // No auto-select: the Inventory tab opens on the machine list and the
       // operator drills into a specific machine. Sales/Catalog don't need one.
@@ -2328,7 +2495,12 @@ export default function Admin() {
                     // drop under it and get the full width instead.
                     const meta = (
                       <>
-                        <DeviceStatusDot status={m.status} kind={m.kind} withLabel />
+                        <DeviceStatusDot
+                          status={m.status}
+                          kind={m.kind}
+                          withLabel
+                          rt={m.rt ? (rtOnline[m.id] ?? null) : undefined}
+                        />
                         <span className={`text-[9px] font-black uppercase tracking-wider px-2 py-1 rounded-lg shrink-0 ${kindTint(m.kind)}`}>
                           {kindLabel(m.kind, t)}
                         </span>
@@ -2364,6 +2536,17 @@ export default function Admin() {
                       {/* Vending only: a static-QR micromarket has no tablet,
                           so there is no claim to release. Same reason its
                           connection lamp is hidden. */}
+                      {m.kind === 'micromarket_static' && (
+                        <button
+                          onClick={() => setPairMarket(m)}
+                          title={t('pair_board')}
+                          className={`p-2 rounded-lg bg-white border transition-all shrink-0 ${
+                            m.rt ? 'border-emerald-300 text-emerald-600' : 'border-slate-300 text-slate-600'
+                          } hover:text-primary hover:border-primary`}
+                        >
+                          <Link2 size={15} />
+                        </button>
+                      )}
                       {m.kind === 'vending' && (
                         <button
                           onClick={() => setReleaseTarget({ id: m.id, name: m.name || '' })}
@@ -2700,6 +2883,34 @@ export default function Admin() {
                             {single && single.dispensed === false && (
                               <div className="mt-1 text-[11px] font-bold text-rose-500 truncate" title={resultLabel(t, single)}>
                                 {resultLabel(t, single)}
+                              </div>
+                            )}
+                            {/* Realtime boards: the sale is written when the
+                                money is taken, the door opens after. failed /
+                                no_ack mean "paid, door stayed shut" — the
+                                owner refunds by hand (no refund API at LV). */}
+                            {sale.door_status && sale.door_status !== 'opened' && (
+                              <div className="mt-1 flex flex-wrap items-center gap-2">
+                                <span
+                                  title={sale.door_status === 'pending' ? undefined : t('door_failed_hint')}
+                                  className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-black uppercase tracking-wider ${
+                                    sale.door_status === 'pending' ? 'bg-amber-50 text-amber-700' : 'bg-rose-50 text-rose-600'
+                                  }`}
+                                >
+                                  <AlertTriangle size={11} />
+                                  {t(`door_${sale.door_status}`)}
+                                </span>
+                                {sale.door_status !== 'pending' && !sale.stock_restored_at && (
+                                  <button
+                                    onClick={() => restoreSaleStock(sale)}
+                                    className="px-2 py-0.5 rounded-full border border-slate-300 text-[10px] font-black uppercase tracking-wider text-slate-600 hover:border-primary hover:text-primary"
+                                  >
+                                    {t('restore_stock')}
+                                  </button>
+                                )}
+                                {sale.stock_restored_at && (
+                                  <span className="text-[10px] font-bold text-slate-400">{t('stock_restored')}</span>
+                                )}
                               </div>
                             )}
                             {inProgress && (
@@ -3075,6 +3286,13 @@ export default function Admin() {
         />
       )}
 
+      {pairMarket && (
+        <PairBoardModal
+          market={pairMarket}
+          onClose={() => setPairMarket(null)}
+          onUnpair={() => unpairBoard(pairMarket)}
+        />
+      )}
       {qrModalMarket && (
         <QrModal market={qrModalMarket} onClose={() => setQrModalMarket(null)} />
       )}

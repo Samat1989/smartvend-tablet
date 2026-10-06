@@ -50,6 +50,12 @@ function App() {
   const [paymentStatus, setPaymentStatus] = useState('idle');
   const [errorMessage, setErrorMessage] = useState('');
   const [paymentData, setPaymentData] = useState(null);
+  // Board on the Realtime firmware didn't answer a ping: no QR is issued for an
+  // unreachable fridge, because once SmartVend takes the money only the board
+  // can open the door. MQTT-era boards always report online (legacy).
+  const [machineOffline, setMachineOffline] = useState(false);
+  // Order paid, the server is sending `open` to the board.
+  const [doorOpening, setDoorOpening] = useState(false);
   // Why the storefront has nothing to show, when it has nothing to show.
   // null | 'legacy' (pre-2026-06 sticker with the machid in it) | 'unknown'
   // (token matches no machine) | 'network'. Before this existed all three
@@ -187,6 +193,7 @@ function App() {
         return;
       }
       setItems(data.items || []);
+      checkMachineOnline(token);
       setCurrentMarketId(data.machid);
       setMarketInfo({ name: data.name, kind: data.kind });
       if (cacheKey) { try { localStorage.setItem(cacheKey, JSON.stringify(data)); } catch (_) {} }
@@ -227,6 +234,15 @@ function App() {
     });
   };
 
+  // Courtesy check for the UI only; create-payment pings again before the QR.
+  // Any failure here leaves the storefront usable.
+  async function checkMachineOnline(token) {
+    try {
+      const { data } = await supabase.functions.invoke('device-online', { body: { token } });
+      setMachineOffline(data?.online === false);
+    } catch (_) {}
+  }
+
   const stopPolling = () => {
     if (pollingRef.current) { clearInterval(pollingRef.current); pollingRef.current = null; }
     if (timeoutRef.current) { clearTimeout(timeoutRef.current); timeoutRef.current = null; }
@@ -243,12 +259,24 @@ function App() {
     pollingRef.current = setInterval(async () => {
       try {
         const { data: status } = await supabase.rpc('get_order_status', { p_orderid: orderid });
+        // Realtime boards: 'paid' while the door is being opened, then
+        // 'completed' (opened) or 'door_failed'; 'expired' when the payment
+        // window closed unpaid. MQTT boards go straight pending -> completed.
+        if (status === 'paid') setDoorOpening(true);
         if (status === 'completed') {
           stopPolling();
+          setDoorOpening(false);
           localStorage.removeItem('micromart_pending_payment');
           setPaymentStatus('success');
           setCart({});
           fetchStorefront(token); // refresh stock for this machine
+        } else if (status === 'door_failed' || status === 'expired') {
+          stopPolling();
+          setDoorOpening(false);
+          localStorage.removeItem('micromart_pending_payment');
+          setPaymentStatus('error');
+          setErrorMessage(t(status === 'door_failed' ? 'door_failed_desc' : 'payment_expired_desc'));
+          fetchStorefront(token);
         }
       } catch (err) {}
     }, 4000);
@@ -278,6 +306,10 @@ function App() {
         // Surface the function's real error (e.g. the SmartVend gateway message).
         let reason = error?.message;
         try { reason = (await error?.context?.json())?.error || reason; } catch (_) {}
+        if (reason === 'offline') {
+          setMachineOffline(true);
+          throw new Error(t('machine_offline_desc'));
+        }
         throw new Error(reason || data?.error || 'Payment initialization failed');
       }
       setPaymentData(data);
@@ -586,7 +618,7 @@ function App() {
                     </p>
                     <div className="flex items-center justify-center gap-2 text-on-surface-variant opacity-70 mb-4">
                       <Loader2 className="animate-spin" size={16} />
-                      <span className="font-lexend text-sm">{t('waiting_for_payment')}...</span>
+                      <span className="font-lexend text-sm">{doorOpening ? t('opening_door') : t('waiting_for_payment')}...</span>
                     </div>
                     <button onClick={() => { stopPolling(); setPaymentStatus('idle'); localStorage.removeItem('micromart_pending_payment'); }} className="text-on-surface-variant font-bold text-sm uppercase opacity-50">{t('cancel_payment')}</button>
                   </div>
@@ -594,6 +626,16 @@ function App() {
               </div>
 
               <div className="p-8 bg-surface-container-lowest border-t border-surface-container-high pb-safe">
+                {paymentStatus === 'error' && errorMessage && (
+                  <p className="mb-4 p-3 rounded-xl bg-[#F14635]/10 text-[#B3261E] font-lexend text-sm">{errorMessage}</p>
+                )}
+                {machineOffline && paymentStatus !== 'error' && (
+                  <div className="mb-4 p-3 rounded-xl bg-[#F14635]/10 text-[#B3261E] font-lexend text-sm">
+                    <p className="font-bold">{t('machine_offline_title')}</p>
+                    <p className="opacity-80">{t('machine_offline_desc')}</p>
+                    <button onClick={() => checkMachineOnline(marketToken)} className="mt-2 font-bold uppercase text-xs">{t('machine_offline_retry')}</button>
+                  </div>
+                )}
                 <div className="flex justify-between items-center gap-6">
                   <div>
                     <p className="text-[10px] font-lexend font-bold opacity-40 uppercase tracking-widest">{t('total')}</p>
@@ -601,7 +643,7 @@ function App() {
                   </div>
                   <button
                     onClick={handleCheckout}
-                    disabled={paymentStatus === 'processing'}
+                    disabled={paymentStatus === 'processing' || machineOffline}
                     className="flex-1 h-16 bg-[#F14635] text-white rounded-xl font-lexend font-black text-sm md:text-lg shadow-xl shadow-[#F14635]/20 flex items-center justify-center gap-3 active:scale-95 transition-all disabled:opacity-50"
                   >
                     {paymentStatus === 'processing' ? <Loader2 className="animate-spin" /> : (
