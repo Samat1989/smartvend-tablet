@@ -1883,17 +1883,25 @@ export default function Admin() {
       const byId = new Map(
         (statusRes.data || []).map((s) => [String(s.machid), s]),
       );
+      // A failed my_device_rt must not erase what the list already knows: it
+      // would drop the connection lamp of every paired board until the next
+      // poll, and a machine without a lamp reads as "no board", not "no data".
+      // Keep the last known pairing and say so in the console.
+      if (rtRes.error) console.error('my_device_rt failed, keeping last known:', rtRes.error);
       const rtById = new Map(
         (rtRes.error ? [] : rtRes.data || []).map((r) => [String(r.machid), r]),
       );
-      setMarkets((marketsRes.data || []).map((m) => ({
-        ...m,
-        // Absent row = the machine has never reported. Left undefined so the
-        // badge can say "never seen" instead of claiming it's offline —
-        // a machine that isn't installed yet isn't a fault.
-        status: byId.get(String(m.id)),
-        rt: rtById.get(String(m.id)),
-      })));
+      setMarkets((prev) => {
+        const prevRt = new Map(prev.map((m) => [String(m.id), m.rt]));
+        return (marketsRes.data || []).map((m) => ({
+          ...m,
+          // Absent row = the machine has never reported. Left undefined so the
+          // badge can say "never seen" instead of claiming it's offline —
+          // a machine that isn't installed yet isn't a fault.
+          status: byId.get(String(m.id)),
+          rt: rtRes.error ? prevRt.get(String(m.id)) : rtById.get(String(m.id)),
+        }));
+      });
       // No auto-select: the Inventory tab opens on the machine list and the
       // operator drills into a specific machine. Sales/Catalog don't need one.
     } catch (err) {
