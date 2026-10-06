@@ -1,4 +1,6 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { DeviceChannel } from "../_shared/device_channel.ts";
+import { runPaymentWindow } from "../_shared/rt_payment.ts";
 
 // static_qr payment: the phone sends only machid + items (id + count). The
 // secret stays server-side; the amount is recomputed from inventory. Initiates
@@ -88,6 +90,7 @@ async function backgroundPoll(supabase, orderid, machid, appkey) {
 
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: cors });
+  let rtChannel = null;
   try {
     const { token, marketId, items } = await req.json();
     if (!Array.isArray(items) || items.length === 0) {
@@ -135,6 +138,27 @@ Deno.serve(async (req) => {
     const totalCents = Math.round(totalTenge * 100);
     const orderName = names.join(", ").substring(0, 50) || "Micromart";
 
+    // Realtime path (board on firmware/esp-rt, row in device_rt). The board has
+    // to answer a ping BEFORE the QR exists: once SmartVend issues it, the
+    // only safe way out for an unreachable board is the auto-refund. Machines
+    // without a device_rt row skip all of this and stay on MQTT + complete-order.
+    const { data: rt } = await supabase
+      .from("device_rt").select("topic, key").eq("machid", numericId).maybeSingle();
+    if (rt) {
+      supabase.rpc("sweep_door_pending").then(() => {}, () => {});
+      try {
+        rtChannel = await DeviceChannel.open(supabase, rt.topic, numericId);
+        const pong = await rtChannel.ping(3000);
+        if (!pong) throw new Error("no pong");
+      } catch (e) {
+        console.log(`[rt ${numericId}] offline before QR:`, (e as Error).message);
+        await rtChannel?.close();
+        return new Response(JSON.stringify({ error: "offline" }), {
+          status: 409, headers: { ...cors, "Content-Type": "application/json" },
+        });
+      }
+    }
+
     const timestamp = new Date().toISOString().replace(/[-:T]/g, "").split(".")[0].substring(0, 14);
     const randstr = Math.random().toString(36).substring(2, 18).padEnd(16, "0");
     const s = await sign(appkey, randstr, timestamp);
@@ -175,6 +199,7 @@ Deno.serve(async (req) => {
     if (Number(result.code) !== 1) {
       throw new Error(`SmartVend: ${result.msg || "error"} (code ${result.code})`);
     }
+    const qrAt = Date.now();
 
     await supabase.from("pending_orders").upsert({
       orderid: result.orderid,
@@ -184,6 +209,25 @@ Deno.serve(async (req) => {
       cart,
       status: "pending",
     }, { onConflict: "orderid" });
+
+    // Realtime path: this invocation keeps the board's channel open for the
+    // whole payment window — poll while the board is in Presence, record the
+    // sale on code=1, send a signed `open`, record what the door did.
+    if (rtChannel) {
+      const payWindow = runPaymentWindow(supabase, rtChannel, {
+        orderid: result.orderid,
+        torderid: result.torderid,
+        machid: numericId,
+        appkey,
+        key: rt!.key,
+        qrAt,
+      });
+      try {
+        // deno-lint-ignore no-explicit-any
+        (globalThis as any).EdgeRuntime?.waitUntil(payWindow);
+      } catch (_) { /* waitUntil unavailable — the promise still runs */ }
+      rtChannel = null; // owned by the payment window now
+    }
 
     const response = new Response(
       JSON.stringify({ paymentUrl: result.twocode, orderid: result.orderid, torderid: result.torderid }),
@@ -202,6 +246,7 @@ Deno.serve(async (req) => {
 
     return response;
   } catch (error) {
+    await rtChannel?.close();
     return new Response(JSON.stringify({ error: error.message }), {
       status: 400, headers: { ...cors, "Content-Type": "application/json" },
     });

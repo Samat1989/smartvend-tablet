@@ -1,23 +1,23 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { DeviceChannel } from "../_shared/device_channel.ts";
 
 // Сервисное открытие замка: выдача разрешения из панели владельца.
 //
-//   POST { machid, seconds? } -> 200 { ok, seconds, nudge }
+//   POST { machid, seconds? } -> 200 { ok, seconds, nudge, opened? }
 //
 // Зовётся из apps/web_app (Admin.jsx, кнопка «Открыть на обслуживание») через
 // invokeAdminFn, то есть с сессионным токеном оператора.
 //
-// Делает два дела, и они неравнозначны:
 //   1. request_service_open — кладёт разрешение в service_opens. ЭТО ГЛАВНОЕ.
 //      Права проверяются внутри RPC (владелец машины или суперадмин).
-//   2. Публикует пинок в svc/<machid>/in нашего MQTT-брокера, чтобы плата не
-//      ждала. Это УСКОРЕНИЕ, а не команда: сообщение ничего не открывает,
-//      подделанное — тем более (в БД нет заявки, service-open ответит 404).
+//   2. Плата на Realtime-прошивке (строка в device_rt) получает подписанную
+//      команду service-open в свой канал и отвечает opened. Только после
+//      подтверждения заявка забирается (claim_service_open), чтобы журнал
+//      не врал «открыто», когда плата была офлайн.
 //
-// Отсюда `nudge: false` в ответе вместо ошибки, когда брокер недоступен:
-// разрешение выдано и живёт 10 минут, плата подберёт его на переподключении.
-// Ронять всю операцию из-за недоступного «звонка в дверь» значило бы сделать
-// фичу менее надёжной, чем она есть.
+// Старым платам (MQTT) сигнал больше не отправляется: брокер HiveMQ, через
+// который шёл пинок, не работает, и клиент для него удалён. Для них ответ
+// `nudge: false`, как и раньше при недоступном брокере.
 //
 // verify_jwt=false в config.toml (гейт не отличает publishable-ключ от JWT) —
 // токен вызывающего проверяется здесь.
@@ -32,101 +32,6 @@ function json(body, status = 200) {
   return new Response(JSON.stringify(body), {
     status,
     headers: { ...cors, "Content-Type": "application/json" },
-  });
-}
-
-// ── Минимальный MQTT 3.1.1 поверх WebSocket ────────────────────────────────
-// Нам нужны ровно два пакета — CONNECT и PUBLISH QoS 0. Это ~60 строк против
-// целого дерева зависимостей mqtt.js, которое пришлось бы тянуть в Edge-функцию
-// ради одного 60-байтного сообщения, попутно поставив фичу в зависимость от
-// node-совместимости рантайма. Ни подписок, ни QoS>0, ни retained здесь нет и
-// не планируется: если понадобятся — это повод взять библиотеку, а не дописать
-// сюда ещё пять пакетов.
-
-function encodeLength(n: number): number[] {
-  const out: number[] = [];
-  do {
-    let byte = n % 128;
-    n = Math.floor(n / 128);
-    if (n > 0) byte |= 0x80;
-    out.push(byte);
-  } while (n > 0);
-  return out;
-}
-
-// MQTT-строка: длина big-endian двумя байтами, затем UTF-8.
-function encodeString(s: string): number[] {
-  const bytes = new TextEncoder().encode(s);
-  return [(bytes.length >> 8) & 0xff, bytes.length & 0xff, ...bytes];
-}
-
-function connectPacket(clientId: string, user: string, pass: string): Uint8Array {
-  const KEEPALIVE = 30;
-  const FLAGS = 0xc2; // username + password + clean session
-  const rest = [
-    ...encodeString("MQTT"),
-    0x04, // protocol level 4 = MQTT 3.1.1
-    FLAGS,
-    (KEEPALIVE >> 8) & 0xff, KEEPALIVE & 0xff,
-    ...encodeString(clientId),
-    ...encodeString(user),
-    ...encodeString(pass),
-  ];
-  return new Uint8Array([0x10, ...encodeLength(rest.length), ...rest]);
-}
-
-function publishPacket(topic: string, payload: string): Uint8Array {
-  // QoS 0 — без идентификатора пакета и без подтверждения.
-  const rest = [...encodeString(topic), ...new TextEncoder().encode(payload)];
-  return new Uint8Array([0x30, ...encodeLength(rest.length), ...rest]);
-}
-
-const DISCONNECT = new Uint8Array([0xe0, 0x00]);
-
-// Открывает WSS, логинится, публикует одно сообщение и закрывается.
-// Бросает исключение на любой заминке — вызывающий трактует это как «пинок не
-// доехал», не как провал операции.
-function mqttPublish(
-  opts: { host: string; port: string; user: string; pass: string },
-  topic: string,
-  payload: string,
-  timeoutMs = 6000,
-): Promise<void> {
-  return new Promise((resolve, reject) => {
-    const ws = new WebSocket(`wss://${opts.host}:${opts.port}/mqtt`, "mqtt");
-    ws.binaryType = "arraybuffer";
-
-    let settled = false;
-    const finish = (err?: Error) => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      try { ws.close(); } catch (_) { /* уже закрыт */ }
-      err ? reject(err) : resolve();
-    };
-    const timer = setTimeout(() => finish(new Error("mqtt timeout")), timeoutMs);
-
-    ws.onopen = () => {
-      // client_id обязан быть уникальным: одинаковые выбивают друг друга с
-      // брокера. Функция может исполняться параллельно, отсюда случайный хвост.
-      ws.send(connectPacket(`svc-fn-${crypto.randomUUID().slice(0, 8)}`, opts.user, opts.pass));
-    };
-
-    ws.onmessage = (ev) => {
-      const b = new Uint8Array(ev.data as ArrayBuffer);
-      if ((b[0] & 0xf0) !== 0x20) return; // ждём только CONNACK
-      // CONNACK: [0x20, 0x02, flags, returnCode]. 0 = приняли.
-      if (b[3] !== 0) return finish(new Error(`mqtt connack rc=${b[3]}`));
-      ws.send(publishPacket(topic, payload));
-      ws.send(DISCONNECT);
-      // close() по спецификации уходит ПОСЛЕ уже поставленных в очередь кадров,
-      // поэтому publish не потеряется; ждём onclose, чтобы не завершить
-      // изолят до того, как рантайм их отправит.
-      ws.close();
-    };
-
-    ws.onclose = () => finish();
-    ws.onerror = () => finish(new Error("mqtt ws error"));
   });
 }
 
@@ -176,34 +81,37 @@ Deno.serve(async (req) => {
       return json({ error: grantErr.message }, 500);
     }
 
-    // ── пинок ────────────────────────────────────────────────────────────────
-    const host = Deno.env.get("MQTT_SVC_HOST") ?? "";
-    const mqttUser = Deno.env.get("MQTT_SVC_USER") ?? "";
-    const mqttPass = Deno.env.get("MQTT_SVC_PASS") ?? "";
-    const port = Deno.env.get("MQTT_SVC_WSS_PORT") ?? "8884";
-
+    // ── команда плате ─────────────────────────────────────────────────────────
     let nudge = false;
-    if (host && mqttUser && mqttPass) {
+    let opened: boolean | undefined;
+    const { data: rt } = await admin
+      .from("device_rt").select("topic, key").eq("machid", machid).maybeSingle();
+    if (rt) {
+      let ch: DeviceChannel | null = null;
       try {
-        await mqttPublish(
-          { host, port, user: mqttUser, pass: mqttPass },
-          `svc/${machid}/in`,
-          JSON.stringify({ cmd: "service-open", id: grant.id, seconds: grant.seconds }),
+        ch = await DeviceChannel.open(admin, rt.topic, machid);
+        const ack = await ch.command(
+          "service-open", rt.key, grant.id, { seconds: grant.seconds }, Date.now() + 12_000,
         );
-        nudge = true;
+        nudge = !!ack;
+        if (ack) {
+          opened = ack.ok !== false;
+          const { error: claimErr } = await admin.rpc("claim_service_open", { p_machid: machid });
+          if (claimErr) console.error("claim_service_open failed", machid, claimErr.message);
+        }
       } catch (e) {
-        // Намеренно не роняем запрос — см. шапку файла.
-        console.error("mqtt nudge failed", machid, e.message);
+        // Плата недоступна — разрешение остаётся в журнале невыбранным.
+        console.error("service-open command failed", machid, (e as Error).message);
+      } finally {
+        await ch?.close();
       }
-    } else {
-      console.error("mqtt nudge skipped: MQTT_SVC_* secrets are not set");
     }
 
     console.log(
       `service open requested machid=${machid} by=${caller.user.id} ` +
-      `seconds=${grant.seconds} nudge=${nudge}`,
+      `seconds=${grant.seconds} nudge=${nudge} opened=${opened}`,
     );
-    return json({ ok: true, seconds: grant.seconds, nudge });
+    return json({ ok: true, seconds: grant.seconds, nudge, opened });
   } catch (error) {
     return json({ error: error.message }, 400);
   }

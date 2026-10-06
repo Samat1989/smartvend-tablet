@@ -34,6 +34,15 @@ enabled = true
 verify_jwt = false
 entrypoint = "./functions/device-provision/index.ts"
 
+# Storefront: "can this fridge open right now?" before showing the cart. Pings
+# boards on the Realtime firmware (device_rt) over their channel; MQTT-era
+# boards cannot answer and report online with legacy:true. create-payment
+# pings again before the QR — this one only spares the customer a dead cart.
+[functions.device-online]
+enabled = true
+verify_jwt = false
+entrypoint = "./functions/device-online/index.ts"
+
 # Superadmin-only account management: list, create, set password, delete.
 [functions.admin-create-user]
 enabled = true
@@ -66,9 +75,10 @@ verify_jwt = false
 entrypoint = "./functions/service-open/index.ts"
 
 # Service unlock, panel side: the owner's «Открыть на обслуживание» button.
-# Writes the permission into service_opens (the RPC checks ownership) and then
-# nudges the board over our own MQTT broker. The nudge is best-effort — the
-# permission is what actually opens the lock.
+# Writes the permission into service_opens (the RPC checks ownership); a board
+# on the Realtime firmware (device_rt) then gets a signed service-open command
+# in its channel and the grant is claimed only once the board answers opened.
+# MQTT-era boards get no signal (the HiveMQ broker is gone).
 [functions.service-open-request]
 enabled = true
 verify_jwt = false
