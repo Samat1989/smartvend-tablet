@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { supabase } from './supabaseClient';
-import { Image, Upload, Download, Plus, Minus, Save, Trash2, X, Loader2, Pencil, Receipt, Calendar, ShoppingBag, History, Languages, CheckCircle2, XCircle, AlertTriangle, ChevronRight, ChevronLeft, ChevronDown, Package, QrCode, KeyRound, Unlink as LinkOff, HelpCircle, Link2 } from 'lucide-react';
+import { Image, Upload, Download, Plus, Minus, Save, Trash2, X, Loader2, Pencil, Receipt, Calendar, ShoppingBag, History, Languages, CheckCircle2, XCircle, AlertTriangle, ChevronRight, ChevronLeft, ChevronDown, Package, QrCode, KeyRound, Unlink as LinkOff, HelpCircle, Link2, Signal, SignalHigh, SignalMedium, SignalLow, SignalZero, Wifi, WifiHigh, WifiLow, WifiZero } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import './i18n';
 import Cropper from 'react-easy-crop';
@@ -635,25 +635,33 @@ function currencyOf(market) {
 // null while the channel is still connecting, undefined for machines without
 // such a board. Presence is the board's last will — Realtime drops it the
 // moment the board's socket dies — so it needs no heartbeat threshold.
-// Signal of a Realtime board from its Presence state: four bars by dBm, the
-// figure itself in the tooltip. rssi_dbm 0 means the board has no reading yet.
-function SignalBars({ state }) {
+// Signal of a Realtime board from its Presence state, drawn the way a phone
+// does: cellular bars for GSM, the Wi-Fi fan for Wi-Fi. dBm is negative for
+// both (closer to 0 = stronger); for GSM the modem's own CSQ scale (0..31,
+// 99 = unknown) goes in the tooltip too, since that is what installers know.
+function SignalIcon({ state }) {
   const dbm = Number(state?.rssi_dbm);
   if (!dbm) return null;
   const gsm = state.net === 'gsm';
-  const steps = gsm ? [-75, -85, -95, -110] : [-55, -65, -75, -90];
-  const level = steps.filter((s) => dbm >= s).length;
-  const title = [`${dbm} dBm`, gsm ? 'GSM' : 'Wi-Fi', state.ver && `v${state.ver}`]
-    .filter(Boolean).join(' · ');
+  let Icon, level;
+  if (gsm) {
+    const csq = Number(state.csq);
+    level = csq >= 20 ? 4 : csq >= 15 ? 3 : csq >= 10 ? 2 : csq >= 1 ? 1 : 0;
+    Icon = [SignalZero, SignalLow, SignalMedium, SignalHigh, Signal][level];
+  } else {
+    level = dbm >= -55 ? 3 : dbm >= -67 ? 2 : dbm >= -75 ? 1 : 0;
+    Icon = [WifiZero, WifiLow, WifiHigh, Wifi][level];
+  }
+  const tone = level >= 2 ? 'text-emerald-600' : level === 1 ? 'text-amber-500' : 'text-rose-500';
+  const title = [
+    gsm ? 'GSM' : 'Wi-Fi',
+    gsm && Number(state.csq) <= 31 ? `CSQ ${state.csq}/31` : null,
+    `${dbm} dBm`,
+    state.ver && `v${state.ver}`,
+  ].filter(Boolean).join(' · ');
   return (
-    <span className="flex items-end gap-[2px] h-3 shrink-0" title={title}>
-      {[1, 2, 3, 4].map((i) => (
-        <span
-          key={i}
-          className={`w-[3px] rounded-sm ${i <= level ? 'bg-emerald-500' : 'bg-slate-300'}`}
-          style={{ height: `${i * 25}%` }}
-        />
-      ))}
+    <span className={`shrink-0 ${tone}`} title={title}>
+      <Icon size={14} strokeWidth={2.5} />
     </span>
   );
 }
@@ -670,7 +678,7 @@ function DeviceStatusDot({ status, kind, withLabel = false, rt, rtState }) {
         {withLabel && (
           <span className="text-[10px] font-bold uppercase tracking-wider text-slate-500">{label}</span>
         )}
-        {rt === true && <SignalBars state={rtState} />}
+        {rt === true && <SignalIcon state={rtState} />}
       </span>
     );
   }
