@@ -721,8 +721,15 @@ function DeviceStatusDot({ status, kind, withLabel = false, rt, rtState }) {
   if (kind === 'micromarket_static' && rt !== undefined) {
     const label = rt === true ? t('status_online') : rt === false ? t('status_offline') : t('status_checking');
     const tone = rt === true ? 'bg-emerald-500' : rt === false ? 'bg-slate-400' : 'bg-slate-300 animate-pulse';
+    // Presence only knows "right now". When the board is gone, the last time it
+    // was around comes from device_status: the board reports every 15 minutes
+    // (device_beat) and the panel stamps the exact moment it sees the board
+    // leave (touch_device_seen).
+    const lastSeen = rt === false && status?.last_seen_at
+      ? `${t('status_last_seen')} ${new Date(status.last_seen_at).toLocaleString(i18n.language)}`
+      : null;
     return (
-      <span className="flex items-center gap-1.5 shrink-0" title={label}>
+      <span className="flex items-center gap-1.5 shrink-0" title={[label, lastSeen].filter(Boolean).join(' · ')}>
         <span className={`w-2.5 h-2.5 rounded-full ${tone}`} />
         {withLabel && (
           <span className="text-[10px] font-bold uppercase tracking-wider text-slate-500">{label}</span>
@@ -1816,6 +1823,7 @@ export default function Admin() {
   // the panel only listens. rtOnline[machid] = that state, or null when the
   // board is not in the channel.
   const [rtOnline, setRtOnline] = useState({});
+  const rtWasOnline = useRef({});   // machid -> board was in its channel at the last sync
   const rtTopicsKey = markets
     .filter((m) => m.rt?.topic && m.rt?.device_id)
     .map((m) => `${m.id}:${m.rt.topic}:${m.rt.device_id}`)
@@ -1830,6 +1838,15 @@ export default function Admin() {
         const metas = ch.presenceState()[deviceId];
         const meta = Array.isArray(metas) && metas.length ? metas[metas.length - 1] : null;
         setRtOnline((prev) => ({ ...prev, [machid]: meta }));
+        // Seen online, now gone: Presence just fired the board's "last will".
+        // Stamp the moment in device_status (the board's own 15-minute beat
+        // can only say "alive at about"), then refresh the lamp tooltip.
+        const was = rtWasOnline.current[machid];
+        rtWasOnline.current[machid] = !!meta;
+        if (was && !meta) {
+          supabase.rpc('touch_device_seen', { p_machid: Number(machid) })
+            .then(() => fetchMarkets());
+        }
       };
       ch.on('presence', { event: 'sync' }, update);
       // An empty channel may never sync; settle it to "offline" after a beat.

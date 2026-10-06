@@ -14,6 +14,7 @@
 #include <string.h>
 
 #include "app.h"
+#include "beat.h"
 #include "board.h"
 #include "config.h"
 #include "esp_log.h"
@@ -72,6 +73,7 @@ void app_main(void) {
     }
 
     app_start();
+    beat_start();
     ota_start();
     ESP_LOGI(TAG, "running; free heap %lu B", (unsigned long)esp_get_free_heap_size());
 }
