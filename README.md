@@ -20,6 +20,9 @@ apps/
 firmware/
   esp-relay/      Прошивка ESP-реле для static-QR машин: слушает MQTT,
                   щёлкает реле → открывает электрозамок (ex-esp_relay_mart)
+  esp-rt/         Новая прошивка замка static-QR (варианты pulse и relay):
+                  одно WebSocket-соединение с Supabase Realtime вместо MQTT,
+                  Presence как LWT, привязка по коду из панели
 
 supabase/         ЕДИНЫЙ бэкенд проекта `micromart`
   migrations/     История схемы БД (SQL, по timestamp) — коммитим и пушим

@@ -1,0 +1,11 @@
+CONFIG_IDF_TARGET="esp32"
+CONFIG_PARTITION_TABLE_CUSTOM=y
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
+CONFIG_ESPTOOLPY_FLASHSIZE_4MB=y
+# One permanent TLS session (Realtime) plus a short HTTPS one at pairing/OTA on
+# a chip without PSRAM: let mbedTLS size its record buffers to what is in use.
+CONFIG_MBEDTLS_DYNAMIC_BUFFER=y
+CONFIG_ESP_MAIN_TASK_STACK_SIZE=6144
+CONFIG_HTTPD_MAX_REQ_HDR_LEN=1024
+# pool.ntp.org + time.google.com: signed commands need a set clock
+CONFIG_LWIP_SNTP_MAX_SERVERS=2

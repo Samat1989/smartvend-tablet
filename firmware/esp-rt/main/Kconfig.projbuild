@@ -1,0 +1,18 @@
+menu "esp-rt"
+
+choice ESPRT_LOCK
+    prompt "Lock driver (board variant)"
+    default ESPRT_LOCK_PULSE
+    help
+        pulse: IO2 is held at the active level for the whole open time.
+        relay: bistable relay, DIR on IO2 + coil pulse on IO16.
+        Each variant has its own OTA tag prefix and asset, so a board never
+        picks up the other variant's firmware.
+
+config ESPRT_LOCK_PULSE
+    bool "pulse (IO2 held)"
+config ESPRT_LOCK_RELAY
+    bool "relay (bistable, IO2 + IO16)"
+endchoice
+
+endmenu

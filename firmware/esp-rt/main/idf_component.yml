@@ -1,0 +1,5 @@
+## esp_modem: optional A7670E GSM (LTE) uplink next to Wi-Fi.
+dependencies:
+  idf:
+    version: '>=5.0.0'
+  espressif/esp_modem: '*'
