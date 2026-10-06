@@ -109,9 +109,11 @@ Deno.serve(async (req) => {
           const s = Number(ack.seconds);
           if (Number.isInteger(s) && s >= 1 && s <= 600) {
             openedFor = s;
-            if (s >= 10) {   // service_opens.seconds держит 10…600
-              await admin.from("service_opens").update({ seconds: s }).eq("id", grant.id);
-            }
+            const { error: secErr } = await admin
+              .from("service_opens").update({ seconds: s }).eq("id", grant.id);
+            if (secErr) console.error("service_opens seconds update failed", machid, secErr.message);
+          } else {
+            console.error("board ack without valid seconds", machid, JSON.stringify(ack));
           }
         }
       } catch (e) {
