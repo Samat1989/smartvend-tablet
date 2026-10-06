@@ -287,108 +287,6 @@ function QrModal({ market, onClose }) {
   );
 }
 
-// Service unlock for refilling: pick a duration, send the request, report back.
-//
-// The wording of the result matters more than it looks. The panel CANNOT know
-// the door opened — there is no channel back from the board, only the nudge
-// going out — so it says "request sent", never "opened". The same restraint is
-// already in the tablet: BoardClient.openLock returns false rather than fake a
-// success it can't observe (apps/tablet/lib/board/board_client.dart).
-//
-// `nudge: false` from the function means the permission was stored but the
-// broker push didn't land — almost always a machine that is offline. That is a
-// materially different situation for someone standing at the fridge, so it gets
-// its own message instead of a cheerful green tick.
-function ServiceOpenModal({ market, onSubmit, onClose }) {
-  const { t } = useTranslation();
-  const [seconds, setSeconds] = useState(180);
-  const [busy, setBusy] = useState(false);
-  const [result, setResult] = useState(null);
-
-  const CHOICES = [
-    { value: 60, label: t('service_open_minutes_1') },
-    { value: 180, label: t('service_open_minutes_3') },
-    { value: 300, label: t('service_open_minutes_5') },
-  ];
-
-  async function submit() {
-    setBusy(true);
-    setResult(null);
-    try {
-      const data = await onSubmit(market.id, seconds);
-      setResult({ ok: true, nudge: data?.nudge !== false, opened: data?.opened });
-    } catch (e) {
-      setResult({ error: (e && e.message) || String(e) });
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  return (
-    <div className="fixed inset-0 z-[60] bg-black/50 flex items-center justify-center p-4" onClick={onClose}>
-      <div className="bg-white rounded-3xl p-6 w-full max-w-sm shadow-2xl" onClick={(e) => e.stopPropagation()}>
-        <div className="flex items-center justify-between mb-4">
-          <h3 className="text-lg font-black text-slate-900">{t('service_open_title')}</h3>
-          <button onClick={onClose} className="p-2 text-slate-400 hover:text-slate-700 rounded-lg"><X size={20} /></button>
-        </div>
-
-        <div className="font-bold text-slate-900">{market.name || `${t('apparatus_no')}${market.id}`}</div>
-        <div className="text-[11px] font-bold text-slate-500 uppercase tracking-widest">{t('apparatus_no')}{market.id}</div>
-        <p className="mt-3 text-xs text-slate-500 leading-relaxed">{t('service_open_desc')}</p>
-
-        <div className="mt-5">
-          <div className="text-[11px] font-bold text-slate-500 uppercase tracking-widest mb-2">{t('service_open_duration')}</div>
-          <div className="grid grid-cols-3 gap-2">
-            {CHOICES.map((c) => (
-              <button
-                key={c.value}
-                onClick={() => setSeconds(c.value)}
-                disabled={busy}
-                className={`py-2.5 rounded-xl font-bold text-sm border transition-all ${
-                  seconds === c.value
-                    ? 'bg-slate-900 text-white border-slate-900'
-                    : 'bg-white text-slate-700 border-slate-300 hover:bg-slate-100'
-                }`}
-              >
-                {c.label}
-              </button>
-            ))}
-          </div>
-        </div>
-
-        {result?.ok && (
-          <div className={`mt-5 rounded-xl px-3 py-3 text-xs font-bold leading-relaxed ${
-            result.nudge && result.opened !== false
-              ? 'bg-emerald-50 border border-emerald-200 text-emerald-800'
-              : 'bg-amber-50 border border-amber-200 text-amber-800'
-          }`}>
-            {/* opened is set only for boards on the Realtime firmware, which
-                answer the command; MQTT-era boards keep the old wording. */}
-            {result.opened === true ? t('service_open_opened')
-              : result.opened === false ? t('service_open_lock_failed')
-              : result.nudge ? t('service_open_sent') : t('service_open_sent_offline')}
-          </div>
-        )}
-        {result?.error && (
-          <div className="mt-5 rounded-xl px-3 py-3 bg-rose-50 border border-rose-200 text-rose-700 text-xs font-bold break-words">
-            {t('service_open_failed')}: {result.error}
-          </div>
-        )}
-
-        <button
-          onClick={result?.ok ? onClose : submit}
-          disabled={busy}
-          className="mt-5 w-full flex items-center justify-center gap-2 bg-slate-900 text-white py-3 rounded-xl font-bold hover:bg-slate-700 transition-all disabled:bg-slate-300 disabled:cursor-wait"
-        >
-          {busy ? (<><Loader2 size={18} className="animate-spin" /> {t('service_open_sending')}</>)
-            : result?.ok ? t('service_open_done')
-            : (<><KeyRound size={18} /> {t('service_open_submit')}</>)}
-        </button>
-      </div>
-    </div>
-  );
-}
-
 // Привязка платы на Realtime-прошивке (firmware/esp-rt). Владелец получает
 // одноразовый код на 30 минут и вводит его на плате вместе с номером аппарата;
 // плата обменивает код на свой канал и ключ подписи (RPC device_pair). Новая
@@ -969,7 +867,7 @@ export default function Admin() {
   const [periodTo, setPeriodTo] = useState('');
   const [selectedSalesMarket, setSelectedSalesMarket] = useState('all');
   const [qrModalMarket, setQrModalMarket] = useState(null); // machine whose QR modal is open
-  const [serviceOpenMarket, setServiceOpenMarket] = useState(null); // machine whose service-unlock dialog is open
+  const [serviceOpening, setServiceOpening] = useState(null); // machid whose door is being opened for service
 
   // Catalog tab — products table (SKU catalog, owner-scoped).
   // Separate from inventory: products are reusable across micromarkets
@@ -1210,12 +1108,23 @@ export default function Admin() {
     return data;
   }
 
-  // Ask the backend to authorise a payment-free unlock for refilling. Returns
-  // { ok, seconds, nudge }; `nudge:false` means the permission was stored but
-  // the board couldn't be woken (offline), which the dialog reports honestly
-  // rather than dressing up as success.
-  async function requestServiceOpen(machid, seconds) {
-    return await invokeAdminFn('service-open-request', { body: { machid, seconds } });
+  // Payment-free unlock for refilling. No duration: the board holds the lock
+  // for the open time saved in its setup portal and reports it back.
+  // The answer is what the board said, not a guess: opened true/false from a
+  // board on the Realtime firmware, nudge:false when nothing answered (offline,
+  // or an old MQTT board that no longer gets the signal).
+  async function openForService(market) {
+    setServiceOpening(market.id);
+    try {
+      const data = await invokeAdminFn('service-open-request', { body: { machid: market.id } });
+      if (data?.opened === true) showToast(t('service_open_opened_for', { seconds: data.seconds }));
+      else if (data?.opened === false) showToast(t('service_open_lock_failed'), 'error');
+      else showToast(t('service_open_sent_offline'), 'error');
+    } catch (e) {
+      showToast(`${t('service_open_failed')}: ${(e && e.message) || e}`, 'error');
+    } finally {
+      setServiceOpening(null);
+    }
   }
 
   async function fetchUsers() {
@@ -2605,11 +2514,15 @@ export default function Admin() {
                   )}
                   {isStaticMarket && (
                     <button
-                      onClick={() => setServiceOpenMarket(markets.find(m => String(m.id) === String(selectedMarketId)) || { id: selectedMarketId })}
+                      onClick={() => openForService(markets.find(m => String(m.id) === String(selectedMarketId)) || { id: selectedMarketId })}
+                      disabled={serviceOpening != null}
                       title={t('service_open_title')}
-                      className="flex-1 sm:flex-none whitespace-nowrap flex items-center justify-center gap-2 bg-white text-slate-700 border border-slate-300 px-4 py-2.5 rounded-xl font-bold hover:bg-slate-100 transition-all text-sm"
+                      className="flex-1 sm:flex-none whitespace-nowrap flex items-center justify-center gap-2 bg-white text-slate-700 border border-slate-300 px-4 py-2.5 rounded-xl font-bold hover:bg-slate-100 transition-all text-sm disabled:opacity-60 disabled:cursor-wait"
                     >
-                      <KeyRound size={16} /> <span className="hidden sm:inline">{t('service_open')}</span>
+                      {String(serviceOpening) === String(selectedMarketId)
+                        ? <Loader2 size={16} className="animate-spin" />
+                        : <KeyRound size={16} />}
+                      <span className="hidden sm:inline">{t('service_open')}</span>
                     </button>
                   )}
                   <button
@@ -3276,14 +3189,6 @@ export default function Admin() {
             </button>
           </div>
         </div>
-      )}
-
-      {serviceOpenMarket && (
-        <ServiceOpenModal
-          market={serviceOpenMarket}
-          onSubmit={requestServiceOpen}
-          onClose={() => setServiceOpenMarket(null)}
-        />
       )}
 
       {pairMarket && (

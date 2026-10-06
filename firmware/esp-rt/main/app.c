@@ -4,7 +4,8 @@
 // broadcasts:
 //   ping {nonce}                        -> pong {nonce, lock_ok, rssi, heap, ver}
 //   open {id, exp, sig}                 -> opened {id, ok}   (paid order)
-//   service-open {id, seconds, exp, sig}-> opened {id, ok}   (refill)
+//   service-open {id, seconds, exp, sig}-> opened {id, ok, seconds}   (refill;
+//                                          seconds 0 = the open time saved in the setup portal)
 //
 // The channel is public, so a command opens the lock only if
 //   sig == HMAC-SHA256(rt_key, "<event>|<id>|<seconds or empty>|<exp>") (hex),
@@ -89,10 +90,10 @@ static bool sig_ok(const char *msg, const char *sig_hex) {
     return diff == 0;
 }
 
-static void send_opened(const char *id, bool ok, const char *err) {
-    char p[160];
+static void send_opened(const char *id, bool ok, int seconds, const char *err) {
+    char p[180];
     if (err) snprintf(p, sizeof(p), "{\"id\":\"%s\",\"ok\":%s,\"err\":\"%s\"}", id, ok ? "true" : "false", err);
-    else     snprintf(p, sizeof(p), "{\"id\":\"%s\",\"ok\":%s}", id, ok ? "true" : "false");
+    else     snprintf(p, sizeof(p), "{\"id\":\"%s\",\"ok\":%s,\"seconds\":%d}", id, ok ? "true" : "false", seconds);
     if (sbrt_send("opened", p) != ESP_OK) ESP_LOGW(TAG, "opened ack for %s not sent", id);
 }
 
@@ -112,10 +113,11 @@ static void handle_command(const char *event, cJSON *p) {
     int seconds = g_cfg.opensec;
     if (service) {
         if (!cJSON_IsNumber(secj)) { ESP_LOGW(TAG, "service-open without seconds"); return; }
-        seconds = secj->valueint;
-        snprintf(seconds_str, sizeof(seconds_str), "%d", seconds);
-        if (seconds < 10) seconds = 10;
-        if (seconds > 600) seconds = 600;
+        // 0 = "open for the time saved in the setup portal", the same hold
+        // time a paid order gets. The panel no longer asks for a duration.
+        int req = secj->valueint;
+        snprintf(seconds_str, sizeof(seconds_str), "%d", req);
+        if (req > 0) seconds = req < 10 ? 10 : req > 600 ? 600 : req;
     }
 
     char msg[160];
@@ -128,7 +130,7 @@ static void handle_command(const char *event, cJSON *p) {
         // Without a clock we cannot tell a fresh command from a replayed one.
         // Say so instead of staying silent: the server records "failed".
         ESP_LOGE(TAG, "%s %s: clock not set — refusing", event, id->valuestring);
-        send_opened(id->valuestring, false, "no_time");
+        send_opened(id->valuestring, false, 0, "no_time");
         return;
     }
     long long now = (long long)time(NULL);
@@ -138,14 +140,14 @@ static void handle_command(const char *event, cJSON *p) {
     }
     if (seen_has(id->valuestring)) {
         ESP_LOGI(TAG, "%s %s: already opened — re-ack", event, id->valuestring);
-        send_opened(id->valuestring, true, NULL);
+        send_opened(id->valuestring, true, seconds, NULL);
         return;
     }
 
     seen_add(id->valuestring);
     xQueueSend(s_lockq, &seconds, portMAX_DELAY);
     ESP_LOGI(TAG, "%s %s: OPEN %d s", event, id->valuestring, seconds);
-    send_opened(id->valuestring, true, NULL);
+    send_opened(id->valuestring, true, seconds, NULL);
 }
 
 static void handle_ping(cJSON *p) {

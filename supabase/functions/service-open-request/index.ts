@@ -5,6 +5,10 @@ import { DeviceChannel } from "../_shared/device_channel.ts";
 //
 //   POST { machid, seconds? } -> 200 { ok, seconds, nudge, opened? }
 //
+// Без seconds плата открывает замок на своё время из сервисного режима (то же,
+// что у оплаченного заказа) и сообщает его в ответе; в журнал service_opens
+// пишется именно оно.
+//
 // Зовётся из apps/web_app (Admin.jsx, кнопка «Открыть на обслуживание») через
 // invokeAdminFn, то есть с сессионным токеном оператора.
 //
@@ -55,7 +59,10 @@ Deno.serve(async (req) => {
   try {
     const body = await req.json().catch(() => ({}));
     const machid = parseInt(String(body.machid ?? "").trim());
-    const seconds = parseInt(String(body.seconds ?? "180").trim());
+    // 0 = «время платы». request_service_open хранит 10…600, поэтому до ответа
+    // платы в журнале стоит значение по умолчанию, а после — фактическое.
+    const asked = parseInt(String(body.seconds ?? "0").trim()) || 0;
+    const seconds = asked > 0 ? asked : 180;
     if (!machid || machid < 0) return json({ error: "bad_machid" }, 400);
 
     // Разрешение выдаём от имени вызывающего, а не service_role: проверка
@@ -84,6 +91,7 @@ Deno.serve(async (req) => {
     // ── команда плате ─────────────────────────────────────────────────────────
     let nudge = false;
     let opened: boolean | undefined;
+    let openedFor: number = grant.seconds;
     const { data: rt } = await admin
       .from("device_rt").select("topic, key").eq("machid", machid).maybeSingle();
     if (rt) {
@@ -91,13 +99,20 @@ Deno.serve(async (req) => {
       try {
         ch = await DeviceChannel.open(admin, rt.topic, machid);
         const ack = await ch.command(
-          "service-open", rt.key, grant.id, { seconds: grant.seconds }, Date.now() + 12_000,
+          "service-open", rt.key, grant.id, { seconds: asked > 0 ? grant.seconds : 0 }, Date.now() + 12_000,
         );
         nudge = !!ack;
         if (ack) {
           opened = ack.ok !== false;
           const { error: claimErr } = await admin.rpc("claim_service_open", { p_machid: machid });
           if (claimErr) console.error("claim_service_open failed", machid, claimErr.message);
+          const s = Number(ack.seconds);
+          if (Number.isInteger(s) && s >= 1 && s <= 600) {
+            openedFor = s;
+            if (s >= 10) {   // service_opens.seconds держит 10…600
+              await admin.from("service_opens").update({ seconds: s }).eq("id", grant.id);
+            }
+          }
         }
       } catch (e) {
         // Плата недоступна — разрешение остаётся в журнале невыбранным.
@@ -109,9 +124,9 @@ Deno.serve(async (req) => {
 
     console.log(
       `service open requested machid=${machid} by=${caller.user.id} ` +
-      `seconds=${grant.seconds} nudge=${nudge} opened=${opened}`,
+      `seconds=${openedFor} nudge=${nudge} opened=${opened}`,
     );
-    return json({ ok: true, seconds: grant.seconds, nudge, opened });
+    return json({ ok: true, seconds: openedFor, nudge, opened });
   } catch (error) {
     return json({ error: error.message }, 400);
   }
