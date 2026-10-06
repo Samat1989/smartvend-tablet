@@ -22,6 +22,7 @@ const POLL_EVERY_MS = 3_000;
 const OPEN_MIN_MS = 15_000;
 
 export interface PaymentWindow {
+  seconds: number;  // micromarkets.open_seconds — goes into the signed `open`
   orderid: string;
   torderid: string;
   machid: number;
@@ -76,7 +77,7 @@ export async function runPaymentWindow(sb: SupabaseClient, ch: DeviceChannel, w:
     if (!recorded) console.error(tag, "PAID BUT SALE NOT RECORDED");
 
     const openDeadline = Math.max(deadline, Date.now() + OPEN_MIN_MS);
-    const ack = await ch.command("open", w.key, w.orderid, {}, openDeadline);
+    const ack = await ch.command("open", w.key, w.orderid, { seconds: w.seconds }, openDeadline);
     const door = ack ? (ack.ok === false ? "failed" : "opened") : "no_ack";
     console.log(tag, "door", door, ack?.err ?? "");
     const { error } = await sb.rpc("set_sale_door_status", { p_orderid: w.orderid, p_status: door });

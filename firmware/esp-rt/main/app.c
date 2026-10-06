@@ -3,9 +3,15 @@
 // The server (create-payment / service-open-request) talks to the board in
 // broadcasts:
 //   ping {nonce}                        -> pong {nonce, lock_ok, rssi, heap, ver}
-//   open {id, exp, sig}                 -> opened {id, ok}   (paid order)
-//   service-open {id, seconds, exp, sig}-> opened {id, ok, seconds}   (refill;
-//                                          seconds 0 = the open time saved in the setup portal)
+//   open {id, seconds, exp, sig}        -> opened {id, ok, seconds}   (paid order)
+//   service-open {id, seconds, exp, sig}-> opened {id, ok, seconds}   (refill)
+//
+// `seconds` is the machine's open time from the panel (1..600), the same for a
+// paid order and a service open, and it is part of the signature. The board
+// keeps no such setting of its own. A command without it (older server) opens
+// for DEFAULT_OPEN_SECONDS. The lock itself only latches shut once the reed
+// switch sees the door's magnet, so this is the window to pull the door open,
+// not how long it stays open.
 //
 // The channel is public, so a command opens the lock only if
 //   sig == HMAC-SHA256(rt_key, "<event>|<id>|<seconds or empty>|<exp>") (hex),
@@ -110,17 +116,15 @@ static void handle_command(const char *event, cJSON *p) {
         ESP_LOGW(TAG, "%s: malformed", event);
         return;
     }
-    bool service = strcmp(event, "service-open") == 0;
     long long exp_s = (long long)exp->valuedouble;
+    // The signed string carries seconds exactly as sent ("" when absent), so a
+    // tampered value breaks the signature; only then is it clamped for use.
     char seconds_str[12] = "";
-    int seconds = g_cfg.opensec;
-    if (service) {
-        if (!cJSON_IsNumber(secj)) { ESP_LOGW(TAG, "service-open without seconds"); return; }
-        // 0 = "open for the time saved in the setup portal", the same hold
-        // time a paid order gets. The panel no longer asks for a duration.
+    int seconds = DEFAULT_OPEN_SECONDS;
+    if (cJSON_IsNumber(secj)) {
         int req = secj->valueint;
         snprintf(seconds_str, sizeof(seconds_str), "%d", req);
-        if (req > 0) seconds = req < 10 ? 10 : req > 600 ? 600 : req;
+        if (req >= 1) seconds = req > 600 ? 600 : req;
     }
 
     char msg[160];

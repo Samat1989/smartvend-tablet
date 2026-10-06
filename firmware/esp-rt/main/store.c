@@ -36,7 +36,6 @@ static void get_str(nvs_handle_t h, const char *key, char *out, size_t sz) {
 
 void store_load(void) {
     memset(&g_cfg, 0, sizeof(g_cfg));
-    g_cfg.opensec = DEFAULT_OPEN_SECONDS;
     strcpy(g_cfg.netmode, "gsm");
     nvs_handle_t h;
     if (nvs_open(NS, NVS_READONLY, &h) != ESP_OK) return;
@@ -47,8 +46,6 @@ void store_load(void) {
     get_str(h, "code", g_cfg.code, sizeof(g_cfg.code));
     get_str(h, "rt_topic", g_cfg.rt_topic, sizeof(g_cfg.rt_topic));
     get_str(h, "rt_key", g_cfg.rt_key, sizeof(g_cfg.rt_key));
-    int32_t v;
-    if (nvs_get_i32(h, "opensec", &v) == ESP_OK && v >= 1 && v <= 600) g_cfg.opensec = v;
     uint8_t pe = 0;
     if (nvs_get_u8(h, "pairerr", &pe) == ESP_OK) g_cfg.pair_error = pe != 0;
     size_t sz = sizeof(s_seen);

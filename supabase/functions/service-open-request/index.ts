@@ -3,11 +3,11 @@ import { DeviceChannel } from "../_shared/device_channel.ts";
 
 // Сервисное открытие замка: выдача разрешения из панели владельца.
 //
-//   POST { machid, seconds? } -> 200 { ok, seconds, nudge, opened? }
+//   POST { machid } -> 200 { ok, seconds, nudge, opened? }
 //
-// Без seconds плата открывает замок на своё время из сервисного режима (то же,
-// что у оплаченного заказа) и сообщает его в ответе; в журнал service_opens
-// пишется именно оно.
+// Время открытия — настройка аппарата (micromarkets.open_seconds, задаётся в
+// панели), одна и та же для оплаты и сервисного открытия. Оно уходит плате в
+// подписанной команде; в журнал service_opens пишется то, что плата ответила.
 //
 // Зовётся из apps/web_app (Admin.jsx, кнопка «Открыть на обслуживание») через
 // invokeAdminFn, то есть с сессионным токеном оператора.
@@ -59,10 +59,9 @@ Deno.serve(async (req) => {
   try {
     const body = await req.json().catch(() => ({}));
     const machid = parseInt(String(body.machid ?? "").trim());
-    // 0 = «время платы». request_service_open хранит 10…600, поэтому до ответа
-    // платы в журнале стоит значение по умолчанию, а после — фактическое.
-    const asked = parseInt(String(body.seconds ?? "0").trim()) || 0;
-    const seconds = asked > 0 ? asked : 180;
+    const { data: mk } = await admin
+      .from("micromarkets").select("open_seconds").eq("id", machid).maybeSingle();
+    const seconds = mk?.open_seconds ?? 20;
     if (!machid || machid < 0) return json({ error: "bad_machid" }, 400);
 
     // Разрешение выдаём от имени вызывающего, а не service_role: проверка
@@ -99,7 +98,7 @@ Deno.serve(async (req) => {
       try {
         ch = await DeviceChannel.open(admin, rt.topic, rt.device_id ?? "");
         const ack = await ch.command(
-          "service-open", rt.key, grant.id, { seconds: asked > 0 ? grant.seconds : 0 }, Date.now() + 12_000,
+          "service-open", rt.key, grant.id, { seconds }, Date.now() + 12_000,
         );
         nudge = !!ack;
         if (ack) {

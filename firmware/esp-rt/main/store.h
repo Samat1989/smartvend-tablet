@@ -11,7 +11,6 @@ typedef struct {
     char code[8];        // pairing code, kept only until device_pair succeeds
     char rt_topic[40];   // Realtime channel uuid
     char rt_key[72];     // HMAC key for signed commands
-    int  opensec;
     bool pair_error;     // last pairing attempt was refused; shown in the portal
 } rt_config_t;
 

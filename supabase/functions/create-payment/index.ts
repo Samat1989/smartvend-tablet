@@ -107,10 +107,10 @@ Deno.serve(async (req) => {
     let market, mErr;
     if (token) {
       ({ data: market, error: mErr } = await supabase
-        .from("micromarkets").select("id, secret").eq("qr_token", token).single());
+        .from("micromarkets").select("id, secret, open_seconds").eq("qr_token", token).single());
     } else {
       ({ data: market, error: mErr } = await supabase
-        .from("micromarkets").select("id, secret").eq("id", parseInt(marketId)).single());
+        .from("micromarkets").select("id, secret, open_seconds").eq("id", parseInt(marketId)).single());
     }
     if (mErr || !market) throw new Error("Market not found");
     const numericId = market.id;
@@ -218,6 +218,7 @@ Deno.serve(async (req) => {
         orderid: result.orderid,
         torderid: result.torderid,
         machid: numericId,
+        seconds: market.open_seconds ?? 20,
         appkey,
         key: rt!.key,
         qrAt,

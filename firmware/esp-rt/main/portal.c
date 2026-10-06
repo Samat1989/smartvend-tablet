@@ -83,12 +83,8 @@ static const char PAGE_FORM_B[] =
     "<span class=lbl>Код привязки из панели (6 цифр)</span>"
     "<input name=code inputmode=numeric pattern='[0-9]{6}' maxlength=6 autocomplete=off";
 // " required" or a placeholder here
-static const char PAGE_FORM_D[] =
-    "><span class=lbl>Время открытия замка, сек</span>"
-    "<input name=opensec type=number min=1 max=600 inputmode=numeric value='";
-// opensec here
 static const char PAGE_TAIL[] =
-    "'><button id=sb type=submit>Сохранить</button></form>"
+    "><button id=sb type=submit>Сохранить</button></form>"
     "<script>function m(){var g=document.querySelector('input[name=netmode]:checked').value=='gsm';"
     "document.getElementById('w').style.display=g?'none':'';"
     "document.querySelectorAll('#w input[type=radio]').forEach(function(x){x.required=!g})}m();"
@@ -146,10 +142,6 @@ static esp_err_t root_get(httpd_req_t *req) {
     if (s_rows && s_rows[0]) httpd_resp_sendstr_chunk(req, s_rows);
     httpd_resp_sendstr_chunk(req, PAGE_FORM_B);
     httpd_resp_sendstr_chunk(req, store_paired() ? " placeholder='не менять'" : " required");
-    httpd_resp_sendstr_chunk(req, PAGE_FORM_D);
-    char os[8];
-    snprintf(os, sizeof(os), "%d", g_cfg.opensec);
-    httpd_resp_sendstr_chunk(req, os);
     httpd_resp_sendstr_chunk(req, PAGE_TAIL);
     httpd_resp_sendstr_chunk(req, NULL);
     return ESP_OK;
@@ -211,12 +203,11 @@ static esp_err_t save_post(httpd_req_t *req) {
     if (len <= 0) { s_committing = false; return ESP_FAIL; }
     body[len] = 0;
 
-    char netmode[8], ssid[64], pass[64], code[12], opensec[8];
+    char netmode[8], ssid[64], pass[64], code[12];
     form_field(body, "netmode", netmode, sizeof(netmode));
     form_field(body, "ssid", ssid, sizeof(ssid));
     form_field(body, "pass", pass, sizeof(pass));
     form_field(body, "code", code, sizeof(code));
-    form_field(body, "opensec", opensec, sizeof(opensec));
     bool wifi = strcmp(netmode, "wifi") == 0;
 
     // An unpaired board needs a code; a paired one may change only the
@@ -234,12 +225,9 @@ static esp_err_t save_post(httpd_req_t *req) {
         }
     }
 
-    int os = atoi(opensec);
-    if (os < 1 || os > 600) os = DEFAULT_OPEN_SECONDS;
     store_set_str("netmode", wifi ? "wifi" : "gsm");
     store_set_str("ssid", wifi ? ssid : "");
     store_set_str("pass", wifi ? pass : "");
-    store_set_int("opensec", os);
     store_set_int("pairerr", 0);
     if (code[0]) {
         store_set_str("code", code);

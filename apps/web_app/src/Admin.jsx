@@ -291,9 +291,16 @@ function QrModal({ market, onClose }) {
 // одноразовый код на 30 минут и вводит его на плате вместе с номером аппарата;
 // плата обменивает код на свой канал и ключ подписи (RPC device_pair). Новая
 // привязка выдаёт новые канал и ключ, так что прежняя плата аппарата глохнет.
-function PairBoardModal({ market, onClose, onUnpair }) {
+function PairBoardModal({ market, onClose, onUnpair, onOpenSecondsSaved }) {
   const { t, i18n } = useTranslation();
   const [busy, setBusy] = useState(false);
+  // Open time of the machine (micromarkets.open_seconds): one number for paid
+  // orders and service opens, sent to the board in every signed command. The
+  // lock only latches shut when the door's reed switch sees its magnet, so this
+  // is the window to pull the door open, not how long it stays unlocked.
+  const [openSec, setOpenSec] = useState(String(market.open_seconds ?? 20));
+  const [savingSec, setSavingSec] = useState(false);
+  const [secMsg, setSecMsg] = useState(null); // {ok, text}
   const [code, setCode] = useState(null); // {code, expires_at}
   const [error, setError] = useState(null);
   const [now, setNow] = useState(Date.now());
@@ -311,6 +318,22 @@ function PairBoardModal({ market, onClose, onUnpair }) {
     setBusy(false);
     if (err) setError(err.message);
     else setCode(data);
+  }
+
+  async function saveOpenSeconds() {
+    const n = parseInt(openSec, 10);
+    if (!Number.isInteger(n) || n < 1 || n > 600) {
+      setSecMsg({ ok: false, text: t('open_seconds_range') });
+      return;
+    }
+    setSavingSec(true);
+    setSecMsg(null);
+    const { error: err } = await supabase.rpc('set_open_seconds', { p_machid: market.id, p_seconds: n });
+    setSavingSec(false);
+    if (err) { setSecMsg({ ok: false, text: err.message }); return; }
+    setOpenSec(String(n));
+    setSecMsg({ ok: true, text: t('open_seconds_saved') });
+    onOpenSecondsSaved?.();
   }
 
   const left = code ? Math.max(0, Math.floor((new Date(code.expires_at).getTime() - now) / 1000)) : 0;
@@ -332,6 +355,32 @@ function PairBoardModal({ market, onClose, onUnpair }) {
             ? `${t('pair_board_paired')}${market.rt.device_id ? ` ${market.rt.device_id}` : ''} · ${new Date(market.rt.paired_at).toLocaleString(i18n.language)}`
             : t('pair_board_not_paired')}
         </div>
+
+        {market.rt && (
+          <div className="mt-4">
+            <div className="text-[11px] font-bold text-slate-500 uppercase tracking-widest mb-1">{t('open_seconds_label')}</div>
+            <div className="flex gap-2">
+              <input
+                type="number" min="1" max="600" inputMode="numeric"
+                value={openSec}
+                onChange={(e) => { setOpenSec(e.target.value); setSecMsg(null); }}
+                className="w-24 px-3 py-2 rounded-xl border border-slate-300 font-bold text-slate-900 tabular-nums"
+              />
+              <button
+                onClick={saveOpenSeconds}
+                disabled={savingSec}
+                className="flex-1 flex items-center justify-center gap-2 bg-slate-100 text-slate-800 border border-slate-300 rounded-xl font-bold hover:bg-slate-200 transition-all disabled:opacity-60"
+              >
+                {savingSec && <Loader2 size={16} className="animate-spin" />}
+                {t('open_seconds_save')}
+              </button>
+            </div>
+            <p className="mt-1 text-[11px] text-slate-500 leading-snug">{t('open_seconds_hint')}</p>
+            {secMsg && (
+              <p className={`mt-1 text-xs font-bold ${secMsg.ok ? 'text-emerald-700' : 'text-rose-600'}`}>{secMsg.text}</p>
+            )}
+          </div>
+        )}
 
         <p className="mt-3 text-xs text-slate-500 leading-relaxed">{t('pair_board_desc')}</p>
 
@@ -1824,7 +1873,7 @@ export default function Admin() {
       // to the browser's clock, which on a kiosk network is often minutes
       // out and would flip machines offline at random.
       const [marketsRes, statusRes, rtRes] = await Promise.all([
-        supabase.from('micromarkets').select('id, name, layout_json, kind, qr_token'),
+        supabase.from('micromarkets').select('id, name, layout_json, kind, qr_token, open_seconds'),
         supabase.from('device_status_view').select('machid, last_seen_at, board_ok, online, app_version, ter_number'),
         // Boards on the Realtime firmware. Missing RPC (migration not applied
         // yet) just means "none" — the panel keeps working.
@@ -3232,6 +3281,7 @@ export default function Admin() {
           market={pairMarket}
           onClose={() => setPairMarket(null)}
           onUnpair={() => unpairBoard(pairMarket)}
+          onOpenSecondsSaved={fetchMarkets}
         />
       )}
       {qrModalMarket && (
