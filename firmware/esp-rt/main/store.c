@@ -6,6 +6,7 @@
 
 #include "config.h"
 #include "esp_log.h"
+#include "esp_mac.h"
 #include "nvs.h"
 #include "nvs_flash.h"
 
@@ -43,7 +44,6 @@ void store_load(void) {
     if (!g_cfg.netmode[0]) strcpy(g_cfg.netmode, "gsm");
     get_str(h, "ssid", g_cfg.ssid, sizeof(g_cfg.ssid));
     get_str(h, "pass", g_cfg.pass, sizeof(g_cfg.pass));
-    get_str(h, "machid", g_cfg.machid, sizeof(g_cfg.machid));
     get_str(h, "code", g_cfg.code, sizeof(g_cfg.code));
     get_str(h, "rt_topic", g_cfg.rt_topic, sizeof(g_cfg.rt_topic));
     get_str(h, "rt_key", g_cfg.rt_key, sizeof(g_cfg.rt_key));
@@ -89,7 +89,18 @@ bool store_has_network(void) {
 }
 
 bool store_paired(void) {
-    return g_cfg.machid[0] && g_cfg.rt_topic[0] && g_cfg.rt_key[0];
+    return g_cfg.rt_topic[0] && g_cfg.rt_key[0];
+}
+
+const char *store_device_id(void) {
+    static char id[13];
+    if (!id[0]) {
+        uint8_t mac[6];
+        esp_read_mac(mac, ESP_MAC_WIFI_STA);
+        snprintf(id, sizeof(id), "%02X%02X%02X%02X%02X%02X",
+                 mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+    }
+    return id;
 }
 
 bool seen_has(const char *id) {

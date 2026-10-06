@@ -38,6 +38,9 @@ static const char *TAG = "sbrt";
 
 static esp_websocket_client_handle_t s_client;
 static SemaphoreHandle_t s_tx_lock;
+// Presence meta, replaceable at runtime by sbrt_track(); re-sent on every join.
+static SemaphoreHandle_t s_meta_lock;
+static char s_meta[320] = "{}";
 static sbrt_config_t s_cfg;
 static char s_topic[96];        // "realtime:<topic>"
 static char s_join_ref[12];
@@ -97,9 +100,11 @@ static void send_join(void) {
 
 static void send_track(void) {
     char payload[384];
+    xSemaphoreTake(s_meta_lock, portMAX_DELAY);
     snprintf(payload, sizeof(payload),
              "{\"type\":\"presence\",\"event\":\"track\",\"payload\":%s}",
-             s_cfg.presence_meta[0] ? s_cfg.presence_meta : "{}");
+             s_meta);
+    xSemaphoreGive(s_meta_lock);
     send_frame(s_topic, "presence", payload, s_join_ref, NULL, 0);
 }
 
@@ -214,7 +219,9 @@ esp_err_t sbrt_start(const sbrt_config_t *cfg) {
     s_cfg.apikey = dupstr(cfg->apikey);
     s_cfg.topic = dupstr(cfg->topic);
     s_cfg.presence_key = dupstr(cfg->presence_key);
-    s_cfg.presence_meta = dupstr(cfg->presence_meta);
+    s_cfg.presence_meta = NULL;
+    s_meta_lock = xSemaphoreCreateMutex();
+    if (cfg->presence_meta && cfg->presence_meta[0]) strlcpy(s_meta, cfg->presence_meta, sizeof(s_meta));
     snprintf(s_topic, sizeof(s_topic), "realtime:%s", s_cfg.topic);
     s_tx_lock = xSemaphoreCreateMutex();
 
@@ -253,3 +260,13 @@ esp_err_t sbrt_send(const char *event, const char *payload_json) {
 }
 
 bool sbrt_joined(void) { return s_joined; }
+
+esp_err_t sbrt_track(const char *meta_json) {
+    if (!meta_json || strlen(meta_json) >= sizeof(s_meta)) return ESP_ERR_INVALID_SIZE;
+    xSemaphoreTake(s_meta_lock, portMAX_DELAY);
+    strlcpy(s_meta, meta_json, sizeof(s_meta));
+    xSemaphoreGive(s_meta_lock);
+    if (!s_joined) return ESP_OK;   // goes out with the next join
+    send_track();
+    return ESP_OK;
+}

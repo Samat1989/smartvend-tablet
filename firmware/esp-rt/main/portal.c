@@ -80,11 +80,7 @@ static const char PAGE_FORM_A[] =
 // network rows here
 static const char PAGE_FORM_B[] =
     "<span class=lbl>WiFi пароль</span><input name=pass type=password></div>"
-    "<span class=lbl>Номер аппарата</span>"
-    "<input name=machid required inputmode=numeric pattern='[0-9]+' value=\"";
-// machid here
-static const char PAGE_FORM_C[] =
-    "\"><span class=lbl>Код привязки из панели (6 цифр)</span>"
+    "<span class=lbl>Код привязки из панели (6 цифр)</span>"
     "<input name=code inputmode=numeric pattern='[0-9]{6}' maxlength=6 autocomplete=off";
 // " required" or a placeholder here
 static const char PAGE_FORM_D[] =
@@ -135,6 +131,9 @@ static esp_err_t root_get(httpd_req_t *req) {
     touch();
     httpd_resp_set_type(req, "text/html; charset=utf-8");
     httpd_resp_sendstr_chunk(req, PAGE_HEAD);
+    char idline[96];
+    snprintf(idline, sizeof(idline), "<p class=lbl>ID платы: <b style=color:#fff>%s</b></p>", store_device_id());
+    httpd_resp_sendstr_chunk(req, idline);
     if (g_cfg.pair_error) {
         httpd_resp_sendstr_chunk(req, "<p class=err>Код привязки не принят: он неверный или истёк. "
                                       "Получите новый код в панели («Привязать плату») и введите его ещё раз.</p>");
@@ -146,9 +145,6 @@ static esp_err_t root_get(httpd_req_t *req) {
     scan_refresh();
     if (s_rows && s_rows[0]) httpd_resp_sendstr_chunk(req, s_rows);
     httpd_resp_sendstr_chunk(req, PAGE_FORM_B);
-    // A zero-length chunk would end the chunked response: send only when set.
-    if (g_cfg.machid[0]) httpd_resp_sendstr_chunk(req, g_cfg.machid);
-    httpd_resp_sendstr_chunk(req, PAGE_FORM_C);
     httpd_resp_sendstr_chunk(req, store_paired() ? " placeholder='не менять'" : " required");
     httpd_resp_sendstr_chunk(req, PAGE_FORM_D);
     char os[8];
@@ -215,23 +211,18 @@ static esp_err_t save_post(httpd_req_t *req) {
     if (len <= 0) { s_committing = false; return ESP_FAIL; }
     body[len] = 0;
 
-    char netmode[8], ssid[64], pass[64], machid[16], code[12], opensec[8];
+    char netmode[8], ssid[64], pass[64], code[12], opensec[8];
     form_field(body, "netmode", netmode, sizeof(netmode));
     form_field(body, "ssid", ssid, sizeof(ssid));
     form_field(body, "pass", pass, sizeof(pass));
-    form_field(body, "machid", machid, sizeof(machid));
     form_field(body, "code", code, sizeof(code));
     form_field(body, "opensec", opensec, sizeof(opensec));
     bool wifi = strcmp(netmode, "wifi") == 0;
 
-    if (!all_digits(machid)) {
-        s_committing = false;
-        return send_msg(req, "Ошибка", "Впишите номер аппарата цифрами. <a href=/>Назад</a>");
-    }
-    // A new machine number always needs a new code; the same one may keep its
-    // pairing when only the connection changes.
-    bool same_machine = strcmp(machid, g_cfg.machid) == 0 && store_paired() && !g_cfg.pair_error;
-    if (code[0] ? !(strlen(code) == 6 && all_digits(code)) : !same_machine) {
+    // An unpaired board needs a code; a paired one may change only the
+    // connection and keep its pairing by leaving the code empty.
+    bool keep_pairing = store_paired() && !g_cfg.pair_error;
+    if (code[0] ? !(strlen(code) == 6 && all_digits(code)) : !keep_pairing) {
         s_committing = false;
         return send_msg(req, "Ошибка", "Введите 6-значный код привязки из панели. <a href=/>Назад</a>");
     }
@@ -248,7 +239,6 @@ static esp_err_t save_post(httpd_req_t *req) {
     store_set_str("netmode", wifi ? "wifi" : "gsm");
     store_set_str("ssid", wifi ? ssid : "");
     store_set_str("pass", wifi ? pass : "");
-    store_set_str("machid", machid);
     store_set_int("opensec", os);
     store_set_int("pairerr", 0);
     if (code[0]) {
@@ -256,7 +246,7 @@ static esp_err_t save_post(httpd_req_t *req) {
         store_erase("rt_topic");   // the old pairing ends here
         store_erase("rt_key");
     }
-    ESP_LOGI(TAG, "saved: %s machid=%s code=%s", wifi ? "wifi" : "gsm", machid, code[0] ? "new" : "kept");
+    ESP_LOGI(TAG, "saved: %s, code %s", wifi ? "wifi" : "gsm", code[0] ? "new" : "kept");
     send_msg(req, "Готово",
              code[0] ? "Плата перезагрузится, выйдет в сеть и привяжется к аппарату. "
                        "По GSM это 30–60 секунд. Если код не подойдёт, точка настройки откроется снова."

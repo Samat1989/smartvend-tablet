@@ -14,8 +14,11 @@
 // A repeat of an id we already opened is acknowledged again without opening:
 // that is the server retrying because our first `opened` got lost.
 //
-// Presence (tracked by sb_realtime under our machid) is what the server checks
+// Presence (tracked under our board ID, the MAC) is what the server checks
 // before it polls the bank; when our socket dies, Realtime drops us from it.
+// What we track there — {device, ver, variant, net, rssi_dbm, csq, heap} — goes
+// out on every join and again when the signal moves or every 5 minutes, so the
+// panel sees the board's state without asking. pong carries the same fields.
 
 #include "app.h"
 
@@ -150,14 +153,46 @@ static void handle_command(const char *event, cJSON *p) {
     send_opened(id->valuestring, true, seconds, NULL);
 }
 
+// Board state as JSON object fields (no braces), shared by Presence and pong.
+static int state_fields(char *out, size_t sz) {
+    int dbm, csq;
+    net_signal(&dbm, &csq);
+    return snprintf(out, sz,
+                    "\"device\":\"%s\",\"ver\":\"%s\",\"variant\":\"%s\",\"net\":\"%s\","
+                    "\"rssi_dbm\":%d,\"csq\":%d,\"heap\":%lu",
+                    store_device_id(), FW_VERSION_NAME, FW_VARIANT, g_cfg.netmode,
+                    dbm, csq, (unsigned long)esp_get_free_heap_size());
+}
+
 static void handle_ping(cJSON *p) {
     const cJSON *nonce = cJSON_GetObjectItem(p, "nonce");
     if (!cJSON_IsString(nonce) || strlen(nonce->valuestring) > 40) return;
-    char out[200];
-    snprintf(out, sizeof(out),
-             "{\"nonce\":\"%s\",\"lock_ok\":true,\"rssi\":%d,\"heap\":%lu,\"ver\":\"%s\"}",
-             nonce->valuestring, net_rssi(), (unsigned long)esp_get_free_heap_size(), FW_VERSION_NAME);
+    char st[220], out[300];
+    state_fields(st, sizeof(st));
+    snprintf(out, sizeof(out), "{\"nonce\":\"%s\",\"lock_ok\":true,%s}", nonce->valuestring, st);
     sbrt_send("pong", out);
+}
+
+// Re-publish state in Presence when the signal moved by more than 6 dB, and
+// every 5 minutes regardless (heap, a CSQ that settled after the first read).
+static void state_task(void *pv) {
+    int last_dbm = 0;
+    TickType_t last_at = 0;
+    while (true) {
+        vTaskDelay(pdMS_TO_TICKS(30000));
+        int dbm, csq;
+        net_signal(&dbm, &csq);
+        bool moved = abs(dbm - last_dbm) > 6;
+        bool stale = xTaskGetTickCount() - last_at > pdMS_TO_TICKS(5 * 60 * 1000);
+        if (!moved && !stale) continue;
+        char st[220], meta[240];
+        state_fields(st, sizeof(st));
+        snprintf(meta, sizeof(meta), "{%s}", st);
+        if (sbrt_track(meta) == ESP_OK) {
+            last_dbm = dbm;
+            last_at = xTaskGetTickCount();
+        }
+    }
 }
 
 static void worker_task(void *pv) {
@@ -200,19 +235,19 @@ void app_start(void) {
     for (int i = 0; i < 30 && !net_time_synced(); i++) vTaskDelay(pdMS_TO_TICKS(1000));
     if (!net_time_synced()) ESP_LOGW(TAG, "clock not set yet — commands refused until it is");
 
-    char topic[48], meta[160];
+    char topic[48], st[220], meta[240];
     snprintf(topic, sizeof(topic), "dev:%s", g_cfg.rt_topic);
-    snprintf(meta, sizeof(meta),
-             "{\"machid\":%s,\"ver\":\"%s\",\"variant\":\"%s\",\"net\":\"%s\"}",
-             g_cfg.machid, FW_VERSION_NAME, FW_VARIANT, g_cfg.netmode);
+    state_fields(st, sizeof(st));
+    snprintf(meta, sizeof(meta), "{%s}", st);
     sbrt_config_t c = {
         .host = SUPABASE_HOST,
         .apikey = SUPABASE_KEY,
         .topic = topic,
-        .presence_key = g_cfg.machid,
+        .presence_key = store_device_id(),
         .presence_meta = meta,
         .on_broadcast = on_broadcast,
         .on_joined = on_joined,
     };
     ESP_ERROR_CHECK(sbrt_start(&c));
+    xTaskCreate(state_task, "state", 4096, NULL, 4, NULL);
 }

@@ -9,3 +9,7 @@ CONFIG_ESP_MAIN_TASK_STACK_SIZE=6144
 CONFIG_HTTPD_MAX_REQ_HDR_LEN=1024
 # pool.ntp.org + time.google.com: signed commands need a set clock
 CONFIG_LWIP_SNTP_MAX_SERVERS=2
+# A767x modems use 2-byte CMUX frame lengths: per esp_modem's Kconfig, don't
+# defragment, and let the DCE buffer grow for AT replies split across frames.
+CONFIG_ESP_MODEM_CMUX_DEFRAGMENT_PAYLOAD=n
+CONFIG_ESP_MODEM_USE_INFLATABLE_BUFFER_IF_NEEDED=y

@@ -30,6 +30,8 @@ static bool s_portal_test;       // portal is testing credentials: bounded retri
 static int  s_retries;
 static esp_modem_dce_t *s_dce;
 static esp_netif_t *s_ppp;
+static volatile int  s_csq = 99;       // last AT+CSQ: 0..31, 99 = unknown
+static bool s_cmux;                    // modem in CMUX: AT works alongside PPP
 
 static void on_wifi(void *arg, esp_event_base_t base, int32_t id, void *data) {
     if (base == WIFI_EVENT && id == WIFI_EVENT_STA_START) {
@@ -110,6 +112,9 @@ static bool gsm_start(void) {
         dte.uart_config.cts_io_num = -1;
         dte.uart_config.flow_control = ESP_MODEM_FLOW_CONTROL_NONE;
         dte.uart_config.baud_rate = GSM_UART_BAUD;
+        dte.uart_config.rx_buffer_size = 1024;
+        dte.uart_config.tx_buffer_size = 512;
+        dte.dte_buffer_size = 512;
         esp_modem_dce_config_t dce = ESP_MODEM_DCE_DEFAULT_CONFIG(GSM_DEFAULT_APN);
         s_dce = esp_modem_new_dev(ESP_MODEM_DCE_SIM7600, &dte, &dce, s_ppp);
         if (!s_dce) { vTaskDelay(pdMS_TO_TICKS(2000)); continue; }
@@ -122,6 +127,20 @@ static bool gsm_start(void) {
         }
         if (err == ESP_OK) {
             esp_modem_at(s_dce, "AT+CNMP=2", NULL, 1000);
+            // Snapshot before dialing: the only reading we get if CMUX fails.
+            int rssi = 99, ber = 99;
+            if (esp_modem_get_signal_quality(s_dce, &rssi, &ber) == ESP_OK) s_csq = rssi;
+            ESP_LOGI(TAG, "GSM signal before dial: CSQ %d", s_csq);
+            // CMUX: PPP and AT on virtual channels of one UART, so the signal
+            // can be read while online. Fallback is plain data mode.
+            if (esp_modem_set_mode(s_dce, ESP_MODEM_MODE_CMUX) == ESP_OK) {
+                s_cmux = true;
+                ESP_LOGI(TAG, "GSM CMUX up (PPP + AT), waiting for IP");
+                return true;
+            }
+            ESP_LOGW(TAG, "GSM CMUX failed — falling back to DATA mode (signal = snapshot only)");
+            s_cmux = false;
+            esp_modem_set_mode(s_dce, ESP_MODEM_MODE_COMMAND);
             if (esp_modem_set_mode(s_dce, ESP_MODEM_MODE_DATA) == ESP_OK) {
                 ESP_LOGI(TAG, "GSM data mode, waiting for IP");
                 return true;
@@ -137,6 +156,7 @@ static bool gsm_start(void) {
 
 static void gsm_drop(void) {
     if (s_dce) { esp_modem_destroy(s_dce); s_dce = NULL; }
+    s_cmux = false;
 }
 
 // Owns the modem: dial, and re-dial (with a power cycle) whenever PPP drops.
@@ -155,7 +175,18 @@ static void gsm_link_task(void *pv) {
             continue;
         }
         esp_netif_set_default_netif(s_ppp);
-        xEventGroupWaitBits(s_eg, GSM_LOST, pdTRUE, pdFALSE, portMAX_DELAY);
+        // Online: wait for the link to drop, reading the signal once a minute
+        // on the CMUX command channel.
+        while (!(xEventGroupWaitBits(s_eg, GSM_LOST, pdTRUE, pdFALSE, pdMS_TO_TICKS(60000)) & GSM_LOST)) {
+            if (!s_cmux) continue;
+            int rssi = 99, ber = 99;
+            if (esp_modem_get_signal_quality(s_dce, &rssi, &ber) == ESP_OK) {
+                s_csq = rssi;
+                ESP_LOGI(TAG, "GSM CSQ %d", rssi);
+            } else {
+                ESP_LOGW(TAG, "GSM CSQ read failed");
+            }
+        }
         ESP_LOGW(TAG, "GSM link down — restarting modem");
         gsm_drop();
         vTaskDelay(pdMS_TO_TICKS(2000));
@@ -201,10 +232,18 @@ bool net_wifi_try(const char *ssid, const char *pass) {
     return (b & IP_BIT) != 0;
 }
 
-int net_rssi(void) {
-    if (strcmp(g_cfg.netmode, "wifi") != 0) return 0;
-    wifi_ap_record_t ap;
-    return esp_wifi_sta_get_ap_info(&ap) == ESP_OK ? ap.rssi : 0;
+// Wi-Fi: RSSI of the AP, csq = -1. GSM: CSQ 0..31 -> -113 + 2*CSQ dBm;
+// 99 (unknown) -> dbm 0. 0 dBm means "no reading".
+void net_signal(int *dbm, int *csq) {
+    if (strcmp(g_cfg.netmode, "wifi") == 0) {
+        wifi_ap_record_t ap;
+        *csq = -1;
+        *dbm = esp_wifi_sta_get_ap_info(&ap) == ESP_OK ? ap.rssi : 0;
+        return;
+    }
+    int c = s_csq;
+    *csq = c;
+    *dbm = (c >= 0 && c <= 31) ? -113 + 2 * c : 0;
 }
 
 // Signed commands carry an expiry, so the board needs real time.

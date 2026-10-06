@@ -44,14 +44,20 @@ Deno.serve(async (req) => {
     if (!market) return json({ error: "Market not found" }, 404);
 
     const { data: rt } = await supabase
-      .from("device_rt").select("topic").eq("machid", market.id).maybeSingle();
+      .from("device_rt").select("topic, device_id").eq("machid", market.id).maybeSingle();
     if (!rt) return json({ online: true, legacy: true });
 
     let ch: DeviceChannel | null = null;
     try {
-      ch = await DeviceChannel.open(supabase, rt.topic, market.id);
+      ch = await DeviceChannel.open(supabase, rt.topic, rt.device_id ?? "");
       const pong = await ch.ping(3000);
-      return json({ online: !!pong, lock_ok: pong ? pong.lock_ok !== false : undefined });
+      if (!pong) return json({ online: false });
+      return json({
+        online: true,
+        lock_ok: pong.lock_ok !== false,
+        net: pong.net,
+        rssi_dbm: pong.rssi_dbm,
+      });
     } catch (_) {
       return json({ online: false });
     } finally {

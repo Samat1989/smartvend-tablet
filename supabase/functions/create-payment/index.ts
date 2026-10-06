@@ -143,11 +143,11 @@ Deno.serve(async (req) => {
     // only safe way out for an unreachable board is the auto-refund. Machines
     // without a device_rt row skip all of this and stay on MQTT + complete-order.
     const { data: rt } = await supabase
-      .from("device_rt").select("topic, key").eq("machid", numericId).maybeSingle();
+      .from("device_rt").select("topic, key, device_id").eq("machid", numericId).maybeSingle();
     if (rt) {
       supabase.rpc("sweep_door_pending").then(() => {}, () => {});
       try {
-        rtChannel = await DeviceChannel.open(supabase, rt.topic, numericId);
+        rtChannel = await DeviceChannel.open(supabase, rt.topic, rt.device_id ?? "");
         const pong = await rtChannel.ping(3000);
         if (!pong) throw new Error("no pong");
       } catch (e) {

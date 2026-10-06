@@ -329,7 +329,7 @@ function PairBoardModal({ market, onClose, onUnpair }) {
 
         <div className={`mt-4 rounded-xl px-3 py-2 text-xs font-bold ${market.rt ? 'bg-emerald-50 text-emerald-800' : 'bg-slate-100 text-slate-600'}`}>
           {market.rt
-            ? `${t('pair_board_paired')} · ${new Date(market.rt.paired_at).toLocaleString(i18n.language)}`
+            ? `${t('pair_board_paired')}${market.rt.device_id ? ` ${market.rt.device_id}` : ''} · ${new Date(market.rt.paired_at).toLocaleString(i18n.language)}`
             : t('pair_board_not_paired')}
         </div>
 
@@ -635,7 +635,30 @@ function currencyOf(market) {
 // null while the channel is still connecting, undefined for machines without
 // such a board. Presence is the board's last will — Realtime drops it the
 // moment the board's socket dies — so it needs no heartbeat threshold.
-function DeviceStatusDot({ status, kind, withLabel = false, rt }) {
+// Signal of a Realtime board from its Presence state: four bars by dBm, the
+// figure itself in the tooltip. rssi_dbm 0 means the board has no reading yet.
+function SignalBars({ state }) {
+  const dbm = Number(state?.rssi_dbm);
+  if (!dbm) return null;
+  const gsm = state.net === 'gsm';
+  const steps = gsm ? [-75, -85, -95, -110] : [-55, -65, -75, -90];
+  const level = steps.filter((s) => dbm >= s).length;
+  const title = [`${dbm} dBm`, gsm ? 'GSM' : 'Wi-Fi', state.ver && `v${state.ver}`]
+    .filter(Boolean).join(' · ');
+  return (
+    <span className="flex items-end gap-[2px] h-3 shrink-0" title={title}>
+      {[1, 2, 3, 4].map((i) => (
+        <span
+          key={i}
+          className={`w-[3px] rounded-sm ${i <= level ? 'bg-emerald-500' : 'bg-slate-300'}`}
+          style={{ height: `${i * 25}%` }}
+        />
+      ))}
+    </span>
+  );
+}
+
+function DeviceStatusDot({ status, kind, withLabel = false, rt, rtState }) {
   const { t, i18n } = useTranslation();
 
   if (kind === 'micromarket_static' && rt !== undefined) {
@@ -647,6 +670,7 @@ function DeviceStatusDot({ status, kind, withLabel = false, rt }) {
         {withLabel && (
           <span className="text-[10px] font-bold uppercase tracking-wider text-slate-500">{label}</span>
         )}
+        {rt === true && <SignalBars state={rtState} />}
       </span>
     );
   }
@@ -1730,23 +1754,26 @@ export default function Admin() {
   }
 
   // Live connection of boards on the Realtime firmware: one presence-only
-  // channel per board. The board tracks itself under its machid; the panel
-  // only listens.
+  // channel per board. The board tracks itself under its own ID (MAC) and
+  // publishes its state there {device, ver, variant, net, rssi_dbm, csq, heap};
+  // the panel only listens. rtOnline[machid] = that state, or null when the
+  // board is not in the channel.
   const [rtOnline, setRtOnline] = useState({});
   const rtTopicsKey = markets
-    .filter((m) => m.rt?.topic)
-    .map((m) => `${m.id}:${m.rt.topic}`)
+    .filter((m) => m.rt?.topic && m.rt?.device_id)
+    .map((m) => `${m.id}:${m.rt.topic}:${m.rt.device_id}`)
     .sort()
     .join(',');
   useEffect(() => {
     if (!rtTopicsKey) { setRtOnline({}); return undefined; }
-    const channels = rtTopicsKey.split(',').map((pair) => {
-      const [machid, topic] = pair.split(':');
+    const channels = rtTopicsKey.split(',').map((entry) => {
+      const [machid, topic, deviceId] = entry.split(':');
       const ch = supabase.channel(`dev:${topic}`, { config: { presence: { key: '' } } });
-      const update = () => setRtOnline((prev) => ({
-        ...prev,
-        [machid]: Object.prototype.hasOwnProperty.call(ch.presenceState(), machid),
-      }));
+      const update = () => {
+        const metas = ch.presenceState()[deviceId];
+        const meta = Array.isArray(metas) && metas.length ? metas[metas.length - 1] : null;
+        setRtOnline((prev) => ({ ...prev, [machid]: meta }));
+      };
       ch.on('presence', { event: 'sync' }, update);
       // An empty channel may never sync; settle it to "offline" after a beat.
       ch.subscribe((st) => { if (st === 'SUBSCRIBED') setTimeout(update, 2000); });
@@ -2408,7 +2435,8 @@ export default function Admin() {
                           status={m.status}
                           kind={m.kind}
                           withLabel
-                          rt={m.rt ? (rtOnline[m.id] ?? null) : undefined}
+                          rt={m.rt ? (m.id in rtOnline ? !!rtOnline[m.id] : null) : undefined}
+                          rtState={rtOnline[m.id]}
                         />
                         <span className={`text-[9px] font-black uppercase tracking-wider px-2 py-1 rounded-lg shrink-0 ${kindTint(m.kind)}`}>
                           {kindLabel(m.kind, t)}

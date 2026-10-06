@@ -9,7 +9,6 @@
 #include "esp_crt_bundle.h"
 #include "esp_http_client.h"
 #include "esp_log.h"
-#include "esp_mac.h"
 #include "store.h"
 
 static const char *TAG = "pair";
@@ -27,15 +26,14 @@ static esp_err_t on_http(esp_http_client_event_t *e) {
     return ESP_OK;
 }
 
-// POST /rest/v1/rpc/device_pair {p_machid, p_code, p_device_id}
+// POST /rest/v1/rpc/device_pair {p_code, p_device_id}
 //   -> {ok:true, topic, key} | {ok:false, error}
+// The code was issued in the panel for one machine, so the server finds the
+// machine by it; the board sends only the code and its own ID.
 pair_result_t pair_device(void) {
-    uint8_t mac[6];
-    esp_read_mac(mac, ESP_MAC_WIFI_STA);
-    char body[160];
-    snprintf(body, sizeof(body),
-             "{\"p_machid\":%s,\"p_code\":\"%s\",\"p_device_id\":\"%02X%02X%02X%02X%02X%02X\"}",
-             g_cfg.machid, g_cfg.code, mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+    char body[96];
+    snprintf(body, sizeof(body), "{\"p_code\":\"%s\",\"p_device_id\":\"%s\"}",
+             g_cfg.code, store_device_id());
 
     char resp[512];
     acc_t acc = { .buf = resp, .len = 0, .cap = sizeof(resp) };
@@ -61,8 +59,8 @@ pair_result_t pair_device(void) {
     }
     resp[acc.len] = 0;
     if (status != 200) {
-        // 4xx here means the request itself is wrong (e.g. machid not a number)
-        // — retrying will not fix it. 5xx is the server's problem: retry.
+        // 4xx: the request itself is wrong, retrying will not fix it.
+        // 5xx: the server's problem — retry.
         ESP_LOGW(TAG, "device_pair HTTP %d: %s", status, resp);
         return status >= 500 ? PAIR_NET_ERR : PAIR_REFUSED;
     }
@@ -77,7 +75,7 @@ pair_result_t pair_device(void) {
         strlcpy(g_cfg.rt_key, key->valuestring, sizeof(g_cfg.rt_key));
         store_set_str("rt_topic", g_cfg.rt_topic);
         store_set_str("rt_key", g_cfg.rt_key);
-        ESP_LOGI(TAG, "paired machid=%s topic=%s", g_cfg.machid, g_cfg.rt_topic);
+        ESP_LOGI(TAG, "paired board %s, topic %s", store_device_id(), g_cfg.rt_topic);
         res = PAIR_OK;
     } else {
         const cJSON *e = cJSON_GetObjectItem(root, "error");

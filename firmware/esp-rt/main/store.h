@@ -8,7 +8,6 @@ typedef struct {
     char netmode[8];     // "wifi" | "gsm"
     char ssid[64];
     char pass[64];
-    char machid[16];
     char code[8];        // pairing code, kept only until device_pair succeeds
     char rt_topic[40];   // Realtime channel uuid
     char rt_key[72];     // HMAC key for signed commands
@@ -25,7 +24,11 @@ void store_set_int(const char *key, int val);
 void store_erase(const char *key);
 
 bool store_has_network(void);   // netmode set and, for Wi-Fi, an SSID
-bool store_paired(void);        // machid + rt_topic + rt_key present
+bool store_paired(void);        // rt_topic + rt_key present
+
+// The board's identity: Wi-Fi STA MAC as 12 upper-case hex, e.g. A4CF12B3C4D5.
+// The board never knows which machine it serves — only the server does.
+const char *store_device_id(void);
 
 // Recently opened command ids (order ids / service-open ids), persisted so a
 // command replayed after a reboot still does not open the door twice.

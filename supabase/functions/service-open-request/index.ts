@@ -93,11 +93,11 @@ Deno.serve(async (req) => {
     let opened: boolean | undefined;
     let openedFor: number = grant.seconds;
     const { data: rt } = await admin
-      .from("device_rt").select("topic, key").eq("machid", machid).maybeSingle();
+      .from("device_rt").select("topic, key, device_id").eq("machid", machid).maybeSingle();
     if (rt) {
       let ch: DeviceChannel | null = null;
       try {
-        ch = await DeviceChannel.open(admin, rt.topic, machid);
+        ch = await DeviceChannel.open(admin, rt.topic, rt.device_id ?? "");
         const ack = await ch.command(
           "service-open", rt.key, grant.id, { seconds: asked > 0 ? grant.seconds : 0 }, Date.now() + 12_000,
         );

@@ -35,10 +35,10 @@ void app_main(void) {
     ext_wd_start();
     led_start();
     net_init();
-    ESP_LOGI(TAG, "esp-rt %s v%s, machid=%s, %s", FW_VARIANT, FW_VERSION_NAME,
-             g_cfg.machid[0] ? g_cfg.machid : "-", store_paired() ? "paired" : "not paired");
+    ESP_LOGI(TAG, "esp-rt %s v%s, board %s, %s", FW_VARIANT, FW_VERSION_NAME,
+             store_device_id(), store_paired() ? "paired" : "not paired");
 
-    bool configured = store_has_network() && g_cfg.machid[0] && (store_paired() || g_cfg.code[0]);
+    bool configured = store_has_network() && (store_paired() || g_cfg.code[0]);
     int presses = button_press_count(PROVISION_WINDOW_MS);
     if (!configured || g_cfg.pair_error || presses > PROVISION_PRESS_COUNT) {
         // A refused code has nothing to fall back to — rebooting would only

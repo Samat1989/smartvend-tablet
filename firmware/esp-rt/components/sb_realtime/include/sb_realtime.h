@@ -17,8 +17,8 @@ typedef struct {
     const char *host;          // "<ref>.supabase.co"
     const char *apikey;        // publishable key
     const char *topic;         // channel name without the "realtime:" prefix, e.g. "dev:<uuid>"
-    const char *presence_key;  // our key in Presence (machid)
-    const char *presence_meta; // JSON object tracked in Presence, e.g. {"machid":1,"ver":"1.0.0"}
+    const char *presence_key;  // our key in Presence (the board ID)
+    const char *presence_meta; // initial JSON object tracked in Presence (see sbrt_track)
     sbrt_broadcast_cb_t on_broadcast;
     sbrt_joined_cb_t on_joined;  // after every successful (re)join
     void *ctx;
@@ -34,3 +34,7 @@ esp_err_t sbrt_send(const char *event, const char *payload_json);
 
 // Channel joined (and Presence tracked) right now.
 bool sbrt_joined(void);
+
+// Replaces what the board publishes in Presence (JSON object, < 320 B) and
+// re-tracks right away when joined; otherwise it goes out with the next join.
+esp_err_t sbrt_track(const char *meta_json);

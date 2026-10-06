@@ -34,16 +34,18 @@ export class DeviceChannel {
     private sb: SupabaseClient,
     // deno-lint-ignore no-explicit-any
     private ch: any,
-    readonly machid: number,
+    // The board's ID (MAC, 12 hex) — its Presence key. The board does not
+    // know which machine it serves; that mapping lives in device_rt only.
+    readonly deviceId: string,
   ) {}
 
   // Joins the board's channel. Throws if Realtime does not confirm the join
   // in time — the caller treats that as "board unreachable".
-  static async open(sb: SupabaseClient, topic: string, machid: number, timeoutMs = 5000) {
+  static async open(sb: SupabaseClient, topic: string, deviceId: string, timeoutMs = 5000) {
     const ch = sb.channel(`dev:${topic}`, {
       config: { broadcast: { self: false, ack: false }, presence: { key: "" } },
     });
-    const dc = new DeviceChannel(sb, ch, machid);
+    const dc = new DeviceChannel(sb, ch, deviceId);
     for (const event of ["pong", "opened"]) {
       ch.on("broadcast", { event }, ({ payload }: { payload: Payload }) => dc.dispatch(event, payload));
     }
@@ -74,7 +76,16 @@ export class DeviceChannel {
   // Board is in the channel's Presence right now. Presence state arrives a
   // moment after the join, so a fresh channel may say false for ~0.5 s.
   present(): boolean {
-    return Object.prototype.hasOwnProperty.call(this.ch.presenceState(), String(this.machid));
+    return Object.prototype.hasOwnProperty.call(this.ch.presenceState(), this.deviceId);
+  }
+
+  // What the board last published in Presence: {device, ver, variant, net,
+  // rssi_dbm, csq, heap}. null when it is not in the channel.
+  state(): Payload | null {
+    const metas = this.ch.presenceState()[this.deviceId];
+    if (!Array.isArray(metas) || metas.length === 0) return null;
+    const { presence_ref: _ref, ...meta } = metas[metas.length - 1];
+    return meta;
   }
 
   waitFor(event: string, pred: (p: Payload) => boolean, ms: number): Promise<Payload | null> {
@@ -94,7 +105,7 @@ export class DeviceChannel {
   waitJoin(ms: number): Promise<boolean> {
     if (this.present()) return Promise.resolve(true);
     return new Promise((resolve) => {
-      const w = { key: String(this.machid), resolve };
+      const w = { key: this.deviceId, resolve };
       this.joinWaiters.push(w);
       setTimeout(() => {
         if (this.joinWaiters.includes(w)) {
