@@ -291,8 +291,13 @@ function QrModal({ market, onClose }) {
 // одноразовый код на 30 минут и вводит его на плате вместе с номером аппарата;
 // плата обменивает код на свой канал и ключ подписи (RPC device_pair). Новая
 // привязка выдаёт новые канал и ключ, так что прежняя плата аппарата глохнет.
-function PairBoardModal({ market, onClose, onUnpair, onOpenSecondsSaved, onCheckUpdate }) {
+// Settings of one machine with a lock board (gear in the machine list): board
+// status, open time, pairing with step-by-step hints, firmware check for the
+// superadmin, and unpairing set apart at the bottom. `market` is the live row,
+// so a board that pairs while the dialog is open shows up here by itself.
+function MachineSettingsModal({ market, rtLive, rtState, onClose, onUnpair, onRefresh, onCheckUpdate }) {
   const { t, i18n } = useTranslation();
+  const paired = !!market.rt;
   const [busy, setBusy] = useState(false);
   // Open time of the machine (micromarkets.open_seconds): one number for paid
   // orders and service opens, sent to the board in every signed command. The
@@ -306,6 +311,8 @@ function PairBoardModal({ market, onClose, onUnpair, onOpenSecondsSaved, onCheck
   const [now, setNow] = useState(Date.now());
   const [otaBusy, setOtaBusy] = useState(false);
   const [otaMsg, setOtaMsg] = useState(null); // {ok, text}
+  const [repair, setRepair] = useState(false); // re-pair section of a paired board unfolded
+  const pairedAt = market.rt?.paired_at;
 
   async function checkUpdate() {
     setOtaBusy(true);
@@ -320,6 +327,24 @@ function PairBoardModal({ market, onClose, onUnpair, onOpenSecondsSaved, onCheck
     return () => clearInterval(id);
   }, [code]);
 
+  // While a code is on screen, look for the board every 5 s: the moment it
+  // pairs, the status at the top turns green without closing the dialog.
+  useEffect(() => {
+    if (!code) return undefined;
+    const id = setInterval(() => onRefresh?.(), 5000);
+    return () => clearInterval(id);
+  }, [code]);
+
+  // A new pairing landed: the code is spent.
+  const firstPairedAt = useRef(pairedAt);
+  useEffect(() => {
+    if (pairedAt && pairedAt !== firstPairedAt.current) {
+      firstPairedAt.current = pairedAt;
+      setCode(null);
+      setRepair(false);
+    }
+  }, [pairedAt]);
+
   async function getCode() {
     setBusy(true);
     setError(null);
@@ -329,8 +354,8 @@ function PairBoardModal({ market, onClose, onUnpair, onOpenSecondsSaved, onCheck
     else setCode(data);
   }
 
-  async function saveOpenSeconds() {
-    const n = parseInt(openSec, 10);
+  async function saveOpenSeconds(value = openSec) {
+    const n = parseInt(value, 10);
     if (!Number.isInteger(n) || n < 1 || n > 600) {
       setSecMsg({ ok: false, text: t('open_seconds_range') });
       return;
@@ -342,105 +367,176 @@ function PairBoardModal({ market, onClose, onUnpair, onOpenSecondsSaved, onCheck
     if (err) { setSecMsg({ ok: false, text: err.message }); return; }
     setOpenSec(String(n));
     setSecMsg({ ok: true, text: t('open_seconds_saved') });
-    onOpenSecondsSaved?.();
+    onRefresh?.();
   }
 
   const left = code ? Math.max(0, Math.floor((new Date(code.expires_at).getTime() - now) / 1000)) : 0;
   const mmss = `${Math.floor(left / 60)}:${String(left % 60).padStart(2, '0')}`;
+  const section = 'mt-5 pt-5 border-t border-slate-200';
+  const head = 'text-[11px] font-black text-slate-500 uppercase tracking-widest mb-2';
+
+  const pairing = (
+    <>
+      <ol className="space-y-2 text-xs text-slate-600 leading-relaxed">
+        {[1, 2, 3, 4].map((i) => (
+          <li key={i} className="flex gap-2">
+            <span className="shrink-0 w-5 h-5 rounded-full bg-slate-900 text-white text-[11px] font-black flex items-center justify-center">{i}</span>
+            <span>{t(`settings_step_${i}`)}</span>
+          </li>
+        ))}
+      </ol>
+      {code && left > 0 && (
+        <div className="mt-4 text-center rounded-2xl bg-slate-50 border border-slate-200 py-3">
+          <div className="text-[11px] font-bold text-slate-500 uppercase tracking-widest">{t('pair_board_code')}</div>
+          <div className="text-4xl font-black tracking-[0.3em] text-slate-900 tabular-nums select-all">{code.code}</div>
+          <div className="text-xs font-bold text-slate-500 tabular-nums">{t('pair_board_expires')} {mmss}</div>
+          <div className="mt-1 text-[11px] font-bold text-slate-400 inline-flex items-center gap-1.5">
+            <Loader2 size={12} className="animate-spin" /> {t('settings_waiting_board')}
+          </div>
+        </div>
+      )}
+      {code && left === 0 && (
+        <div className="mt-4 rounded-xl px-3 py-3 bg-amber-50 border border-amber-200 text-amber-800 text-xs font-bold">
+          {t('pair_board_expired')}
+        </div>
+      )}
+      {error && (
+        <div className="mt-4 rounded-xl px-3 py-3 bg-rose-50 border border-rose-200 text-rose-700 text-xs font-bold break-words">
+          {error}
+        </div>
+      )}
+      <Button variant="dark" block className="mt-4" loading={busy} icon={Link2} onClick={getCode}>
+        {code ? t('pair_board_new_code') : t('pair_board_get_code')}
+      </Button>
+    </>
+  );
 
   return (
-    <div className="fixed inset-0 z-[60] bg-black/50 flex items-center justify-center p-4" onClick={onClose}>
-      <div className="bg-white rounded-3xl p-6 w-full max-w-sm shadow-2xl" onClick={(e) => e.stopPropagation()}>
-        <div className="flex items-center justify-between mb-4">
-          <h3 className="text-lg font-black text-slate-900">{t('pair_board_title')}</h3>
-          <button onClick={onClose} className="p-2 text-slate-400 hover:text-slate-700 rounded-lg"><X size={20} /></button>
+    <div className="fixed inset-0 z-[60] bg-black/50 flex items-end sm:items-center justify-center sm:p-4" onClick={onClose}>
+      <div
+        className="bg-white rounded-t-3xl sm:rounded-3xl p-5 sm:p-6 w-full sm:max-w-md shadow-2xl max-h-[92vh] overflow-y-auto"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="flex items-start justify-between gap-3">
+          <div className="min-w-0">
+            <h3 className="text-lg font-black text-slate-900">{t('machine_settings')}</h3>
+            <div className="text-sm font-bold text-slate-700 truncate">
+              {market.name || `${t('apparatus_no')}${market.id}`}
+              <span className="text-slate-400 font-medium"> · {t('apparatus_no')}{market.id}</span>
+            </div>
+          </div>
+          <IconButton icon={X} label={t('close')} tone="plain" onClick={onClose} />
         </div>
 
-        <div className="font-bold text-slate-900">{market.name || `${t('apparatus_no')}${market.id}`}</div>
-        <div className="text-[11px] font-bold text-slate-500 uppercase tracking-widest">{t('apparatus_no')}{market.id}</div>
-
-        <div className={`mt-4 rounded-xl px-3 py-2 text-xs font-bold ${market.rt ? 'bg-emerald-50 text-emerald-800' : 'bg-slate-100 text-slate-600'}`}>
-          {market.rt
-            ? `${t('pair_board_paired')}${market.rt.device_id ? ` ${market.rt.device_id}` : ''} · ${new Date(market.rt.paired_at).toLocaleString(i18n.language)}`
-            : t('pair_board_not_paired')}
+        {/* 1. Плата */}
+        <div className="mt-4 rounded-2xl border border-slate-200 bg-slate-50 p-3">
+          <div className="flex items-center justify-between gap-2">
+            <span className="text-[11px] font-black text-slate-500 uppercase tracking-widest">{t('settings_board')}</span>
+            {paired
+              ? <BoardLamp rt={rtLive} rtState={rtState} rtRow={market.rt} withLabel />
+              : <span className="text-[11px] font-black uppercase tracking-wider text-amber-600">{t('pair_board_not_paired')}</span>}
+          </div>
+          {paired && (
+            <dl className="mt-2 grid grid-cols-[auto,1fr] gap-x-3 gap-y-1 text-xs">
+              <dt className="text-slate-500">ID</dt>
+              <dd className="font-mono font-bold text-slate-800 truncate">{market.rt.device_id || '—'}</dd>
+              <dt className="text-slate-500">{t('settings_firmware')}</dt>
+              <dd className="font-bold text-slate-800">{market.rt.board_ver || '—'}</dd>
+              <dt className="text-slate-500">{t('adm_paired_at')}</dt>
+              <dd className="font-bold text-slate-800">{pairedAt ? new Date(pairedAt).toLocaleString(i18n.language) : '—'}</dd>
+              {rtLive === false && market.rt.last_seen_at && (
+                <>
+                  <dt className="text-slate-500">{t('status_last_seen')}</dt>
+                  <dd className="font-bold text-slate-800">{new Date(market.rt.last_seen_at).toLocaleString(i18n.language)}</dd>
+                </>
+              )}
+            </dl>
+          )}
         </div>
 
-        {market.rt && (
-          <div className="mt-4">
-            <div className="text-[11px] font-bold text-slate-500 uppercase tracking-widest mb-1">{t('open_seconds_label')}</div>
+        {/* 2. Время открытия */}
+        {paired && (
+          <div className={section}>
+            <div className={head}>{t('open_seconds_label')}</div>
             <div className="flex gap-2">
               <input
                 type="number" min="1" max="600" inputMode="numeric"
                 value={openSec}
                 onChange={(e) => { setOpenSec(e.target.value); setSecMsg(null); }}
-                className="w-24 px-3 py-2 rounded-xl border border-slate-300 font-bold text-slate-900 tabular-nums"
+                className="w-24 min-h-10 px-3 rounded-xl border border-slate-300 font-bold text-slate-900 tabular-nums"
               />
-              <button
-                onClick={saveOpenSeconds}
-                disabled={savingSec}
-                className="flex-1 flex items-center justify-center gap-2 bg-slate-100 text-slate-800 border border-slate-300 rounded-xl font-bold hover:bg-slate-200 transition-all disabled:opacity-60"
-              >
-                {savingSec && <Loader2 size={16} className="animate-spin" />}
+              <Button variant="primary" className="flex-1" loading={savingSec} onClick={() => saveOpenSeconds()}>
                 {t('open_seconds_save')}
-              </button>
+              </Button>
             </div>
-            <p className="mt-1 text-[11px] text-slate-500 leading-snug">{t('open_seconds_hint')}</p>
+            <div className="flex gap-1.5 mt-2">
+              {[10, 20, 30, 60].map((v) => (
+                <button
+                  key={v}
+                  type="button"
+                  onClick={() => { setOpenSec(String(v)); saveOpenSeconds(v); }}
+                  className={`flex-1 min-h-9 rounded-lg border text-xs font-bold transition-all ${String(v) === openSec ? 'border-primary bg-primary/5 text-primary' : 'border-slate-200 text-slate-600 hover:border-slate-400'}`}
+                >
+                  {v} {t('adm_sec')}
+                </button>
+              ))}
+            </div>
+            <p className="mt-2 text-[11px] text-slate-500 leading-snug">{t('open_seconds_hint')}</p>
             {secMsg && (
               <p className={`mt-1 text-xs font-bold ${secMsg.ok ? 'text-emerald-700' : 'text-rose-600'}`}>{secMsg.text}</p>
             )}
           </div>
         )}
 
-        <p className="mt-3 text-xs text-slate-500 leading-relaxed">{t('pair_board_desc')}</p>
-
-        {code && left > 0 && (
-          <div className="mt-5 text-center">
-            <div className="text-[11px] font-bold text-slate-500 uppercase tracking-widest">{t('pair_board_code')}</div>
-            <div className="text-4xl font-black tracking-[0.3em] text-slate-900 tabular-nums select-all">{code.code}</div>
-            <div className="text-xs font-bold text-slate-500 tabular-nums">{t('pair_board_expires')} {mmss}</div>
-          </div>
-        )}
-        {code && left === 0 && (
-          <div className="mt-5 rounded-xl px-3 py-3 bg-amber-50 border border-amber-200 text-amber-800 text-xs font-bold">
-            {t('pair_board_expired')}
-          </div>
-        )}
-        {error && (
-          <div className="mt-5 rounded-xl px-3 py-3 bg-rose-50 border border-rose-200 text-rose-700 text-xs font-bold break-words">
-            {error}
-          </div>
-        )}
-
-        <button
-          onClick={getCode}
-          disabled={busy}
-          className="mt-5 w-full flex items-center justify-center gap-2 bg-slate-900 text-white py-3 rounded-xl font-bold hover:bg-slate-700 transition-all disabled:bg-slate-300 disabled:cursor-wait"
-        >
-          {busy ? <Loader2 size={18} className="animate-spin" /> : <Link2 size={18} />}
-          {code ? t('pair_board_new_code') : t('pair_board_get_code')}
-        </button>
-        {market.rt && onCheckUpdate && (
-          <>
+        {/* 3. Привязка */}
+        <div className={section}>
+          {paired && !repair ? (
             <button
-              onClick={checkUpdate}
-              disabled={otaBusy}
-              className="mt-2 w-full flex items-center justify-center gap-2 bg-slate-100 text-slate-800 border border-slate-300 py-3 rounded-xl font-bold hover:bg-slate-200 transition-all disabled:opacity-60 disabled:cursor-wait"
+              type="button"
+              onClick={() => setRepair(true)}
+              className="w-full flex items-center justify-between min-h-10 text-left"
             >
-              {otaBusy ? <Loader2 size={18} className="animate-spin" /> : <Download size={18} />}
-              {t('ota_check')}
+              <span>
+                <span className="block text-sm font-bold text-slate-800">{t('settings_repair')}</span>
+                <span className="block text-[11px] text-slate-500">{t('settings_repair_hint')}</span>
+              </span>
+              <ChevronDown size={18} className="text-slate-400 shrink-0" />
             </button>
+          ) : (
+            <>
+              <div className={head}>{paired ? t('settings_repair') : t('pair_board')}</div>
+              {paired && (
+                <p className="mb-3 rounded-xl bg-amber-50 border border-amber-200 px-3 py-2 text-[11px] font-bold text-amber-800">
+                  {t('settings_repair_warn')}
+                </p>
+              )}
+              {pairing}
+            </>
+          )}
+        </div>
+
+        {/* 4. Обновление прошивки (суперадмин) */}
+        {paired && onCheckUpdate && (
+          <div className={section}>
+            <div className={head}>{t('settings_firmware')}</div>
+            <Button variant="secondary" block loading={otaBusy} icon={Download} onClick={checkUpdate}>
+              {t('ota_check')}
+            </Button>
             {otaMsg && (
               <p className={`mt-1 text-xs font-bold ${otaMsg.ok ? 'text-emerald-700' : 'text-rose-600'}`}>{otaMsg.text}</p>
             )}
-          </>
+          </div>
         )}
-        {market.rt && (
-          <button
-            onClick={onUnpair}
-            className="mt-2 w-full flex items-center justify-center gap-2 bg-white text-rose-600 border border-rose-200 py-3 rounded-xl font-bold hover:bg-rose-50 transition-all"
-          >
-            <LinkOff size={18} /> {t('pair_board_unpair')}
-          </button>
+
+        {/* 5. Опасная зона */}
+        {paired && (
+          <div className="mt-5 rounded-2xl border border-rose-200 bg-rose-50/40 p-3">
+            <div className="text-[11px] font-black text-rose-600 uppercase tracking-widest mb-1">{t('settings_danger_zone')}</div>
+            <p className="text-[11px] text-slate-600 mb-3 leading-snug">{t('unpair_hint')}</p>
+            <Button variant="danger-outline" block icon={LinkOff} onClick={onUnpair}>
+              {t('pair_board_unpair')}
+            </Button>
+          </div>
         )}
       </div>
     </div>
@@ -2823,15 +2919,12 @@ export default function Admin() {
                       {/* Lock board pairing: a static-QR micromarket and a tablet
                           micromarket (its board is separate from the tablet). */}
                       {(m.kind === 'micromarket_static' || m.kind === 'micromarket_tablet') && (
-                        <button
+                        <IconButton
+                          icon={Settings}
+                          label={t('machine_settings')}
+                          tone={m.rt ? 'success' : 'default'}
                           onClick={() => setPairMarket(m)}
-                          title={t('pair_board')}
-                          className={`p-2 rounded-lg bg-white border transition-all shrink-0 ${
-                            m.rt ? 'border-emerald-300 text-emerald-600' : 'border-slate-300 text-slate-600'
-                          } hover:text-primary hover:border-primary`}
-                        >
-                          <Link2 size={15} />
-                        </button>
+                        />
                       )}
                       {m.kind === 'vending' && (
                         <button
@@ -2903,6 +2996,16 @@ export default function Admin() {
                         : <KeyRound size={16} />}
                       <span className="hidden sm:inline">{t('service_open')}</span>
                     </button>
+                  )}
+                  {(selectedMarket?.kind === 'micromarket_static' || selectedMarket?.kind === 'micromarket_tablet') && (
+                    <Button
+                      variant="secondary"
+                      icon={Settings}
+                      className={`flex-1 sm:flex-none ${selectedMarket?.rt ? 'text-emerald-700 border-emerald-300' : ''}`}
+                      onClick={() => setPairMarket(selectedMarket)}
+                    >
+                      <span className="hidden sm:inline">{t('machine_settings_short')}</span>
+                    </Button>
                   )}
                   <button
                     onClick={() => setShowCategoryManager(true)}
@@ -3612,11 +3715,13 @@ export default function Admin() {
       )}
 
       {pairMarket && (
-        <PairBoardModal
-          market={pairMarket}
+        <MachineSettingsModal
+          market={markets.find((m) => m.id === pairMarket.id) ?? pairMarket}
+          rtLive={pairMarket.id in rtOnline ? !!rtOnline[pairMarket.id] : null}
+          rtState={rtOnline[pairMarket.id]}
           onClose={() => setPairMarket(null)}
           onUnpair={() => unpairBoard(pairMarket)}
-          onOpenSecondsSaved={fetchMarkets}
+          onRefresh={fetchMarkets}
           onCheckUpdate={isSuperadmin ? () => checkBoardUpdate(pairMarket) : undefined}
         />
       )}
