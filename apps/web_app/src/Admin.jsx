@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, Fragment } from 'react';
 import { supabase } from './supabaseClient';
-import { Image, Upload, Download, Plus, Minus, Save, Trash2, X, Loader2, Pencil, Receipt, Calendar, ShoppingBag, History, Languages, CheckCircle2, XCircle, AlertTriangle, ChevronRight, ChevronLeft, ChevronDown, Package, QrCode, KeyRound, Unlink as LinkOff, HelpCircle, Link2, Signal, SignalHigh, SignalMedium, SignalLow, SignalZero, Wifi, WifiHigh, WifiLow, WifiZero } from 'lucide-react';
+import { Image, Upload, Download, Plus, Minus, Save, Trash2, X, Loader2, Pencil, Receipt, Calendar, ShoppingBag, History, Languages, CheckCircle2, XCircle, AlertTriangle, ChevronRight, ChevronLeft, ChevronDown, Package, QrCode, KeyRound, Unlink as LinkOff, HelpCircle, Link2, Signal, SignalHigh, SignalMedium, SignalLow, SignalZero, Wifi, WifiHigh, WifiLow, WifiZero, Users, Tag, Settings, RefreshCw, LogOut } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import './i18n';
 import Cropper from 'react-easy-crop';
@@ -601,7 +601,7 @@ function Toast({ toast, onClose }) {
     <div
       onClick={onClose}
       role="alert"
-      className={`fixed bottom-6 left-1/2 -translate-x-1/2 px-5 py-3 rounded-2xl font-bold text-white shadow-2xl z-[300] max-w-[92vw] sm:max-w-md flex items-start gap-2 cursor-pointer animate-in fade-in slide-in-from-bottom-5 ${isError ? 'bg-red-600' : 'bg-emerald-600'}`}
+      className={`fixed bottom-20 sm:bottom-6 left-1/2 -translate-x-1/2 px-5 py-3 rounded-2xl font-bold text-white shadow-2xl z-[300] max-w-[92vw] sm:max-w-md flex items-start gap-2 cursor-pointer animate-in fade-in slide-in-from-bottom-5 ${isError ? 'bg-red-600' : 'bg-emerald-600'}`}
     >
       <span className="shrink-0 mt-0.5">
         {isError ? <AlertTriangle size={16} /> : <CheckCircle2 size={16} />}
@@ -2522,8 +2522,16 @@ export default function Admin() {
     return [...byCurrency.entries()].map(([currency, amount]) => ({ currency, amount }));
   })();
 
+  // Administration first — it's the superadmin's landing tab.
+  const tabs = [
+    isSuperadmin && { key: 'users', icon: Users, label: t('tab_users'), short: t('tab_users_short'), onClick: () => setActiveTab('users') },
+    { key: 'sales', icon: ShoppingBag, label: t('sales'), short: t('sales'), onClick: () => setActiveTab('sales') },
+    { key: 'inventory', icon: Package, label: t('devices'), short: t('devices'), onClick: () => { closeMarket(); setActiveTab('inventory'); } },
+    { key: 'catalog', icon: Tag, label: t('tab_catalog'), short: t('tab_catalog'), onClick: () => setActiveTab('catalog') },
+  ].filter(Boolean);
+
   return (
-    <div className="min-h-screen bg-slate-200 text-slate-900 p-3 md:p-6 font-lexend">
+    <div className="min-h-screen bg-slate-200 text-slate-900 p-3 pb-24 sm:pb-3 md:p-6 font-lexend">
       <header className="flex justify-between items-center mb-4 sm:mb-6 bg-white p-3 sm:p-4 rounded-2xl shadow-md border border-slate-300 flex-wrap gap-3 sm:gap-4">
         <div className="flex flex-wrap items-center gap-3 sm:gap-4 flex-1 min-w-0">
           <div className="flex flex-col">
@@ -2531,67 +2539,66 @@ export default function Admin() {
             <span className="text-[9px] sm:text-[10px] font-bold text-slate-500 uppercase tracking-widest">{t('admin_panel')}</span>
           </div>
           <div className="h-10 w-[1px] bg-slate-300 hidden sm:block"></div>
-          <div className="flex bg-slate-200 p-1 rounded-xl border border-slate-300 w-full sm:w-auto overflow-x-auto no-scrollbar">
-            {/* Administration first — it's the superadmin's landing tab. */}
-            {isSuperadmin && (
+          {/* Desktop tabs; on a phone the same tabs live in the bottom bar. */}
+          <nav className="hidden sm:flex bg-slate-200 p-1 rounded-xl border border-slate-300">
+            {tabs.map(({ key, icon: Icon, label, onClick }) => (
               <button
-                onClick={() => setActiveTab('users')}
-                className={`flex-1 sm:flex-none shrink-0 whitespace-nowrap px-2.5 sm:px-4 py-2 sm:py-1.5 rounded-lg font-bold transition-all text-xs ${activeTab === 'users' ? 'bg-white text-primary shadow-md' : 'text-slate-600 hover:text-slate-900'}`}
+                key={key}
+                onClick={onClick}
+                className={`flex items-center gap-2 px-4 min-h-9 rounded-lg font-bold transition-all text-sm ${activeTab === key ? 'bg-white text-primary shadow-md' : 'text-slate-600 hover:text-slate-900'}`}
               >
-                {t('tab_users')}
+                <Icon size={16} /> {label}
               </button>
-            )}
-            <button
-              onClick={() => setActiveTab('sales')}
-              className={`flex-1 sm:flex-none shrink-0 whitespace-nowrap px-2.5 sm:px-4 py-2 sm:py-1.5 rounded-lg font-bold transition-all text-xs ${activeTab === 'sales' ? 'bg-white text-primary shadow-md' : 'text-slate-600 hover:text-slate-900'}`}
-            >
-              {t('sales')}
-            </button>
-            <button
-              onClick={() => { closeMarket(); setActiveTab('inventory'); }}
-              className={`flex-1 sm:flex-none shrink-0 whitespace-nowrap px-2.5 sm:px-4 py-2 sm:py-1.5 rounded-lg font-bold transition-all text-xs ${activeTab === 'inventory' ? 'bg-white text-primary shadow-md' : 'text-slate-600 hover:text-slate-900'}`}
-            >
-              {t('devices')}
-            </button>
-            <button
-              onClick={() => setActiveTab('catalog')}
-              className={`flex-1 sm:flex-none shrink-0 whitespace-nowrap px-2.5 sm:px-4 py-2 sm:py-1.5 rounded-lg font-bold transition-all text-xs ${activeTab === 'catalog' ? 'bg-white text-primary shadow-md' : 'text-slate-600 hover:text-slate-900'}`}
-            >
-              {t('tab_catalog')}
-            </button>
-          </div>
+            ))}
+          </nav>
         </div>
         <div className="flex items-center gap-2 sm:gap-3 min-w-0 ml-auto">
           <a
             href="/help"
             title={t('help_link')}
-            className="flex items-center gap-1 text-slate-400 hover:text-primary transition-all"
+            aria-label={t('help_link')}
+            className="inline-flex items-center gap-1.5 min-h-10 sm:min-h-9 px-2.5 rounded-xl text-slate-500 hover:text-primary hover:bg-slate-100 transition-all"
           >
-            <HelpCircle size={16} />
-            <span className="hidden sm:inline text-[10px] font-black uppercase">{t('help_link')}</span>
+            <HelpCircle size={18} />
+            <span className="hidden md:inline text-xs font-bold">{t('help_link')}</span>
           </a>
-          <button onClick={toggleLanguage} className="flex items-center gap-1 hover:opacity-70 transition-all mr-2">
-            <Languages size={16} className="text-slate-400" />
-            <span className="text-[10px] font-black uppercase text-slate-400">{i18n.language}</span>
+          <button
+            onClick={toggleLanguage}
+            title={t('language')}
+            aria-label={t('language')}
+            className="inline-flex items-center gap-1.5 min-h-10 sm:min-h-9 px-2.5 rounded-xl text-slate-600 hover:text-primary hover:bg-slate-100 transition-all"
+          >
+            <Languages size={18} />
+            <span className="text-xs font-black uppercase">{i18n.language}</span>
           </button>
           {/* No global machine picker: Sales/Catalog don't need one, and the
               Inventory tab has its own machine list to drill into. */}
           {session?.user?.email && (
             <span
-              className="hidden sm:block text-[11px] font-medium text-slate-400 min-w-0 max-w-[180px] truncate"
+              className="hidden lg:block text-[11px] font-medium text-slate-400 min-w-0 max-w-[180px] truncate"
               title={session.user.email}
             >
               {session.user.email}
             </span>
           )}
-          <button
-            onClick={() => supabase.auth.signOut()}
-            className="text-xs font-bold text-on-surface-variant hover:text-red-500 transition-colors shrink-0 ml-1 sm:ml-4"
-          >
-            {t('logout')}
-          </button>
+          <Button variant="ghost" size="sm" icon={LogOut} onClick={() => supabase.auth.signOut()} title={session?.user?.email}>
+            <span className="hidden sm:inline">{t('logout')}</span>
+          </Button>
         </div>
       </header>
+
+      <nav className="sm:hidden fixed bottom-0 inset-x-0 z-40 bg-white border-t border-slate-300 shadow-[0_-4px_16px_rgba(15,23,42,0.08)] flex pb-[env(safe-area-inset-bottom)]">
+        {tabs.map(({ key, icon: Icon, short, onClick }) => (
+          <button
+            key={key}
+            onClick={onClick}
+            className={`flex-1 min-w-0 flex flex-col items-center justify-center gap-0.5 h-14 text-[10px] font-bold transition-colors ${activeTab === key ? 'text-primary' : 'text-slate-500'}`}
+          >
+            <Icon size={20} />
+            <span className="truncate max-w-full px-1">{short}</span>
+          </button>
+        ))}
+      </nav>
 
       <div className="bg-white rounded-2xl sm:rounded-3xl p-3 sm:p-4 md:p-8 shadow-lg border border-slate-300">
           {activeTab === 'users' && isSuperadmin ? (
