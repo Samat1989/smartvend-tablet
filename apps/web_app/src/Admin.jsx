@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, Fragment } from 'react';
 import { supabase } from './supabaseClient';
 import { Image, Upload, Download, Plus, Minus, Save, Trash2, X, Loader2, Pencil, Receipt, Calendar, ShoppingBag, History, Languages, CheckCircle2, XCircle, AlertTriangle, ChevronRight, ChevronLeft, ChevronDown, Package, QrCode, KeyRound, Unlink as LinkOff, HelpCircle, Link2, Signal, SignalHigh, SignalMedium, SignalLow, SignalZero, Wifi, WifiHigh, WifiLow, WifiZero } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
@@ -1913,6 +1913,32 @@ export default function Admin() {
     return () => { channels.forEach((ch) => supabase.removeChannel(ch)); };
   }, [rtTopicsKey]);
 
+  // Same presence-only channels for the whole fleet on the superadmin's
+  // device list. Listen only: the moment of leaving is stamped by the owner's
+  // panel and the board's own beat, not from here.
+  const [adminRtOnline, setAdminRtOnline] = useState({});
+  const adminRtKey = (isSuperadmin && activeTab === 'users' ? (adminDevices ?? []) : [])
+    .filter((m) => m.rt?.topic && m.rt?.device_id)
+    .map((m) => `${m.id}:${m.rt.topic}:${m.rt.device_id}`)
+    .sort()
+    .join(',');
+  useEffect(() => {
+    if (!adminRtKey) { setAdminRtOnline({}); return undefined; }
+    const channels = adminRtKey.split(',').map((entry) => {
+      const [machid, topic, deviceId] = entry.split(':');
+      const ch = supabase.channel(`dev:${topic}`, { config: { presence: { key: '' } } });
+      const update = () => {
+        const metas = ch.presenceState()[deviceId];
+        const meta = Array.isArray(metas) && metas.length ? metas[metas.length - 1] : null;
+        setAdminRtOnline((prev) => ({ ...prev, [machid]: meta }));
+      };
+      ch.on('presence', { event: 'sync' }, update);
+      ch.subscribe((st) => { if (st === 'SUBSCRIBED') setTimeout(update, 2000); });
+      return ch;
+    });
+    return () => { channels.forEach((ch) => supabase.removeChannel(ch)); };
+  }, [adminRtKey]);
+
   async function unpairBoard(market) {
     setConfirmAction({
       message: t('pair_board_unpair_confirm'),
@@ -2522,6 +2548,7 @@ export default function Admin() {
               currentUserId={session?.user?.id}
               onRefresh={() => { fetchUsers(); fetchAdminDevices(); }}
               devices={adminDevices}
+              rtOnline={adminRtOnline}
               devicesLoading={devicesLoading}
               onTransfer={(m) => setTransferTarget(m)}
               onDelete={(machid) => deleteDevice(machid)}
@@ -4145,6 +4172,7 @@ function UsersTab({
   currentUserId,
   onRefresh,
   devices,
+  rtOnline = {},
   devicesLoading,
   onTransfer,
   onDelete,
@@ -4153,6 +4181,7 @@ function UsersTab({
 }) {
   const { t, i18n } = useTranslation();
   const [expandedId, setExpandedId] = useState(null);
+  const [view, setView] = useState('devices');
 
   const byOwner = new Map();
   for (const m of devices ?? []) {
@@ -4246,7 +4275,26 @@ function UsersTab({
         </div>
       </div>
 
-      {users == null ? (
+      <div className="flex gap-1 p-1 bg-slate-100 rounded-xl w-fit mb-5">
+        {[['devices', t('adm_view_devices')], ['users', t('adm_view_users')]].map(([k, label]) => (
+          <button
+            key={k}
+            onClick={() => setView(k)}
+            className={`px-4 py-1.5 rounded-lg text-xs font-bold transition-all ${view === k ? 'bg-white text-slate-900 shadow' : 'text-slate-500 hover:text-slate-800'}`}
+          >
+            {label}
+          </button>
+        ))}
+      </div>
+
+      {view === 'devices' ? (
+        <DevicesTable
+          devices={devices}
+          rtOnline={rtOnline}
+          deviceRow={deviceRow}
+          onChangeKind={onChangeKind}
+        />
+      ) : users == null ? (
         <div className="flex justify-center p-10"><Loader2 className="animate-spin text-primary" size={28} /></div>
       ) : users.length === 0 ? (
         <p className="text-sm text-slate-400 italic p-4">{t('no_users')}</p>
@@ -4325,11 +4373,158 @@ function UsersTab({
 
       {/* Machines with no owner have no profile to hide under — surface them
           separately so they can still be assigned or removed. */}
-      {orphans.length > 0 && (
+      {view === 'users' && orphans.length > 0 && (
         <div className="mt-8 pt-6 border-t-2 border-slate-200">
           <h3 className="text-sm font-black text-rose-600 mb-1">{t('devices_no_owner')}</h3>
           <p className="text-[11px] font-bold text-slate-500 uppercase tracking-widest mb-4">{t('devices_no_owner_hint')}</p>
           <div className="space-y-2">{orphans.map(deviceRow)}</div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// Whole fleet in one table for the superadmin: owner, both lamps, versions,
+// last contact. Rows reuse the per-account row (actions) via deviceRow.
+function DevicesTable({ devices, rtOnline, deviceRow, onChangeKind }) {
+  const { t, i18n } = useTranslation();
+  const [q, setQ] = useState('');
+  const [kindF, setKindF] = useState('all');
+  const [stateF, setStateF] = useState('all');
+  const [expanded, setExpanded] = useState(null);
+
+  if (devices == null) {
+    return <div className="flex justify-center p-10"><Loader2 className="animate-spin text-primary" size={28} /></div>;
+  }
+
+  // Overall state: any live signal (board presence, or tablet heartbeat) = online.
+  const rows = devices.map((m) => {
+    const rtState = m.rt ? (m.id in rtOnline ? rtOnline[m.id] : undefined) : undefined;
+    const rtLamp = m.rt ? (rtState === undefined ? null : !!rtState) : undefined;
+    const hb = m.heartbeat;
+    const tabletKind = m.kind === 'micromarket_tablet' || m.kind === 'vending' || m.kind === 'micromarket_screen';
+    const tabletOn = tabletKind && !!hb?.online;
+    const online = rtLamp === true || (m.kind !== 'micromarket_static' && tabletOn);
+    const paired = !!m.rt;
+    const needsBoard = m.kind === 'micromarket_static' || m.kind === 'micromarket_tablet';
+    const last = [hb?.last_seen_at, m.rt?.last_seen_at].filter(Boolean).sort().pop() ?? null;
+    return { m, rtState, rtLamp, online, paired, needsBoard, last };
+  });
+
+  const needle = q.trim().toLowerCase();
+  const shown = rows.filter(({ m, online, paired, needsBoard }) => {
+    if (kindF !== 'all' && m.kind !== kindF) return false;
+    if (stateF === 'online' && !online) return false;
+    if (stateF === 'offline' && online) return false;
+    if (stateF === 'unpaired' && !(needsBoard && !paired)) return false;
+    if (!needle) return true;
+    return [m.id, m.name, m.owner_email, m.rt?.device_id].some((v) => String(v ?? '').toLowerCase().includes(needle));
+  });
+
+  const total = rows.length;
+  const onlineN = rows.filter((r) => r.online).length;
+  const unpairedN = rows.filter((r) => r.needsBoard && !r.paired).length;
+  const fmt = (v) => (v ? new Date(v).toLocaleString(i18n.language) : '—');
+  const field = 'px-3 py-2 rounded-lg border border-slate-300 text-sm bg-white';
+
+  return (
+    <div>
+      <div className="flex gap-2 flex-wrap text-[11px] font-black uppercase tracking-wider mb-4">
+        <span className="px-2.5 py-1 rounded-lg bg-slate-100 text-slate-700">{t('adm_total')}: {total}</span>
+        <span className="px-2.5 py-1 rounded-lg bg-emerald-100 text-emerald-700">{t('status_online')}: {onlineN}</span>
+        <span className="px-2.5 py-1 rounded-lg bg-slate-200 text-slate-600">{t('status_offline')}: {total - onlineN}</span>
+        {unpairedN > 0 && (
+          <span className="px-2.5 py-1 rounded-lg bg-amber-100 text-amber-700">{t('adm_unpaired')}: {unpairedN}</span>
+        )}
+      </div>
+
+      <div className="flex gap-2 flex-wrap mb-4">
+        <input value={q} onChange={(e) => setQ(e.target.value)} placeholder={t('adm_search')} className={`${field} flex-1 min-w-[180px]`} />
+        <select value={kindF} onChange={(e) => setKindF(e.target.value)} className={field}>
+          <option value="all">{t('adm_all_kinds')}</option>
+          {['vending', 'micromarket_static', 'micromarket_tablet', 'micromarket_screen'].map((k) => (
+            <option key={k} value={k}>{kindLabel(k, t)}</option>
+          ))}
+        </select>
+        <select value={stateF} onChange={(e) => setStateF(e.target.value)} className={field}>
+          <option value="all">{t('adm_all_states')}</option>
+          <option value="online">{t('status_online')}</option>
+          <option value="offline">{t('status_offline')}</option>
+          <option value="unpaired">{t('adm_unpaired')}</option>
+        </select>
+      </div>
+
+      {shown.length === 0 ? (
+        <p className="text-sm text-slate-400 italic p-4">{t('adm_nothing')}</p>
+      ) : (
+        <div className="overflow-x-auto rounded-2xl border border-slate-200">
+          <table className="w-full text-sm min-w-[880px]">
+            <thead className="bg-slate-50 text-[10px] font-black uppercase tracking-wider text-slate-500 text-left">
+              <tr>
+                <th className="px-3 py-2.5">ID</th>
+                <th className="px-3 py-2.5">{t('adm_col_name')}</th>
+                <th className="px-3 py-2.5">{t('adm_col_owner')}</th>
+                <th className="px-3 py-2.5">{t('adm_col_kind')}</th>
+                <th className="px-3 py-2.5">{t('adm_col_status')}</th>
+                <th className="px-3 py-2.5">{t('adm_col_versions')}</th>
+                <th className="px-3 py-2.5">{t('adm_col_last')}</th>
+                <th className="px-3 py-2.5">{t('adm_col_open')}</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-slate-100">
+              {shown.map(({ m, rtState, rtLamp, paired, needsBoard, last }) => (
+                <Fragment key={m.id}>
+                  <tr
+                    onClick={() => setExpanded(expanded === m.id ? null : m.id)}
+                    className="hover:bg-slate-50 cursor-pointer align-top"
+                  >
+                    <td className="px-3 py-2.5 font-bold text-slate-700 whitespace-nowrap">{m.id}</td>
+                    <td className="px-3 py-2.5 font-bold text-slate-900">{m.name || '—'}</td>
+                    <td className="px-3 py-2.5 text-slate-600">
+                      {m.owner_email || <span className="text-rose-600 font-bold">{t('devices_no_owner')}</span>}
+                    </td>
+                    <td className="px-3 py-2.5 whitespace-nowrap" onClick={(e) => e.stopPropagation()}>
+                      <KindSelect kind={m.kind} t={t} onChange={(k) => onChangeKind(m.id, k)} />
+                    </td>
+                    <td className="px-3 py-2.5">
+                      <div className="flex flex-col gap-1.5">
+                        <DeviceStatusDot
+                          status={m.heartbeat}
+                          kind={m.kind}
+                          withLabel
+                          rt={rtLamp}
+                          rtState={rtState}
+                          rtRow={m.rt}
+                        />
+                        {needsBoard && !paired && (
+                          <span className="text-[10px] font-black uppercase tracking-wider text-amber-600">{t('adm_unpaired')}</span>
+                        )}
+                      </div>
+                    </td>
+                    <td className="px-3 py-2.5 text-xs text-slate-600 whitespace-nowrap">
+                      {m.heartbeat?.app_version && <div>{t('lamp_tablet')}: {m.heartbeat.app_version}</div>}
+                      {m.rt?.board_ver && <div>{t('lamp_board')}: {m.rt.board_ver}</div>}
+                      {m.rt?.device_id && <div className="font-mono text-[10px] text-slate-400">{m.rt.device_id}</div>}
+                      {!m.heartbeat?.app_version && !m.rt?.board_ver && '—'}
+                    </td>
+                    <td className="px-3 py-2.5 text-xs text-slate-600 whitespace-nowrap">{fmt(last)}</td>
+                    <td className="px-3 py-2.5 text-xs text-slate-600">{m.open_seconds ? `${m.open_seconds} ${t('adm_sec')}` : '—'}</td>
+                  </tr>
+                  {expanded === m.id && (
+                    <tr className="bg-slate-100/60">
+                      <td colSpan={8} className="px-3 py-3">
+                        {deviceRow(m)}
+                        <div className="text-[11px] text-slate-500 mt-2">
+                          {t('adm_paired_at')}: {fmt(m.rt?.paired_at)}
+                          {m.heartbeat?.ter_number ? ` · ter ${m.heartbeat.ter_number}` : ''}
+                        </div>
+                      </td>
+                    </tr>
+                  )}
+                </Fragment>
+              ))}
+            </tbody>
+          </table>
         </div>
       )}
     </div>
