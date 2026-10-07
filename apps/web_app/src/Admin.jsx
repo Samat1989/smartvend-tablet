@@ -1913,34 +1913,6 @@ export default function Admin() {
     return () => { channels.forEach((ch) => supabase.removeChannel(ch)); };
   }, [rtTopicsKey]);
 
-  // Same presence-only channels for the whole fleet on the superadmin's
-  // device list. Listen only: the moment of leaving is stamped by the owner's
-  // panel and the board's own beat, not from here.
-  const [adminRtOnline, setAdminRtOnline] = useState({});
-  // Own machines are already listened to above: a second channel with the
-  // same name would be the same object and be closed by the other cleanup.
-  const adminRtKey = (isSuperadmin && activeTab === 'users' ? (adminDevices ?? []) : [])
-    .filter((m) => m.rt?.topic && m.rt?.device_id && !markets.some((x) => x.rt?.topic === m.rt.topic))
-    .map((m) => `${m.id}:${m.rt.topic}:${m.rt.device_id}`)
-    .sort()
-    .join(',');
-  useEffect(() => {
-    if (!adminRtKey) { setAdminRtOnline({}); return undefined; }
-    const channels = adminRtKey.split(',').map((entry) => {
-      const [machid, topic, deviceId] = entry.split(':');
-      const ch = supabase.channel(`dev:${topic}`, { config: { presence: { key: '' } } });
-      const update = () => {
-        const metas = ch.presenceState()[deviceId];
-        const meta = Array.isArray(metas) && metas.length ? metas[metas.length - 1] : null;
-        setAdminRtOnline((prev) => ({ ...prev, [machid]: meta }));
-      };
-      ch.on('presence', { event: 'sync' }, update);
-      ch.subscribe((st) => { if (st === 'SUBSCRIBED') setTimeout(update, 2000); });
-      return ch;
-    });
-    return () => { channels.forEach((ch) => supabase.removeChannel(ch)); };
-  }, [adminRtKey]);
-
   async function unpairBoard(market) {
     setConfirmAction({
       message: t('pair_board_unpair_confirm'),
@@ -2550,7 +2522,6 @@ export default function Admin() {
               currentUserId={session?.user?.id}
               onRefresh={() => { fetchUsers(); fetchAdminDevices(); }}
               devices={adminDevices}
-              rtOnline={{ ...adminRtOnline, ...rtOnline }}
               devicesLoading={devicesLoading}
               onTransfer={(m) => setTransferTarget(m)}
               onDelete={(machid) => deleteDevice(machid)}
@@ -4174,7 +4145,6 @@ function UsersTab({
   currentUserId,
   onRefresh,
   devices,
-  rtOnline = {},
   devicesLoading,
   onTransfer,
   onDelete,
@@ -4292,7 +4262,6 @@ function UsersTab({
       {view === 'devices' ? (
         <DevicesTable
           devices={devices}
-          rtOnline={rtOnline}
           deviceRow={deviceRow}
           onChangeKind={onChangeKind}
         />
@@ -4387,8 +4356,8 @@ function UsersTab({
 }
 
 // Whole fleet in one table for the superadmin: owner, both lamps, versions,
-// last contact. Rows reuse the per-account row (actions) via deviceRow.
-function DevicesTable({ devices, rtOnline, deviceRow, onChangeKind }) {
+// last contact. Board state is by last report (up to ~15 min late), not live. Rows reuse the per-account row (actions) via deviceRow.
+function DevicesTable({ devices, deviceRow, onChangeKind }) {
   const { t, i18n } = useTranslation();
   const [q, setQ] = useState('');
   const [kindF, setKindF] = useState('all');
@@ -4401,8 +4370,13 @@ function DevicesTable({ devices, rtOnline, deviceRow, onChangeKind }) {
 
   // Overall state: any live signal (board presence, or tablet heartbeat) = online.
   const rows = devices.map((m) => {
-    const rtState = m.rt ? (m.id in rtOnline ? rtOnline[m.id] : undefined) : undefined;
-    const rtLamp = m.rt ? (rtState === undefined ? null : !!rtState) : undefined;
+    // No Presence channels here (one per board would load Realtime for
+    // nothing): the board reports every 15 minutes, so 20 minutes of silence
+    // means offline. The owner's own panel stays live.
+    const rtState = undefined;
+    const rtLamp = m.rt
+      ? !!m.rt.last_seen_at && Date.now() - new Date(m.rt.last_seen_at).getTime() < 20 * 60 * 1000
+      : undefined;
     const hb = m.heartbeat;
     const tabletKind = m.kind === 'micromarket_tablet' || m.kind === 'vending' || m.kind === 'micromarket_screen';
     const tabletOn = tabletKind && !!hb?.online;
