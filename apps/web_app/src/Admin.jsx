@@ -690,6 +690,70 @@ function ConfirmDialog({ action, onClose }) {
   );
 }
 
+// What a sale means for the money. `refund` is what the owner owes back:
+// items that did not come out, or the whole sale when the door of a Realtime
+// board stayed shut (paid, nothing taken). Restoring the stock marks such a
+// sale as handled. A sale still in progress counts nowhere yet.
+function saleOutcome(sale) {
+  if (sale.status === 'in_progress') return { state: 'progress', refund: 0 };
+  const items = sale.sales_items || [];
+  const failed = items.filter((i) => i.dispensed === false);
+  const doorBad = sale.door_status === 'failed' || sale.door_status === 'no_ack';
+  if (doorBad) {
+    return sale.stock_restored_at
+      ? { state: 'restored', refund: 0 }
+      : { state: 'failed', refund: sale.amount || 0 };
+  }
+  if (sale.door_status === 'pending') return { state: 'pending', refund: 0 };
+  if (failed.length) {
+    const refund = failed.reduce((s, i) => s + (i.price || 0) * (i.quantity || 1), 0);
+    return { state: failed.length === items.length ? 'failed' : 'partial', refund };
+  }
+  return { state: 'ok', refund: 0 };
+}
+
+// Revenue bars for the selected period: hours for "today", days otherwise.
+// Plain SVG, no chart library; a tap or hover shows the bar's numbers.
+function SalesChart({ buckets, currency, note }) {
+  const { t } = useTranslation();
+  const [hover, setHover] = useState(null);
+  const max = Math.max(1, ...buckets.map((b) => b.value));
+  const n = buckets.length;
+  const W = 100, H = 40, gap = n > 40 ? 0.15 : 0.6;
+  const bw = W / n - gap;
+  const every = Math.ceil(n / 8);
+  const h = hover != null ? buckets[hover] : null;
+  return (
+    <div className="bg-white border border-slate-200 rounded-2xl p-4 shadow-sm">
+      <div className="flex items-baseline justify-between gap-3 mb-3 min-h-5">
+        <div className="text-[11px] font-black text-slate-500 uppercase tracking-widest">{t('chart_revenue')}</div>
+        <div className="text-xs font-bold text-slate-700 tabular-nums text-right">
+          {h ? <>{h.tip}: <span className="text-primary">{h.value} {currency}</span> · {h.count} {t('orders_short')}</> : note}
+        </div>
+      </div>
+      <svg viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="none" className="w-full h-36" onMouseLeave={() => setHover(null)}>
+        <line x1="0" y1={H - 0.1} x2={W} y2={H - 0.1} stroke="#e2e8f0" strokeWidth="0.2" />
+        {buckets.map((b, i) => {
+          const bh = b.value > 0 ? Math.max(0.6, (b.value / max) * (H - 2)) : 0;
+          const x = i * (W / n) + gap / 2;
+          return (
+            <g key={i} onMouseEnter={() => setHover(i)} onClick={() => setHover(hover === i ? null : i)} className="cursor-pointer">
+              <rect x={x} y="0" width={bw} height={H} fill="transparent" />
+              <rect x={x} y={H - bh} width={bw} height={bh} rx="0.4"
+                className={hover === i ? 'fill-primary' : 'fill-primary/60'} />
+            </g>
+          );
+        })}
+      </svg>
+      <div className="flex mt-1 text-[10px] font-bold text-slate-400 tabular-nums">
+        {buckets.map((b, i) => (
+          <span key={i} className="flex-1 text-center truncate">{i % every === 0 ? b.label : ''}</span>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 // Connection state of one machine, from its heartbeat.
 //
 // Three states, not two, because "the tablet answers" and "the board answers"
@@ -2511,15 +2575,70 @@ export default function Admin() {
 
   // Grouped by currency, not summed flat. With the machine filter on "all" an
   // owner can have Kazakh and Kyrgyz cabinets in the same list, and adding
-  // tenge to som would print a number that means nothing. One currency (the
-  // ordinary case) renders exactly as a single total always did.
-  const salesTotals = (() => {
+  // tenge to som would print a number that means nothing.
+  const salesStats = (() => {
     const byCurrency = new Map();
+    let orders = 0, refundCount = 0;
     for (const s of filteredSales) {
+      const o = saleOutcome(s);
+      if (o.state === 'progress') continue;
+      orders += 1;
+      if (o.refund > 0) refundCount += 1;
       const cur = currencyForMachine(s.micromarket_id);
-      byCurrency.set(cur, (byCurrency.get(cur) ?? 0) + (s.amount || 0));
+      const c = byCurrency.get(cur) ?? { currency: cur, gross: 0, refund: 0, okOrders: 0 };
+      c.gross += s.amount || 0;
+      c.refund += o.refund;
+      if (o.state === 'ok' || o.state === 'partial' || o.state === 'pending') c.okOrders += 1;
+      byCurrency.set(cur, c);
     }
-    return [...byCurrency.entries()].map(([currency, amount]) => ({ currency, amount }));
+    const totals = [...byCurrency.values()]
+      .map((c) => ({ ...c, net: c.gross - c.refund }))
+      .sort((a, b) => b.net - a.net);
+    return { totals, orders, refundCount };
+  })();
+
+  // Bars: hours of today, or the days of the chosen period. "Recent" is the
+  // last ten sales, not a period, so it gets no chart.
+  const salesChart = (() => {
+    if (timeFilter === 'recent' || !salesStats.totals.length) return null;
+    const main = salesStats.totals[0].currency;
+    const lang = i18n.language;
+    const buckets = [];
+    const index = new Map();
+    if (timeFilter === 'day') {
+      for (let hr = 0; hr < 24; hr++) {
+        index.set(hr, buckets.length);
+        buckets.push({ label: String(hr), tip: `${String(hr).padStart(2, '0')}:00`, value: 0, count: 0 });
+      }
+    } else {
+      const start = new Date();
+      if (timeFilter === 'week') start.setDate(start.getDate() - 7);
+      else if (timeFilter === 'month') start.setMonth(start.getMonth() - 1);
+      else if (periodFrom) start.setTime(new Date(periodFrom).getTime());
+      else if (filteredSales.length) start.setTime(new Date(filteredSales[filteredSales.length - 1].created_at).getTime());
+      const end = timeFilter === 'period' && periodTo ? new Date(periodTo) : new Date();
+      start.setHours(0, 0, 0, 0); end.setHours(0, 0, 0, 0);
+      for (let d = new Date(start), guard = 0; d <= end && guard < 400; d.setDate(d.getDate() + 1), guard++) {
+        index.set(d.toDateString(), buckets.length);
+        buckets.push({
+          label: String(d.getDate()),
+          tip: d.toLocaleDateString(lang, { day: 'numeric', month: 'short' }),
+          value: 0, count: 0,
+        });
+      }
+    }
+    for (const s of filteredSales) {
+      if (currencyForMachine(s.micromarket_id) !== main) continue;
+      const o = saleOutcome(s);
+      if (o.state === 'progress') continue;
+      const d = new Date(s.created_at);
+      const i = index.get(timeFilter === 'day' ? d.getHours() : d.toDateString());
+      if (i == null) continue;
+      buckets[i].value += (s.amount || 0) - o.refund;
+      buckets[i].count += 1;
+    }
+    const note = salesStats.totals.length > 1 ? t('chart_currency_note', { currency: main }) : null;
+    return { buckets, currency: main, note };
   })();
 
   // Administration first — it's the superadmin's landing tab.
@@ -2862,11 +2981,10 @@ export default function Admin() {
             </>
             )
           ) : (
-            <div className="space-y-8">
+            <div className="space-y-5">
               <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
                 <div>
                   <h2 className="text-xl font-black text-slate-800">{t('sales_history')}</h2>
-                  <p className="text-[10px] font-bold opacity-30 uppercase tracking-widest">{t('admin_panel')}</p>
                 </div>
                 <div className="flex flex-wrap items-center gap-2 w-full sm:w-auto">
                   <select 
@@ -2891,7 +3009,7 @@ export default function Admin() {
                       <button
                         key={f.id}
                         onClick={() => setTimeFilter(f.id)}
-                        className={`flex-1 sm:flex-none min-w-[62px] whitespace-nowrap px-3 py-1.5 rounded-lg text-[10px] font-black uppercase tracking-wider transition-all ${timeFilter === f.id ? 'bg-white text-primary shadow-sm' : 'text-slate-400 hover:text-slate-600'}`}
+                        className={`flex-1 sm:flex-none min-w-[62px] whitespace-nowrap px-3 min-h-9 rounded-lg text-xs font-bold transition-all ${timeFilter === f.id ? 'bg-white text-primary shadow-sm' : 'text-slate-500 hover:text-slate-800'}`}
                       >
                         {f.label}
                       </button>
@@ -2914,30 +3032,63 @@ export default function Admin() {
                       />
                     </div>
                   )}
-                  <button onClick={fetchSales} className="p-2.5 bg-slate-100 text-slate-500 rounded-xl hover:bg-primary/5 hover:text-primary transition-all"><History size={18}/></button>
+                  <IconButton icon={RefreshCw} label={t('refresh')} loading={loading} onClick={fetchSales} />
                 </div>
               </div>
 
               {/* Статистика */}
-              <div className="grid grid-cols-2 sm:grid-cols-3 gap-4">
+              <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
                 <div className="bg-white border border-slate-200 rounded-2xl p-4 shadow-sm">
-                  <div className="text-[10px] font-black text-slate-500 uppercase tracking-widest mb-1">{t('revenue')}</div>
-                  <div className="text-2xl font-black text-primary">
-                    {salesTotals.length === 0
+                  <div className="text-[11px] font-black text-slate-500 uppercase tracking-widest mb-1">{t('revenue')}</div>
+                  <div className="text-2xl font-black text-primary tabular-nums">
+                    {salesStats.totals.length === 0
                       ? <>0 <span className="text-sm">{currencyOf(null)}</span></>
-                      : salesTotals.map(({ currency, amount }, i) => (
+                      : salesStats.totals.map(({ currency, net }, i) => (
                           <span key={currency}>
                             {i > 0 && <span className="text-slate-300"> · </span>}
-                            {amount} <span className="text-sm">{currency}</span>
+                            {net} <span className="text-sm">{currency}</span>
                           </span>
                         ))}
                   </div>
+                  {salesStats.totals.some((c) => c.refund > 0) && (
+                    <div className="text-[11px] font-bold text-slate-400 mt-0.5 tabular-nums">
+                      {t('paid_gross')}: {salesStats.totals.map((c) => `${c.gross} ${c.currency}`).join(' · ')}
+                    </div>
+                  )}
                 </div>
                 <div className="bg-white border border-slate-200 rounded-2xl p-4 shadow-sm">
-                  <div className="text-[10px] font-black text-slate-500 uppercase tracking-widest mb-1">{t('orders')}</div>
-                  <div className="text-2xl font-black text-slate-900">{filteredSales.length}</div>
+                  <div className="text-[11px] font-black text-slate-500 uppercase tracking-widest mb-1">{t('orders')}</div>
+                  <div className="text-2xl font-black text-slate-900 tabular-nums">{salesStats.orders}</div>
+                </div>
+                <div className="bg-white border border-slate-200 rounded-2xl p-4 shadow-sm">
+                  <div className="text-[11px] font-black text-slate-500 uppercase tracking-widest mb-1">{t('avg_check')}</div>
+                  <div className="text-2xl font-black text-slate-900 tabular-nums">
+                    {salesStats.totals.length === 0 || !salesStats.totals[0].okOrders
+                      ? '—'
+                      : <>{Math.round(salesStats.totals[0].net / salesStats.totals[0].okOrders)} <span className="text-sm">{salesStats.totals[0].currency}</span></>}
+                  </div>
+                </div>
+                <div className={`border rounded-2xl p-4 shadow-sm ${salesStats.refundCount > 0 ? 'bg-rose-50 border-rose-200' : 'bg-white border-slate-200'}`}>
+                  <div className={`text-[11px] font-black uppercase tracking-widest mb-1 ${salesStats.refundCount > 0 ? 'text-rose-600' : 'text-slate-500'}`}>{t('refund_due')}</div>
+                  <div className={`text-2xl font-black tabular-nums ${salesStats.refundCount > 0 ? 'text-rose-600' : 'text-slate-900'}`}>
+                    {salesStats.refundCount === 0
+                      ? 0
+                      : salesStats.totals.filter((c) => c.refund > 0).map((c, i) => (
+                          <span key={c.currency}>
+                            {i > 0 && <span className="text-rose-300"> · </span>}
+                            {c.refund} <span className="text-sm">{c.currency}</span>
+                          </span>
+                        ))}
+                  </div>
+                  {salesStats.refundCount > 0 && (
+                    <div className="text-[11px] font-bold text-rose-500 mt-0.5">{salesStats.refundCount} {t('orders_short')}</div>
+                  )}
                 </div>
               </div>
+
+              {salesChart && !loading && (
+                <SalesChart buckets={salesChart.buckets} currency={salesChart.currency} note={salesChart.note} />
+              )}
 
               {loading ? (
                 <div className="flex justify-center p-20"><Loader2 className="animate-spin text-primary" size={32} /></div>
