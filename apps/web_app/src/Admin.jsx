@@ -739,28 +739,36 @@ function SignalIcon({ state }) {
   );
 }
 
-function DeviceStatusDot({ status, kind, withLabel = false, rt, rtState }) {
+// Lamp of a lock board on the Realtime firmware. Presence only knows "right
+// now"; when the board is gone, the last time it was around is
+// device_rt.last_seen_at: the board reports every 15 minutes (device_beat) and
+// the panel stamps the exact moment it sees the board leave (touch_device_seen).
+// It lives in device_rt, not device_status: on a machine with a tablet that row
+// is the tablet's own.
+function BoardLamp({ rt, rtState, rtRow, withLabel, prefix }) {
+  const { t, i18n } = useTranslation();
+  const label = rt === true ? t('status_online') : rt === false ? t('status_offline') : t('status_checking');
+  const tone = rt === true ? 'bg-emerald-500' : rt === false ? 'bg-slate-400' : 'bg-slate-300 animate-pulse';
+  const lastSeen = rt === false && rtRow?.last_seen_at
+    ? `${t('status_last_seen')} ${new Date(rtRow.last_seen_at).toLocaleString(i18n.language)}`
+    : null;
+  const head = prefix ? `${prefix}: ` : '';
+  return (
+    <span className="flex items-center gap-1.5 shrink-0" title={[head + label, lastSeen].filter(Boolean).join(' · ')}>
+      <span className={`w-2.5 h-2.5 rounded-full ${tone}`} />
+      {withLabel && (
+        <span className="text-[10px] font-bold uppercase tracking-wider text-slate-500">{head}{label}</span>
+      )}
+      {rt === true && <SignalIcon state={rtState} />}
+    </span>
+  );
+}
+
+function DeviceStatusDot({ status, kind, withLabel = false, rt, rtState, rtRow }) {
   const { t, i18n } = useTranslation();
 
   if (kind === 'micromarket_static' && rt !== undefined) {
-    const label = rt === true ? t('status_online') : rt === false ? t('status_offline') : t('status_checking');
-    const tone = rt === true ? 'bg-emerald-500' : rt === false ? 'bg-slate-400' : 'bg-slate-300 animate-pulse';
-    // Presence only knows "right now". When the board is gone, the last time it
-    // was around comes from device_status: the board reports every 15 minutes
-    // (device_beat) and the panel stamps the exact moment it sees the board
-    // leave (touch_device_seen).
-    const lastSeen = rt === false && status?.last_seen_at
-      ? `${t('status_last_seen')} ${new Date(status.last_seen_at).toLocaleString(i18n.language)}`
-      : null;
-    return (
-      <span className="flex items-center gap-1.5 shrink-0" title={[label, lastSeen].filter(Boolean).join(' · ')}>
-        <span className={`w-2.5 h-2.5 rounded-full ${tone}`} />
-        {withLabel && (
-          <span className="text-[10px] font-bold uppercase tracking-wider text-slate-500">{label}</span>
-        )}
-        {rt === true && <SignalIcon state={rtState} />}
-      </span>
-    );
+    return <BoardLamp rt={rt} rtState={rtState} rtRow={rtRow} withLabel={withLabel} />;
   }
 
   // A static-QR micromarket has no tablet — the ESP relay doesn't report yet,
@@ -774,6 +782,10 @@ function DeviceStatusDot({ status, kind, withLabel = false, rt, rtState }) {
   if (kind === 'micromarket_static') return null;
 
   const seen = status?.last_seen_at ? new Date(status.last_seen_at) : null;
+  // A tablet machine with a paired lock board draws two lamps; each says which
+  // device it speaks for.
+  const two = kind === 'micromarket_tablet' && rt !== undefined;
+  const who = two ? t('lamp_tablet') : null;
 
   let tone, label, note;
   if (!status) {
@@ -792,23 +804,30 @@ function DeviceStatusDot({ status, kind, withLabel = false, rt, rtState }) {
     // "unknown" and the lamp only speaks for the tablet. Said out loud in
     // the tooltip, otherwise it looks like the board check silently works
     // on some machines and not others.
-    if (status.board_ok == null) note = t('status_board_unknown');
+    if (status.board_ok == null) note = two ? null : t('status_board_unknown');
   }
 
   const title = [
-    label,
+    who ? `${who}: ${label}` : label,
     seen && `${t('status_last_seen')} ${seen.toLocaleString(i18n.language)}`,
     note,
   ].filter(Boolean).join(' · ');
 
-  return (
+  const tabletLamp = (
     <span className="flex items-center gap-1.5 shrink-0" title={title}>
       <span className={`w-2.5 h-2.5 rounded-full ${tone}`} />
       {withLabel && (
         <span className="text-[10px] font-bold uppercase tracking-wider text-slate-500">
-          {label}
+          {who ? `${who}: ${label}` : label}
         </span>
       )}
+    </span>
+  );
+  if (!two) return tabletLamp;
+  return (
+    <span className="flex items-center gap-3 flex-wrap">
+      {tabletLamp}
+      <BoardLamp rt={rt} rtState={rtState} rtRow={rtRow} withLabel={withLabel} prefix={t('lamp_board')} />
     </span>
   );
 }
@@ -1877,8 +1896,8 @@ export default function Admin() {
         const meta = Array.isArray(metas) && metas.length ? metas[metas.length - 1] : null;
         setRtOnline((prev) => ({ ...prev, [machid]: meta }));
         // Seen online, now gone: Presence just fired the board's "last will".
-        // Stamp the moment in device_status (the board's own 15-minute beat
-        // can only say "alive at about"), then refresh the lamp tooltip.
+        // Stamp the moment in device_rt (the board's own 15-minute beat can
+        // only say "alive at about"), then refresh the lamp tooltip.
         const was = rtWasOnline.current[machid];
         rtWasOnline.current[machid] = !!meta;
         if (was && !meta) {
@@ -2557,6 +2576,7 @@ export default function Admin() {
                           withLabel
                           rt={m.rt ? (m.id in rtOnline ? !!rtOnline[m.id] : null) : undefined}
                           rtState={rtOnline[m.id]}
+                          rtRow={m.rt}
                         />
                         <span className={`text-[9px] font-black uppercase tracking-wider px-2 py-1 rounded-lg shrink-0 ${kindTint(m.kind)}`}>
                           {kindLabel(m.kind, t)}
@@ -2590,10 +2610,9 @@ export default function Admin() {
                       >
                         <Pencil size={15} />
                       </button>
-                      {/* Vending only: a static-QR micromarket has no tablet,
-                          so there is no claim to release. Same reason its
-                          connection lamp is hidden. */}
-                      {m.kind === 'micromarket_static' && (
+                      {/* Lock board pairing: a static-QR micromarket and a tablet
+                          micromarket (its board is separate from the tablet). */}
+                      {(m.kind === 'micromarket_static' || m.kind === 'micromarket_tablet') && (
                         <button
                           onClick={() => setPairMarket(m)}
                           title={t('pair_board')}
@@ -2660,7 +2679,9 @@ export default function Admin() {
                       <QrCode size={16} /> QR
                     </button>
                   )}
-                  {isStaticMarket && (
+                  {/* A tablet machine has no other way to unlock from the panel
+                      once its lock board is on the Realtime firmware. */}
+                  {(isStaticMarket || (selectedMarket?.kind === 'micromarket_tablet' && selectedMarket?.rt)) && (
                     <button
                       onClick={() => openForService(markets.find(m => String(m.id) === String(selectedMarketId)) || { id: selectedMarketId })}
                       disabled={serviceOpening != null}
