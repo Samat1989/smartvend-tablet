@@ -278,9 +278,14 @@ function QrModal({ market, onClose }) {
             {t('pdf_error')}: {pdfErr}
           </div>
         ) : (
-          <button disabled className="mt-5 w-full flex items-center justify-center gap-2 bg-slate-300 text-white py-3 rounded-xl font-bold cursor-wait">
-            <Loader2 size={18} className="animate-spin" /> {t('preparing')}
-          </button>
+          <Button
+            variant="secondary"
+            block className="mt-5"
+            loading={true}
+            disabled
+          >
+            {t('preparing')}
+          </Button>
         )}
       </div>
     </div>
@@ -715,6 +720,8 @@ const BTN_TONES = {
   dark: 'bg-slate-900 text-white border-slate-900 hover:bg-slate-700',
   secondary: 'bg-white text-slate-700 border-slate-300 hover:border-primary hover:text-primary',
   danger: 'bg-rose-600 text-white border-rose-600 hover:bg-rose-700',
+  success: 'bg-emerald-600 text-white border-emerald-600 hover:bg-emerald-700',
+  warning: 'bg-amber-500 text-white border-amber-500 hover:bg-amber-600',
   'danger-outline': 'bg-white text-rose-600 border-rose-200 hover:bg-rose-50',
   ghost: 'bg-transparent text-slate-600 border-transparent hover:bg-slate-100 hover:text-slate-900',
 };
@@ -2612,7 +2619,10 @@ export default function Admin() {
                 className="w-full p-3 bg-slate-100 rounded-xl font-bold focus:outline-none focus:ring-2 focus:ring-primary/50"
               />
             </div>
-            <button
+            <Button
+              variant="primary"
+              block className="mt-4 min-h-12"
+              loading={authLoading}
               onClick={async () => {
                 setAuthLoading(true);
                 const { error } = await supabase.auth.signInWithPassword({ email, password });
@@ -2620,10 +2630,9 @@ export default function Admin() {
                 setAuthLoading(false);
               }}
               disabled={authLoading}
-              className="w-full bg-primary text-white py-3 rounded-xl font-black shadow-lg shadow-primary/20 active:scale-95 transition-all mt-4 flex justify-center"
             >
-              {authLoading ? <Loader2 className="animate-spin" /> : t('login_btn')}
-            </button>
+              {t('login_btn')}
+            </Button>
           </div>
         </div>
         <Toast toast={toast} onClose={() => setToast(null)} />
@@ -2942,12 +2951,14 @@ export default function Admin() {
               {/* Was a bare text link and got missed on a phone. Now a real
                   bordered button — and inline-flex, not flex, or a
                   block-level button would stretch across the whole card. */}
-              <button
+              <Button
+                variant="secondary"
+                className="mb-4"
+                icon={ChevronLeft}
                 onClick={closeMarket}
-                className="inline-flex w-fit items-center gap-1.5 mb-4 px-3 py-2 rounded-xl bg-slate-100 border-2 border-slate-300 text-sm font-bold text-slate-700 hover:bg-slate-200 hover:border-primary hover:text-primary active:scale-95 transition-all"
               >
-                <ChevronLeft size={18} /> {t('all_machines_back')}
-              </button>
+                {t('all_machines_back')}
+              </Button>
               <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 mb-8">
                 <div>
                   <h2 className="text-2xl font-black text-slate-900">{t('inventory')}</h2>
@@ -2955,35 +2966,39 @@ export default function Admin() {
                 </div>
                 <div className="flex flex-wrap gap-2 w-full sm:w-auto items-center">
                   {isOpenShelf && (
-                    <button
+                    <Button
+                      variant="primary"
+                      className="flex-1 sm:flex-none"
+                      icon={Plus}
                       onClick={addStaticProduct}
-                      className="flex-1 sm:flex-none whitespace-nowrap flex items-center justify-center gap-2 bg-primary text-white px-4 py-2.5 rounded-xl font-bold hover:opacity-90 transition-all text-sm"
                     >
-                      <Plus size={16} /> {t('add')}
-                    </button>
+                      {t('add')}
+                    </Button>
                   )}
                   {isStaticMarket && (
-                    <button
+                    <Button
+                      variant="dark"
+                      className="flex-1 sm:flex-none"
+                      icon={QrCode}
                       onClick={() => setQrModalMarket(markets.find(m => String(m.id) === String(selectedMarketId)) || { id: selectedMarketId })}
-                      className="flex-1 sm:flex-none whitespace-nowrap flex items-center justify-center gap-2 bg-slate-900 text-white px-4 py-2.5 rounded-xl font-bold hover:bg-slate-700 transition-all text-sm"
                     >
-                      <QrCode size={16} /> QR
-                    </button>
+                      QR
+                    </Button>
                   )}
                   {/* A tablet machine has no other way to unlock from the panel
                       once its lock board is on the Realtime firmware. */}
                   {(isStaticMarket || (selectedMarket?.kind === 'micromarket_tablet' && selectedMarket?.rt)) && (
-                    <button
+                    <Button
+                      variant="secondary"
+                      className="flex-1 sm:flex-none"
+                      icon={KeyRound}
+                      loading={String(serviceOpening) === String(selectedMarketId)}
                       onClick={() => openForService(markets.find(m => String(m.id) === String(selectedMarketId)) || { id: selectedMarketId })}
                       disabled={serviceOpening != null}
                       title={t('service_open_title')}
-                      className="flex-1 sm:flex-none whitespace-nowrap flex items-center justify-center gap-2 bg-white text-slate-700 border border-slate-300 px-4 py-2.5 rounded-xl font-bold hover:bg-slate-100 transition-all text-sm disabled:opacity-60 disabled:cursor-wait"
                     >
-                      {String(serviceOpening) === String(selectedMarketId)
-                        ? <Loader2 size={16} className="animate-spin" />
-                        : <KeyRound size={16} />}
                       <span className="hidden sm:inline">{t('service_open')}</span>
-                    </button>
+                    </Button>
                   )}
                   {(selectedMarket?.kind === 'micromarket_static' || selectedMarket?.kind === 'micromarket_tablet') && (
                     <Button
@@ -2995,12 +3010,13 @@ export default function Admin() {
                       <span className="hidden sm:inline">{t('machine_settings_short')}</span>
                     </Button>
                   )}
-                  <button
+                  <Button
+                    variant="secondary"
+                    className="flex-1 sm:flex-none"
                     onClick={() => setShowCategoryManager(true)}
-                    className="flex-1 sm:flex-none whitespace-nowrap flex items-center justify-center gap-2 bg-slate-200 text-slate-700 border border-slate-300 px-4 py-2.5 rounded-xl font-bold hover:bg-slate-300 transition-all text-sm"
                   >
                     {t('categories')}
-                  </button>
+                  </Button>
                 </div>
               </div>
 
@@ -3494,13 +3510,7 @@ export default function Admin() {
                       {categories.find(c => c.id === editingProduct.category_id)?.name_ru || t('no_category')}
                     </span>
                   </div>
-                  <button
-                    onClick={openCatalogPicker}
-                    title={t('change_product')}
-                    className="p-2 bg-white border border-emerald-300 text-emerald-700 rounded-lg hover:bg-emerald-600 hover:text-white hover:border-emerald-600 transition-all"
-                  >
-                    <Pencil size={14} />
-                  </button>
+                  <IconButton icon={Pencil} label={t('change_product')} tone="success" onClick={openCatalogPicker} />
                 </div>
               ) : (
                 <button
@@ -3602,14 +3612,16 @@ export default function Admin() {
             {/* Sticky footer — Save stays in reach on mobile no matter
                 how much you scroll the form. */}
             <div className="px-5 sm:px-6 py-3 sm:py-4 border-t-2 border-slate-200 bg-white sm:rounded-b-3xl">
-              <button
+              <Button
+                variant="primary"
+                block className="min-h-12"
+                icon={Save}
+                loading={loading}
                 onClick={saveProduct}
                 disabled={loading || uploadingImage || !editingProduct.product_id}
-                className="w-full bg-primary text-white py-3.5 rounded-xl font-black text-base sm:text-lg flex justify-center items-center gap-2 shadow-lg shadow-primary/30 active:scale-95 transition-all disabled:opacity-50 disabled:cursor-not-allowed border-2 border-primary"
               >
-                {loading ? <Loader2 className="animate-spin" /> : <Save size={20} />}
                 {t('save')}
-              </button>
+              </Button>
             </div>
           </div>
         </div>
@@ -3643,7 +3655,9 @@ export default function Admin() {
                 value={newCatEn}
                 onChange={e => setNewCatEn(e.target.value)}
               />
-              <button onClick={addCategory} className="bg-primary text-white p-2 rounded-xl mt-2 font-bold"><Plus size={20} className="inline mr-2"/> {t('add')}</button>
+              <Button variant="primary" className="mt-2" icon={Plus} onClick={addCategory}>
+                {t('add')}
+              </Button>
             </div>
 
             <div className="max-h-60 overflow-y-auto flex flex-col gap-2">
@@ -3653,7 +3667,7 @@ export default function Admin() {
                     <span className="font-bold text-sm">{c.name_ru}</span>
                     <span className="text-[10px] opacity-50">{c.name_kz} / {c.name_en}</span>
                   </div>
-                  <button onClick={() => deleteCategory(c.id)} className="text-red-500 hover:bg-red-50 p-2 rounded-lg transition-colors"><Trash2 size={16}/></button>
+                  <IconButton icon={Trash2} label={t('delete')} tone="danger" onClick={() => deleteCategory(c.id)} />
                 </div>
               ))}
               {categories.length === 0 && <p className="text-center text-xs opacity-50 py-4">{t('no_categories')}</p>}
@@ -3685,19 +3699,20 @@ export default function Admin() {
             />
           </div>
           <div className="p-6 bg-white flex justify-end gap-4 items-center">
-            <button
+            <Button
+              variant="ghost"
               onClick={closeCropper}
-              className="px-6 py-3 font-bold text-slate-500 hover:text-black transition-colors"
             >
               {t('cancel')}
-            </button>
-            <button 
+            </Button>
+            <Button
+              variant="primary"
+              loading={uploadingImage}
               onClick={handleUploadCrop}
               disabled={uploadingImage || !croppedAreaPixels}
-              className="bg-primary text-white px-8 py-3 rounded-xl font-black shadow-lg shadow-primary/20 flex items-center gap-2 active:scale-95 transition-all"
             >
-              {uploadingImage ? <Loader2 className="animate-spin" /> : t('save_and_upload')}
-            </button>
+              {t('save_and_upload')}
+            </Button>
           </div>
         </div>
       )}
@@ -3939,21 +3954,25 @@ export default function Admin() {
               )}
 
               <div className="pt-4 border-t-2 border-slate-200 flex flex-col gap-2">
-                <button
+                <Button
+                  variant="primary"
+                  block className="min-h-12"
+                  icon={Save}
+                  loading={loading}
                   onClick={saveCatalogProduct}
                   disabled={loading || uploadingImage}
-                  className="w-full bg-primary text-white py-3 rounded-xl font-black text-lg flex justify-center items-center gap-2 shadow-xl shadow-primary/30 active:scale-95 transition-all disabled:opacity-50 border-2 border-primary"
                 >
-                  {loading ? <Loader2 className="animate-spin" /> : <Save size={20} />}
                   {t('save')}
-                </button>
+                </Button>
                 {editingCatalog.is_draft && editingCatalog.id !== 'new' && (
-                  <button
+                  <Button
+                    variant="success"
+                    block
+                    icon={CheckCircle2}
                     onClick={() => { publishDraft(editingCatalog); setEditingCatalog(null); }}
-                    className="w-full bg-emerald-600 text-white py-2.5 rounded-xl font-bold text-sm flex justify-center items-center gap-2 hover:bg-emerald-700 transition-all border-2 border-emerald-600"
                   >
-                    <CheckCircle2 size={16} /> {t('publish')}
-                  </button>
+                    {t('publish')}
+                  </Button>
                 )}
               </div>
             </div>
@@ -3971,18 +3990,20 @@ export default function Admin() {
             <h3 className="text-xl font-black mb-2 text-slate-900">{t('delete_product_title')}</h3>
             <p className="text-sm text-slate-500 opacity-70 mb-6">{t('delete_product_confirm')}</p>
             <div className="flex gap-3">
-              <button 
+              <Button
+                variant="secondary"
+                className="flex-1"
                 onClick={() => setProductToDelete(null)}
-                className="flex-1 py-3 px-4 bg-slate-200 rounded-xl font-bold text-slate-900 hover:bg-slate-300 transition-all"
               >
                 {t('cancel')}
-              </button>
-              <button
+              </Button>
+              <Button
+                variant="danger"
+                className="flex-1"
                 onClick={confirmDelete}
-                className="flex-1 py-3 px-4 bg-red-600 text-white rounded-xl font-bold hover:bg-red-700 shadow-lg shadow-red-200 transition-all active:scale-95"
               >
                 {t('yes_delete')}
-              </button>
+              </Button>
             </div>
           </div>
         </div>
@@ -4052,19 +4073,22 @@ export default function Admin() {
             </div>
 
             <div className="flex gap-3 px-6 pb-6">
-              <button
+              <Button
+                variant="secondary"
+                className="flex-1"
                 onClick={() => setAddingDevice(null)}
-                className="flex-1 py-3 px-4 bg-slate-200 rounded-xl font-bold text-slate-700 hover:bg-slate-300 transition-all"
               >
                 {t('cancel')}
-              </button>
-              <button
+              </Button>
+              <Button
+                variant="primary"
+                className="flex-1"
+                loading={deviceSaving}
                 onClick={claimDevice}
                 disabled={deviceSaving}
-                className="flex-1 py-3 px-4 bg-primary text-white rounded-xl font-black shadow-lg shadow-primary/20 flex items-center justify-center gap-2 active:scale-95 transition-all disabled:opacity-60"
               >
-                {deviceSaving ? <Loader2 className="animate-spin" size={18} /> : t('add')}
-              </button>
+                {t('add')}
+              </Button>
             </div>
           </div>
         </div>
@@ -4085,18 +4109,20 @@ export default function Admin() {
             </p>
             <p className="text-xs text-slate-500 mb-6">{t('release_tablet_hint')}</p>
             <div className="flex gap-3">
-              <button
+              <Button
+                variant="secondary"
+                className="flex-1"
                 onClick={() => setReleaseTarget(null)}
-                className="flex-1 py-3 px-4 bg-slate-200 rounded-xl font-bold text-slate-700 hover:bg-slate-300 transition-all"
               >
                 {t('cancel')}
-              </button>
-              <button
+              </Button>
+              <Button
+                variant="warning"
+                className="flex-1"
                 onClick={() => releaseTablet(releaseTarget)}
-                className="flex-1 py-3 px-4 bg-amber-500 text-white rounded-xl font-bold hover:bg-amber-600 shadow-lg shadow-amber-200 transition-all active:scale-95"
               >
                 {t('release_tablet')}
-              </button>
+              </Button>
             </div>
           </div>
         </div>
@@ -4127,18 +4153,20 @@ export default function Admin() {
               />
             </div>
             <div className="flex gap-3 px-6 pb-6">
-              <button
+              <Button
+                variant="secondary"
+                className="flex-1"
                 onClick={() => setRenamingMarket(null)}
-                className="flex-1 py-3 px-4 bg-slate-200 rounded-xl font-bold text-slate-700 hover:bg-slate-300 transition-all"
               >
                 {t('cancel')}
-              </button>
-              <button
+              </Button>
+              <Button
+                variant="primary"
+                className="flex-1"
                 onClick={renameMarket}
-                className="flex-1 py-3 px-4 bg-primary text-white rounded-xl font-black shadow-lg shadow-primary/20 active:scale-95 transition-all"
               >
                 {t('save')}
-              </button>
+              </Button>
             </div>
           </div>
         </div>
@@ -4211,19 +4239,22 @@ export default function Admin() {
               <p className="text-[11px] text-slate-400 mt-1 ml-1">{t('user_password_hint')}</p>
             </div>
             <div className="flex gap-3 px-6 pb-6">
-              <button
+              <Button
+                variant="secondary"
+                className="flex-1"
                 onClick={() => setPwdTarget(null)}
-                className="flex-1 py-3 px-4 bg-slate-200 rounded-xl font-bold text-slate-700 hover:bg-slate-300 transition-all"
               >
                 {t('cancel')}
-              </button>
-              <button
+              </Button>
+              <Button
+                variant="primary"
+                className="flex-1"
+                loading={userSaving}
                 onClick={changePassword}
                 disabled={userSaving}
-                className="flex-1 py-3 px-4 bg-primary text-white rounded-xl font-black shadow-lg shadow-primary/20 flex items-center justify-center gap-2 active:scale-95 transition-all disabled:opacity-60"
               >
-                {userSaving ? <Loader2 className="animate-spin" size={18} /> : t('save')}
-              </button>
+                {t('save')}
+              </Button>
             </div>
           </div>
         </div>
@@ -4240,20 +4271,23 @@ export default function Admin() {
             <p className="text-sm text-slate-600 mb-2 break-all">{userDeleteTarget.email}</p>
             <p className="text-xs text-slate-500 mb-6">{t('delete_user_hint')}</p>
             <div className="flex gap-3">
-              <button
+              <Button
+                variant="secondary"
+                className="flex-1"
                 onClick={() => setUserDeleteTarget(null)}
                 disabled={userSaving}
-                className="flex-1 py-3 px-4 bg-slate-200 rounded-xl font-bold text-slate-700 hover:bg-slate-300 transition-all disabled:opacity-60"
               >
                 {t('cancel')}
-              </button>
-              <button
+              </Button>
+              <Button
+                variant="danger"
+                className="flex-1"
+                loading={userSaving}
                 onClick={deleteUser}
                 disabled={userSaving}
-                className="flex-1 py-3 px-4 bg-red-600 text-white rounded-xl font-bold hover:bg-red-700 shadow-lg shadow-red-200 transition-all active:scale-95 flex items-center justify-center disabled:opacity-60"
               >
-                {userSaving ? <Loader2 className="animate-spin" size={18} /> : t('yes_delete')}
-              </button>
+                {t('yes_delete')}
+              </Button>
             </div>
           </div>
         </div>
@@ -4287,20 +4321,23 @@ export default function Admin() {
             <p className="text-[11px] text-slate-500 text-center mb-5">{t('transfer_confirm_hint')}</p>
 
             <div className="flex gap-3">
-              <button
+              <Button
+                variant="secondary"
+                className="flex-1"
                 onClick={() => setTransferConfirm(null)}
                 disabled={transferring}
-                className="flex-1 py-3 px-4 bg-slate-200 rounded-xl font-bold text-slate-700 hover:bg-slate-300 transition-all disabled:opacity-60"
               >
                 {t('cancel')}
-              </button>
-              <button
+              </Button>
+              <Button
+                variant="primary"
+                className="flex-1"
+                loading={transferring}
                 onClick={transferDevice}
                 disabled={transferring}
-                className="flex-1 py-3 px-4 bg-primary text-white rounded-xl font-black shadow-lg shadow-primary/20 flex items-center justify-center gap-2 active:scale-95 transition-all disabled:opacity-60"
               >
-                {transferring ? <Loader2 className="animate-spin" size={18} /> : t('confirm_btn')}
-              </button>
+                {t('confirm_btn')}
+              </Button>
             </div>
           </div>
         </div>
@@ -4331,18 +4368,20 @@ export default function Admin() {
             )}
             <p className="text-xs text-slate-500 mb-6">{t('delete_device_irreversible')}</p>
             <div className="flex gap-3">
-              <button
+              <Button
+                variant="secondary"
+                className="flex-1"
                 onClick={() => setDeleteTarget(null)}
-                className="flex-1 py-3 px-4 bg-slate-200 rounded-xl font-bold text-slate-700 hover:bg-slate-300 transition-all"
               >
                 {t('cancel')}
-              </button>
-              <button
+              </Button>
+              <Button
+                variant="danger"
+                className="flex-1"
                 onClick={() => deleteDevice(deleteTarget.machid, true)}
-                className="flex-1 py-3 px-4 bg-red-600 text-white rounded-xl font-bold hover:bg-red-700 shadow-lg shadow-red-200 transition-all active:scale-95"
               >
                 {t('yes_delete')}
-              </button>
+              </Button>
             </div>
           </div>
         </div>
@@ -4395,19 +4434,22 @@ export default function Admin() {
             </div>
 
             <div className="flex gap-3 px-6 pb-6">
-              <button
+              <Button
+                variant="secondary"
+                className="flex-1"
                 onClick={() => setNewUser(null)}
-                className="flex-1 py-3 px-4 bg-slate-200 rounded-xl font-bold text-slate-700 hover:bg-slate-300 transition-all"
               >
                 {t('cancel')}
-              </button>
-              <button
+              </Button>
+              <Button
+                variant="primary"
+                className="flex-1"
+                loading={userSaving}
                 onClick={createUser}
                 disabled={userSaving}
-                className="flex-1 py-3 px-4 bg-primary text-white rounded-xl font-black shadow-lg shadow-primary/20 flex items-center justify-center gap-2 active:scale-95 transition-all disabled:opacity-60"
               >
-                {userSaving ? <Loader2 className="animate-spin" size={18} /> : t('create')}
-              </button>
+                {t('create')}
+              </Button>
             </div>
           </div>
         </div>
@@ -4496,27 +4538,25 @@ function UsersTab({
           <p className="text-[11px] font-bold text-slate-500 uppercase tracking-widest">{t('users_subtitle')}</p>
         </div>
         <div className="flex gap-2 flex-wrap w-full sm:w-auto sm:justify-end">
-          <button
-            onClick={onRefresh}
-            disabled={loading}
-            className="px-3 py-2.5 bg-slate-200 rounded-xl font-bold text-sm text-slate-700 hover:bg-slate-300 transition-all disabled:opacity-60"
-          >
-            {loading ? <Loader2 className="animate-spin" size={16} /> : <History size={16} />}
-          </button>
-          <button
+          <IconButton icon={History} label={t('refresh')} tone="default" loading={loading} onClick={onRefresh} disabled={loading} />
+          <Button
+            variant="primary"
+            className="flex-1 sm:flex-none"
+            icon={Plus}
             onClick={onCreate}
-            className="flex-1 sm:flex-none whitespace-nowrap bg-primary text-white px-4 py-2.5 rounded-xl font-bold text-sm shadow-lg shadow-primary/20 flex items-center justify-center gap-2 active:scale-95 transition-all"
           >
-            <Plus size={16} /> {t('new_user')}
-          </button>
+            {t('new_user')}
+          </Button>
           {/* Enrolling a machine is a platform-admin act, so it lives here
               next to account creation rather than on the owner-facing tab. */}
-          <button
+          <Button
+            variant="dark"
+            className="flex-1 sm:flex-none"
+            icon={Plus}
             onClick={onAddDevice}
-            className="flex-1 sm:flex-none whitespace-nowrap bg-slate-900 text-white px-4 py-2.5 rounded-xl font-bold text-sm shadow-lg shadow-slate-900/20 flex items-center justify-center gap-2 active:scale-95 transition-all"
           >
-            <Plus size={16} /> {t('add_device')}
-          </button>
+            {t('add_device')}
+          </Button>
         </div>
       </div>
 
@@ -4578,23 +4618,10 @@ function UsersTab({
                     <ChevronDown size={12} className={`transition-transform ${open ? 'rotate-180' : ''}`} />
                   </button>
                   <div className="flex gap-1.5 shrink-0">
-                    <button
-                      onClick={() => onChangePassword(u)}
-                      title={t('change_password')}
-                      className="p-2 rounded-lg bg-white border border-slate-300 text-slate-600 hover:text-primary hover:border-primary transition-all"
-                    >
-                      <KeyRound size={15} />
-                    </button>
+                    <IconButton icon={KeyRound} label={t('change_password')} tone="default" onClick={() => onChangePassword(u)} />
                     {/* Deleting your own account would lock you out of the panel —
                         the function refuses it too. */}
-                    <button
-                      onClick={() => onDeleteUser(u)}
-                      disabled={u.id === currentUserId}
-                      title={t('delete')}
-                      className="p-2 rounded-lg bg-white border border-slate-300 text-slate-600 hover:text-red-600 hover:border-red-300 transition-all disabled:opacity-40 disabled:hover:text-slate-600 disabled:hover:border-slate-300"
-                    >
-                      <Trash2 size={15} />
-                    </button>
+                    <IconButton icon={Trash2} label={t('delete')} tone="danger" onClick={() => onDeleteUser(u)} disabled={u.id === currentUserId} />
                   </div>
                 </div>
 
@@ -4821,12 +4848,13 @@ function CatalogTab({
           </p>
         </div>
         <div className="flex gap-2 flex-wrap">
-          <button
+          <Button
+            variant="primary"
+            icon={Plus}
             onClick={onCreate}
-            className="flex items-center justify-center gap-2 bg-primary text-white px-5 py-2.5 rounded-xl font-bold hover:brightness-110 transition-all shadow-lg shadow-primary/30 text-sm border-2 border-primary"
           >
-            <Plus size={16} /> {t('add_product')}
-          </button>
+            {t('add_product')}
+          </Button>
         </div>
       </div>
 
@@ -4913,13 +4941,7 @@ function CatalogTab({
 
               <div className="flex gap-1">
                 {p.is_draft && (
-                  <button
-                    onClick={() => onPublish(p)}
-                    title={t('publish')}
-                    className="p-2.5 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 transition-all shadow-sm"
-                  >
-                    <CheckCircle2 size={14} />
-                  </button>
+                  <IconButton icon={CheckCircle2} label={t('publish')} tone="success" onClick={() => onPublish(p)} />
                 )}
                 <IconButton icon={Pencil} label={t('edit')} onClick={() => onEdit(p)} />
                 <IconButton
