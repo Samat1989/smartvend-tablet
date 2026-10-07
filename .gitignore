@@ -118,3 +118,4 @@ esp32_dump/
 # the QR is a working key to enrol any freshly reset tablet as device owner.
 # Regenerate locally when needed; see docs on QR provisioning.
 provisioning/
+supabase/.temp/
