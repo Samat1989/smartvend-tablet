@@ -150,7 +150,7 @@ idf.py -B build/pulse -p /dev/ttyUSB0 flash monitor
 ## Обновления и откат
 
 Плата читает `updates/esp-rt-<variant>/manifest.json` в Supabase Storage через
-60 с после старта и раз в 6 часов:
+60 с после старта и раз в сутки:
 
 ```json
 {"version":"1.1.1","code":10101,"url":"…","size":1180000,"sha256":"…",

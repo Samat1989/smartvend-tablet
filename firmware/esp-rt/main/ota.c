@@ -41,7 +41,7 @@ static const char *TAG = "ota";
 
 #define MANIFEST_URL  "https://" SUPABASE_HOST "/storage/v1/object/public/updates/esp-rt-" FW_VARIANT "/manifest.json"
 #define MANIFEST_CAP  6144
-#define CHECK_EVERY_S (6 * 3600)
+#define CHECK_EVERY_S (24 * 3600)
 #define HEALTHY_S     120      // continuous time in the channel that proves an image
 #define PROVE_WITHIN_S 600     // ... and how long it has to do it
 #define MAX_BOOTS     4

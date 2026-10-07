@@ -12,5 +12,5 @@
 #include <stdbool.h>
 
 void ota_on_boot(void);               // first thing in app_main: crash-loop guard
-void ota_start(void);                 // check 60 s after start, then every 6 h
+void ota_start(void);                 // check 60 s after start, then once a day
 void ota_check_now(const char *id);   // from the server (signed ota-check): check now, report `ota`
