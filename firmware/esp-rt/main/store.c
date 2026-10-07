@@ -72,6 +72,15 @@ void store_set_int(const char *key, int val) {
     nvs_close(h);
 }
 
+int store_get_int(const char *key, int def) {
+    nvs_handle_t h;
+    if (nvs_open(NS, NVS_READONLY, &h) != ESP_OK) return def;
+    int32_t v = def;
+    if (nvs_get_i32(h, key, &v) != ESP_OK) v = def;
+    nvs_close(h);
+    return (int)v;
+}
+
 void store_erase(const char *key) {
     nvs_handle_t h;
     if (nvs_open(NS, NVS_READWRITE, &h) != ESP_OK) return;

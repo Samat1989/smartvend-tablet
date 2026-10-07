@@ -4,11 +4,12 @@
 #include <string.h>
 
 #include "config.h"
-#include "esp_crt_bundle.h"
-#include "esp_http_client.h"
+#include "cJSON.h"
 #include "esp_log.h"
+#include "esp_system.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "pair.h"
 #include "sb_realtime.h"
 #include "store.h"
 
@@ -22,24 +23,24 @@ static bool send_beat(void) {
     char body[192];
     snprintf(body, sizeof(body), "{\"p_topic\":\"%s\",\"p_key\":\"%s\",\"p_ver\":\"%s\"}",
              g_cfg.rt_topic, g_cfg.rt_key, FW_VERSION_NAME);
-    esp_http_client_config_t c = {
-        .url = "https://" SUPABASE_HOST "/rest/v1/rpc/device_beat",
-        .method = HTTP_METHOD_POST,
-        .crt_bundle_attach = esp_crt_bundle_attach,
-        .timeout_ms = 20000,
-    };
-    esp_http_client_handle_t cli = esp_http_client_init(&c);
-    if (!cli) return false;
-    esp_http_client_set_header(cli, "apikey", SUPABASE_KEY);
-    esp_http_client_set_header(cli, "Authorization", "Bearer " SUPABASE_KEY);
-    esp_http_client_set_header(cli, "Content-Type", "application/json");
-    esp_http_client_set_post_field(cli, body, strlen(body));
-    esp_err_t err = esp_http_client_perform(cli);
-    int status = esp_http_client_get_status_code(cli);
-    esp_http_client_cleanup(cli);
+    char resp[96];
+    int status = 0;
+    esp_err_t err = rpc_post("device_beat", body, resp, sizeof(resp), &status);
     if (err != ESP_OK || status != 200) {
         ESP_LOGW(TAG, "beat failed: %s, HTTP %d", esp_err_to_name(err), status);
         return false;
+    }
+    cJSON *root = cJSON_Parse(resp);
+    bool ok = cJSON_IsTrue(cJSON_GetObjectItem(root, "ok"));
+    cJSON_Delete(root);
+    if (!ok) {
+        // The server does not know this channel any more: the owner unpaired
+        // the board. Forget the credentials and start over (setup portal).
+        ESP_LOGW(TAG, "unpaired on the server — rebooting");
+        store_erase("rt_topic");
+        store_erase("rt_key");
+        vTaskDelay(pdMS_TO_TICKS(500));
+        esp_restart();
     }
     ESP_LOGI(TAG, "beat ok (free heap %lu)", (unsigned long)esp_get_free_heap_size());
     return true;

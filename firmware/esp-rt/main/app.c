@@ -43,6 +43,7 @@
 #include "freertos/task.h"
 #include "mbedtls/md.h"
 #include "net.h"
+#include "ota.h"
 #include "sb_realtime.h"
 #include "store.h"
 
@@ -57,6 +58,18 @@ typedef struct {
 
 static QueueHandle_t s_msgq;
 static QueueHandle_t s_lockq;   // int: seconds to keep the lock open
+static volatile bool s_lock_open;
+static volatile TickType_t s_last_open_at;   // 0 = never opened since boot
+
+#define IDLE_AFTER_OPEN_MS (2 * 60 * 1000)
+
+// No open window running and none in the last 2 minutes: a reboot now cannot
+// cut a customer off, so an OTA may restart the board.
+bool app_idle(void) {
+    if (s_lock_open) return false;
+    return s_last_open_at == 0 ||
+           xTaskGetTickCount() - s_last_open_at > pdMS_TO_TICKS(IDLE_AFTER_OPEN_MS);
+}
 
 // ---------------- lock timing ----------------
 // Owns the lock line: opens on the first request, keeps it open until the
@@ -74,12 +87,15 @@ static void lock_task(void *pv) {
             if (!is_open) {
                 lock_open();
                 is_open = true;
+                s_lock_open = true;
                 ESP_LOGI(TAG, "LOCK OPEN for %d s", sec);
             }
             if (u > until) until = u;
         } else if (is_open) {
             lock_close();
             is_open = false;
+            s_lock_open = false;
+            s_last_open_at = xTaskGetTickCount();
             ESP_LOGI(TAG, "LOCK CLOSED");
         }
     }
@@ -152,9 +168,31 @@ static void handle_command(const char *event, cJSON *p) {
     }
 
     seen_add(id->valuestring);
+    s_last_open_at = xTaskGetTickCount();
     xQueueSend(s_lockq, &seconds, portMAX_DELAY);
     ESP_LOGI(TAG, "%s %s: OPEN %d s", event, id->valuestring, seconds);
     send_opened(id->valuestring, true, seconds, NULL);
+}
+
+// ota-check {id, exp, sig}: the server asks for an update check right now.
+// sig = HMAC(rt_key, "ota-check|<id>||<exp>"). A replay inside the 2-minute
+// window only triggers one more manifest check, so no seen-ring entry.
+static void handle_ota_check(cJSON *p) {
+    const cJSON *id = cJSON_GetObjectItem(p, "id");
+    const cJSON *exp = cJSON_GetObjectItem(p, "exp");
+    const cJSON *sig = cJSON_GetObjectItem(p, "sig");
+    if (!cJSON_IsString(id) || !cJSON_IsNumber(exp) || !cJSON_IsString(sig) ||
+        strlen(id->valuestring) >= 40) return;
+    long long exp_s = (long long)exp->valuedouble;
+    char msg[120];
+    snprintf(msg, sizeof(msg), "ota-check|%s||%lld", id->valuestring, exp_s);
+    if (!sig_ok(msg, sig->valuestring)) {
+        ESP_LOGW(TAG, "ota-check: BAD SIGNATURE — ignored");
+        return;
+    }
+    long long now = (long long)time(NULL);
+    if (!net_time_synced() || exp_s < now || exp_s > now + MAX_EXP_AHEAD_S) return;
+    ota_check_now(id->valuestring);
 }
 
 // Board state as JSON object fields (no braces), shared by Presence and pong.
@@ -208,6 +246,7 @@ static void worker_task(void *pv) {
                 if (strcmp(m.event, "ping") == 0) handle_ping(p);
                 else if (strcmp(m.event, "open") == 0 || strcmp(m.event, "service-open") == 0)
                     handle_command(m.event, p);
+                else if (strcmp(m.event, "ota-check") == 0) handle_ota_check(p);
                 cJSON_Delete(p);
             }
         }

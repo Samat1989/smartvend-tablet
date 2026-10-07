@@ -3,26 +3,20 @@
 
 #include "sdkconfig.h"
 
-#define FW_VERSION_NAME   "1.0.4"
-#define FW_VERSION_CODE   10004
+#define FW_VERSION_NAME   "1.1.3"
+#define FW_VERSION_CODE   10103
 
 // --- Cloud ---
 #define SUPABASE_HOST     "cgvfhtvdtdjsyluhlcbq.supabase.co"
 #define SUPABASE_KEY      "sb_publishable_84RnaNCrFwxKicybxLGL2w_StEYpHnD"
 
-// --- OTA (GitHub releases of this repo) ---
-// Prefixes differ from esp-pulse ("pulse-v") and esp-relay ("relay-v"), so a
-// board on the old firmware never pulls esp-rt by itself, and a pulse board
-// never pulls the relay build (its lock line would stay dead) or vice versa.
-#define OTA_OWNER_REPO    "Samat1989/smartvend-tablet"
+// --- Variant ---
+// OTA reads updates/esp-rt-<variant>/manifest.json in Supabase Storage, so a
+// pulse board never pulls the relay build (its lock line would stay dead).
 #if CONFIG_ESPRT_LOCK_RELAY
 #define FW_VARIANT        "relay"
-#define OTA_TAG_PREFIX    "esp-rt-relay-v"
-#define OTA_ASSET_NAME    "esp-rt-relay.bin"
 #else
 #define FW_VARIANT        "pulse"
-#define OTA_TAG_PREFIX    "esp-rt-pulse-v"
-#define OTA_ASSET_NAME    "esp-rt-pulse.bin"
 #endif
 
 // --- Pins (same board as esp-pulse / esp-relay) ---

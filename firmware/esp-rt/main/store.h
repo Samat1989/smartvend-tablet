@@ -20,6 +20,7 @@ void store_init(void);
 void store_load(void);
 void store_set_str(const char *key, const char *val);
 void store_set_int(const char *key, int val);
+int  store_get_int(const char *key, int def);   // i32 values written by store_set_int
 void store_erase(const char *key);
 
 bool store_has_network(void);   // netmode set and, for Wi-Fi, an SSID
