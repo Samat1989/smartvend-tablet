@@ -46,7 +46,7 @@ export class DeviceChannel {
       config: { broadcast: { self: false, ack: false }, presence: { key: "" } },
     });
     const dc = new DeviceChannel(sb, ch, deviceId);
-    for (const event of ["pong", "opened"]) {
+    for (const event of ["pong", "opened", "ota"]) {
       ch.on("broadcast", { event }, ({ payload }: { payload: Payload }) => dc.dispatch(event, payload));
     }
     ch.on("presence", { event: "join" }, ({ key }: { key: string }) => {
@@ -153,6 +153,17 @@ export class DeviceChannel {
       if (got) return got;
     }
     return null;
+  }
+
+  // Asks the board to check for a firmware update right now (signed
+  // ota-check) and returns its `ota {status, code, ver}` answer, or null.
+  async otaCheck(key: string, ms = 8000): Promise<Payload | null> {
+    const id = crypto.randomUUID().slice(0, 8);
+    const exp = Math.floor(Date.now() / 1000) + 30;
+    const sig = await hmacHex(key, `ota-check|${id}||${exp}`);
+    const ans = this.waitFor("ota", (p) => p.id === id, ms);
+    await this.send("ota-check", { id, exp, sig });
+    return ans;
   }
 
   async close() {

@@ -83,3 +83,11 @@ entrypoint = "./functions/service-open/index.ts"
 enabled = true
 verify_jwt = false
 entrypoint = "./functions/service-open-request/index.ts"
+
+# Superadmin-only: ask a board to check for a firmware update right now (signed
+# ota-check over its Realtime channel). Which build it gets is decided by the
+# manifest in Storage (devices / pins), see scripts/publish_esp_rt.py.
+[functions.device-ota]
+enabled = true
+verify_jwt = false
+entrypoint = "./functions/device-ota/index.ts"
