@@ -291,7 +291,7 @@ function QrModal({ market, onClose }) {
 // одноразовый код на 30 минут и вводит его на плате вместе с номером аппарата;
 // плата обменивает код на свой канал и ключ подписи (RPC device_pair). Новая
 // привязка выдаёт новые канал и ключ, так что прежняя плата аппарата глохнет.
-function PairBoardModal({ market, onClose, onUnpair, onOpenSecondsSaved }) {
+function PairBoardModal({ market, onClose, onUnpair, onOpenSecondsSaved, onCheckUpdate }) {
   const { t, i18n } = useTranslation();
   const [busy, setBusy] = useState(false);
   // Open time of the machine (micromarkets.open_seconds): one number for paid
@@ -304,6 +304,15 @@ function PairBoardModal({ market, onClose, onUnpair, onOpenSecondsSaved }) {
   const [code, setCode] = useState(null); // {code, expires_at}
   const [error, setError] = useState(null);
   const [now, setNow] = useState(Date.now());
+  const [otaBusy, setOtaBusy] = useState(false);
+  const [otaMsg, setOtaMsg] = useState(null); // {ok, text}
+
+  async function checkUpdate() {
+    setOtaBusy(true);
+    setOtaMsg(null);
+    setOtaMsg(await onCheckUpdate());
+    setOtaBusy(false);
+  }
 
   useEffect(() => {
     if (!code) return undefined;
@@ -410,6 +419,21 @@ function PairBoardModal({ market, onClose, onUnpair, onOpenSecondsSaved }) {
           {busy ? <Loader2 size={18} className="animate-spin" /> : <Link2 size={18} />}
           {code ? t('pair_board_new_code') : t('pair_board_get_code')}
         </button>
+        {market.rt && onCheckUpdate && (
+          <>
+            <button
+              onClick={checkUpdate}
+              disabled={otaBusy}
+              className="mt-2 w-full flex items-center justify-center gap-2 bg-slate-100 text-slate-800 border border-slate-300 py-3 rounded-xl font-bold hover:bg-slate-200 transition-all disabled:opacity-60 disabled:cursor-wait"
+            >
+              {otaBusy ? <Loader2 size={18} className="animate-spin" /> : <Download size={18} />}
+              {t('ota_check')}
+            </button>
+            {otaMsg && (
+              <p className={`mt-1 text-xs font-bold ${otaMsg.ok ? 'text-emerald-700' : 'text-rose-600'}`}>{otaMsg.text}</p>
+            )}
+          </>
+        )}
         {market.rt && (
           <button
             onClick={onUnpair}
@@ -1194,6 +1218,20 @@ export default function Admin() {
       throw err;
     }
     return data;
+  }
+
+  // Superadmin: ask the board to look for a firmware update right now. The
+  // answer is the board's own (current / updating / skipped / failed), or
+  // offline / busy from the server. Returns {ok, text} for the modal.
+  async function checkBoardUpdate(market) {
+    try {
+      const data = await invokeAdminFn('device-ota', { body: { machid: market.id } });
+      const s = data?.status;
+      const text = t(`ota_${s}`, { ver: data?.ver ?? '', defaultValue: String(s) });
+      return { ok: s === 'current' || s === 'updating', text };
+    } catch (e) {
+      return { ok: false, text: (e && e.message) || String(e) };
+    }
   }
 
   // Payment-free unlock for refilling. No duration: the board holds the lock
@@ -3307,6 +3345,7 @@ export default function Admin() {
           onClose={() => setPairMarket(null)}
           onUnpair={() => unpairBoard(pairMarket)}
           onOpenSecondsSaved={fetchMarkets}
+          onCheckUpdate={isSuperadmin ? () => checkBoardUpdate(pairMarket) : undefined}
         />
       )}
       {qrModalMarket && (
