@@ -251,7 +251,7 @@ function QrModal({ market, onClose }) {
       <div className="bg-white rounded-3xl p-6 w-full max-w-sm shadow-2xl" onClick={(e) => e.stopPropagation()}>
         <div className="flex items-center justify-between mb-4">
           <h3 className="text-lg font-black text-slate-900">{t('qr_machine')}</h3>
-          <button onClick={onClose} className="p-2 text-slate-400 hover:text-slate-700 rounded-lg"><X size={20} /></button>
+          <IconButton icon={X} label={t('close')} tone="plain" onClick={onClose} />
         </div>
         <div className="text-center">
           <div className="font-bold text-slate-900">{market.name || `${t('apparatus_no')}${market.id}`}</div>
@@ -2590,8 +2590,8 @@ export default function Admin() {
 
   if (!session) {
     return (
-      <div className="min-h-screen bg-surface-container-lowest flex items-center justify-center p-5 font-lexend">
-        <div className="bg-white p-8 rounded-3xl shadow-2xl max-w-sm w-full border border-surface-container-high">
+      <div className="min-h-screen bg-slate-50 flex items-center justify-center p-5 font-lexend">
+        <div className="bg-white p-8 rounded-3xl shadow-2xl max-w-sm w-full border border-slate-200">
           <h2 className="text-2xl font-black text-primary mb-6 text-center">{t('login_title')}</h2>
           <div className="space-y-4">
             <div>
@@ -2600,7 +2600,7 @@ export default function Admin() {
                 type="email"
                 value={email}
                 onChange={e => setEmail(e.target.value)}
-                className="w-full p-3 bg-surface-container-low rounded-xl font-bold focus:outline-none focus:ring-2 focus:ring-primary/50"
+                className="w-full p-3 bg-slate-100 rounded-xl font-bold focus:outline-none focus:ring-2 focus:ring-primary/50"
               />
             </div>
             <div>
@@ -2609,7 +2609,7 @@ export default function Admin() {
                 type="password"
                 value={password}
                 onChange={e => setPassword(e.target.value)}
-                className="w-full p-3 bg-surface-container-low rounded-xl font-bold focus:outline-none focus:ring-2 focus:ring-primary/50"
+                className="w-full p-3 bg-slate-100 rounded-xl font-bold focus:outline-none focus:ring-2 focus:ring-primary/50"
               />
             </div>
             <button
@@ -2909,13 +2909,7 @@ export default function Admin() {
                         </div>
                       </button>
                       <div className="hidden sm:flex items-center gap-3 shrink-0">{meta}</div>
-                      <button
-                        onClick={() => setRenamingMarket({ id: m.id, name: m.name || '' })}
-                        title={t('rename')}
-                        className="p-2 rounded-lg bg-white border border-slate-300 text-slate-600 hover:text-primary hover:border-primary transition-all shrink-0"
-                      >
-                        <Pencil size={15} />
-                      </button>
+                      <IconButton icon={Pencil} label={t('rename')} onClick={() => setRenamingMarket({ id: m.id, name: m.name || '' })} />
                       {/* Lock board pairing: a static-QR micromarket and a tablet
                           micromarket (its board is separate from the tablet). */}
                       {(m.kind === 'micromarket_static' || m.kind === 'micromarket_tablet') && (
@@ -2927,13 +2921,7 @@ export default function Admin() {
                         />
                       )}
                       {m.kind === 'vending' && (
-                        <button
-                          onClick={() => setReleaseTarget({ id: m.id, name: m.name || '' })}
-                          title={t('release_tablet')}
-                          className="p-2 rounded-lg bg-white border border-slate-300 text-slate-600 hover:text-amber-600 hover:border-amber-400 transition-all shrink-0"
-                        >
-                          <LinkOff size={15} />
-                        </button>
+                        <IconButton icon={LinkOff} label={t('release_tablet')} onClick={() => setReleaseTarget({ id: m.id, name: m.name || '' })} />
                       )}
                       <button
                         onClick={() => openMarket(m.id)}
@@ -3478,7 +3466,7 @@ export default function Admin() {
           <div className="bg-white w-full h-full sm:h-auto sm:max-w-md sm:rounded-3xl sm:shadow-2xl sm:border-2 sm:border-slate-300 flex flex-col">
             <div className="flex justify-between items-center px-5 py-4 sm:px-6 sm:py-5 border-b-2 border-slate-200 sm:border-b-0">
               <h3 className="font-black text-lg sm:text-xl text-slate-900">{editingProduct.id === 'new' ? t('new_product') : t('edit_product_title')}</h3>
-              <button onClick={() => setEditingProduct(null)} className="p-2.5 bg-slate-200 border border-slate-300 text-slate-700 rounded-full hover:bg-slate-300 active:scale-95"><X size={20} /></button>
+              <IconButton icon={X} label={t('close')} tone="plain" onClick={() => setEditingProduct(null)} />
             </div>
 
             <div className="space-y-4 flex-1 overflow-y-auto px-5 sm:px-6 py-5">
@@ -3633,25 +3621,25 @@ export default function Admin() {
           <div className="bg-white rounded-3xl p-6 w-full max-w-sm shadow-2xl">
             <div className="flex justify-between items-center mb-6">
               <h3 className="font-black text-xl">{t('categories')}</h3>
-              <button onClick={() => setShowCategoryManager(false)} className="p-2 bg-surface-container-low rounded-full"><X size={18} /></button>
+              <IconButton icon={X} label={t('close')} tone="plain" onClick={() => setShowCategoryManager(false)} />
             </div>
             
             <div className="flex flex-col gap-2 mb-4">
               <input 
                 placeholder={t('name_ru')}
-                className="p-2 border border-surface-container-high rounded-xl font-bold text-sm"
+                className="p-2 border border-slate-200 rounded-xl font-bold text-sm"
                 value={newCatRu}
                 onChange={e => setNewCatRu(e.target.value)}
               />
               <input 
                 placeholder={t('name_kz')}
-                className="p-2 border border-surface-container-high rounded-xl font-bold text-sm"
+                className="p-2 border border-slate-200 rounded-xl font-bold text-sm"
                 value={newCatKz}
                 onChange={e => setNewCatKz(e.target.value)}
               />
               <input 
                 placeholder={t('name_en')}
-                className="p-2 border border-surface-container-high rounded-xl font-bold text-sm"
+                className="p-2 border border-slate-200 rounded-xl font-bold text-sm"
                 value={newCatEn}
                 onChange={e => setNewCatEn(e.target.value)}
               />
@@ -3660,7 +3648,7 @@ export default function Admin() {
 
             <div className="max-h-60 overflow-y-auto flex flex-col gap-2">
               {categories.map(c => (
-                <div key={c.id} className="flex justify-between items-center bg-surface-container-lowest border border-surface-container-high p-3 rounded-xl">
+                <div key={c.id} className="flex justify-between items-center bg-slate-50 border border-slate-200 p-3 rounded-xl">
                   <div className="flex flex-col">
                     <span className="font-bold text-sm">{c.name_ru}</span>
                     <span className="text-[10px] opacity-50">{c.name_kz} / {c.name_en}</span>
@@ -3699,7 +3687,7 @@ export default function Admin() {
           <div className="p-6 bg-white flex justify-end gap-4 items-center">
             <button
               onClick={closeCropper}
-              className="px-6 py-3 font-bold text-on-surface-variant hover:text-black transition-colors"
+              className="px-6 py-3 font-bold text-slate-500 hover:text-black transition-colors"
             >
               {t('cancel')}
             </button>
@@ -3744,12 +3732,7 @@ export default function Admin() {
                   {t('pick_ready_product')}
                 </span>
               </div>
-              <button
-                onClick={() => setShowCatalogPicker(false)}
-                className="p-2 bg-slate-200 border border-slate-300 text-slate-700 rounded-full hover:bg-slate-300"
-              >
-                <X size={18} />
-              </button>
+              <IconButton icon={X} label={t('close')} tone="plain" onClick={() => setShowCatalogPicker(false)} />
             </div>
 
             <div className="px-6 py-4 bg-slate-50 border-b border-slate-200">
@@ -3834,9 +3817,7 @@ export default function Admin() {
               <h3 className="font-black text-xl text-slate-900">
                 {editingCatalog.id === 'new' ? t('new_catalog_product') : t('edit_product_title')}
               </h3>
-              <button onClick={() => setEditingCatalog(null)} className="p-2 bg-slate-200 border border-slate-300 text-slate-700 rounded-full hover:bg-slate-300">
-                <X size={18} />
-              </button>
+              <IconButton icon={X} label={t('close')} tone="plain" onClick={() => setEditingCatalog(null)} />
             </div>
 
             <div className="space-y-4">
@@ -3987,12 +3968,12 @@ export default function Admin() {
             <div className="w-16 h-16 bg-red-100 text-red-600 rounded-full flex items-center justify-center mx-auto mb-4">
               <Trash2 size={32} />
             </div>
-            <h3 className="text-xl font-black mb-2 text-on-surface">{t('delete_product_title')}</h3>
-            <p className="text-sm text-on-surface-variant opacity-70 mb-6">{t('delete_product_confirm')}</p>
+            <h3 className="text-xl font-black mb-2 text-slate-900">{t('delete_product_title')}</h3>
+            <p className="text-sm text-slate-500 opacity-70 mb-6">{t('delete_product_confirm')}</p>
             <div className="flex gap-3">
               <button 
                 onClick={() => setProductToDelete(null)}
-                className="flex-1 py-3 px-4 bg-surface-container-high rounded-xl font-bold text-on-surface hover:bg-surface-container-highest transition-all"
+                className="flex-1 py-3 px-4 bg-slate-200 rounded-xl font-bold text-slate-900 hover:bg-slate-300 transition-all"
               >
                 {t('cancel')}
               </button>
@@ -4019,12 +4000,7 @@ export default function Admin() {
                 <h3 className="font-black text-xl text-slate-900">{t('add_device')}</h3>
                 <span className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">{t('add_device_hint')}</span>
               </div>
-              <button
-                onClick={() => setAddingDevice(null)}
-                className="p-2 bg-slate-200 border border-slate-300 text-slate-700 rounded-full hover:bg-slate-300"
-              >
-                <X size={18} />
-              </button>
+              <IconButton icon={X} label={t('close')} tone="plain" onClick={() => setAddingDevice(null)} />
             </div>
 
             <div className="p-6 space-y-4">
@@ -4138,12 +4114,7 @@ export default function Admin() {
                   {t('apparatus_no')}{renamingMarket.id}
                 </span>
               </div>
-              <button
-                onClick={() => setRenamingMarket(null)}
-                className="p-2 bg-slate-200 border border-slate-300 text-slate-700 rounded-full hover:bg-slate-300"
-              >
-                <X size={18} />
-              </button>
+              <IconButton icon={X} label={t('close')} tone="plain" onClick={() => setRenamingMarket(null)} />
             </div>
             <div className="p-6">
               <label className="text-xs font-bold text-slate-500 ml-1">{t('device_name')}</label>
@@ -4184,12 +4155,7 @@ export default function Admin() {
                   {transferTarget.name || `${t('apparatus_no')}${transferTarget.id}`}
                 </span>
               </div>
-              <button
-                onClick={() => setTransferTarget(null)}
-                className="p-2 bg-slate-200 border border-slate-300 text-slate-700 rounded-full hover:bg-slate-300"
-              >
-                <X size={18} />
-              </button>
+              <IconButton icon={X} label={t('close')} tone="plain" onClick={() => setTransferTarget(null)} />
             </div>
             <div className="px-6 py-4 text-[11px] font-bold text-slate-500">{t('transfer_pick_owner')}</div>
             <div className="flex-1 overflow-y-auto px-6 pb-6 space-y-2">
@@ -4229,12 +4195,7 @@ export default function Admin() {
                   {pwdTarget.email}
                 </span>
               </div>
-              <button
-                onClick={() => setPwdTarget(null)}
-                className="p-2 bg-slate-200 border border-slate-300 text-slate-700 rounded-full hover:bg-slate-300 shrink-0"
-              >
-                <X size={18} />
-              </button>
+              <IconButton icon={X} label={t('close')} tone="plain" onClick={() => setPwdTarget(null)} />
             </div>
             <div className="p-6">
               <label className="text-xs font-bold text-slate-500 ml-1">{t('change_password_for')} {pwdTarget.email}</label>
@@ -4397,12 +4358,7 @@ export default function Admin() {
                 <h3 className="font-black text-xl text-slate-900">{t('new_user')}</h3>
                 <span className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">{t('new_user_hint')}</span>
               </div>
-              <button
-                onClick={() => setNewUser(null)}
-                className="p-2 bg-slate-200 border border-slate-300 text-slate-700 rounded-full hover:bg-slate-300"
-              >
-                <X size={18} />
-              </button>
+              <IconButton icon={X} label={t('close')} tone="plain" onClick={() => setNewUser(null)} />
             </div>
 
             <div className="p-6 space-y-4">
@@ -4525,28 +4481,9 @@ function UsersTab({
         <PayChannelBadge status={m.heartbeat} />
       </div>
       <div className="flex gap-1.5 shrink-0">
-        <button
-          onClick={() => onRename({ id: m.id, name: m.name || '' })}
-          title={t('rename')}
-          className="p-2 rounded-lg bg-white border border-slate-300 text-slate-600 hover:text-primary hover:border-primary transition-all"
-        >
-          <Pencil size={14} />
-        </button>
-        <button
-          onClick={() => onTransfer(m)}
-          title={t('transfer_device')}
-          className="p-2 rounded-lg bg-white border border-slate-300 text-slate-600 hover:text-primary hover:border-primary transition-all"
-        >
-          <ChevronRight size={14} />
-        </button>
-        <button
-          onClick={() => onDelete(m.id)}
-          disabled={devicesLoading}
-          title={t('delete')}
-          className="p-2 rounded-lg bg-white border border-slate-300 text-slate-600 hover:text-red-600 hover:border-red-300 transition-all disabled:opacity-50"
-        >
-          <Trash2 size={14} />
-        </button>
+        <IconButton icon={Pencil} label={t('rename')} onClick={() => onRename({ id: m.id, name: m.name || '' })} />
+        <IconButton icon={ChevronRight} label={t('transfer_device')} onClick={() => onTransfer(m)} />
+        <IconButton icon={Trash2} label={t('delete')} tone="danger" disabled={devicesLoading} onClick={() => onDelete(m.id)} />
       </div>
     </div>
   );
@@ -4984,27 +4921,13 @@ function CatalogTab({
                     <CheckCircle2 size={14} />
                   </button>
                 )}
-                <button
-                  onClick={() => onEdit(p)}
-                  title={t('edit')}
-                  className="p-2.5 bg-white border border-slate-300 text-slate-600 rounded-lg hover:bg-primary hover:border-primary hover:text-white transition-all"
-                >
-                  <Pencil size={14} />
-                </button>
-                <button
+                <IconButton icon={Pencil} label={t('edit')} onClick={() => onEdit(p)} />
+                <IconButton
+                  icon={p.is_archived ? CheckCircle2 : XCircle}
+                  label={p.is_archived ? t('restore') : t('to_archive')}
                   onClick={() => onArchive(p)}
-                  title={p.is_archived ? t('restore') : t('to_archive')}
-                  className="p-2.5 bg-white border border-slate-300 text-slate-600 rounded-lg hover:bg-amber-600 hover:border-amber-600 hover:text-white transition-all"
-                >
-                  {p.is_archived ? <CheckCircle2 size={14} /> : <XCircle size={14} />}
-                </button>
-                <button
-                  onClick={() => onDelete(p)}
-                  title={t('delete_forever')}
-                  className="p-2.5 bg-white border border-slate-300 text-slate-600 rounded-lg hover:bg-red-600 hover:border-red-600 hover:text-white transition-all"
-                >
-                  <Trash2 size={14} />
-                </button>
+                />
+                <IconButton icon={Trash2} label={t('delete_forever')} tone="danger" onClick={() => onDelete(p)} />
               </div>
             </div>
           ))}
@@ -5091,8 +5014,8 @@ function StaticInventoryList({ products, categories, stockLabel, priceLabel, cur
               <p className="text-base font-black text-primary tabular-nums">{p.price} {currency}</p>
             </div>
             <div className="flex items-center gap-1 shrink-0">
-              <button onClick={(e) => { e.stopPropagation(); onEdit(p); }} className="p-2.5 bg-white border border-slate-300 text-slate-600 rounded-lg hover:bg-primary hover:border-primary hover:text-white transition-all"><Pencil size={14} /></button>
-              <button onClick={(e) => { e.stopPropagation(); onDelete(p); }} className="hidden sm:inline-flex p-2.5 bg-white border border-slate-300 text-slate-600 rounded-lg hover:bg-red-600 hover:border-red-600 hover:text-white transition-all"><Trash2 size={14} /></button>
+              <IconButton icon={Pencil} label={t('edit')} onClick={(e) => { e.stopPropagation(); onEdit(p); }} />
+              <IconButton icon={Trash2} label={t('delete')} tone="danger" onClick={(e) => { e.stopPropagation(); onDelete(p); }} />
             </div>
           </div>
         );
@@ -5185,20 +5108,8 @@ function InventoryByLayout({ products, layout, categories, stockLabel, priceLabe
                   </div>
                 </div>
                 <div className="flex items-center gap-1 shrink-0">
-                  <button
-                    onClick={(e) => { e.stopPropagation(); onEdit(p); }}
-                    className="p-2 bg-white border border-amber-300 text-amber-700 rounded-lg hover:bg-amber-600 hover:border-amber-600 hover:text-white transition-all"
-                    title={t('edit')}
-                  >
-                    <Pencil size={14} />
-                  </button>
-                  <button
-                    onClick={(e) => { e.stopPropagation(); onDelete(p); }}
-                    className="p-2 bg-white border border-amber-300 text-amber-700 rounded-lg hover:bg-red-600 hover:border-red-600 hover:text-white transition-all"
-                    title={t('delete_short')}
-                  >
-                    <Trash2 size={14} />
-                  </button>
+                  <IconButton icon={Pencil} label={t('edit')} onClick={(e) => { e.stopPropagation(); onEdit(p); }} />
+                  <IconButton icon={Trash2} label={t('delete_short')} tone="danger" onClick={(e) => { e.stopPropagation(); onDelete(p); }} />
                 </div>
               </div>
             ))}
@@ -5302,18 +5213,8 @@ function InventoryRow({ slot, product, category, stockLabel, priceLabel, currenc
             <span className="hidden sm:block text-[10px] font-bold text-slate-400 italic max-w-[80px] text-right leading-tight">{t('tablet_only')}</span>
           ) : (
             <>
-              <button
-                onClick={(e) => { e.stopPropagation(); onEdit(); }}
-                className="p-2.5 bg-white border border-slate-300 text-slate-600 rounded-lg hover:bg-primary hover:border-primary hover:text-white transition-all"
-              >
-                <Pencil size={14} />
-              </button>
-              <button
-                onClick={(e) => { e.stopPropagation(); onDelete(); }}
-                className="hidden sm:inline-flex p-2.5 bg-white border border-slate-300 text-slate-600 rounded-lg hover:bg-red-600 hover:border-red-600 hover:text-white transition-all"
-              >
-                <Trash2 size={14} />
-              </button>
+              <IconButton icon={Pencil} label={t('edit')} onClick={(e) => { e.stopPropagation(); onEdit(); }} />
+              <IconButton icon={Trash2} label={t('delete')} tone="danger" onClick={(e) => { e.stopPropagation(); onDelete(); }} />
             </>
           )}
         </div>
@@ -5363,12 +5264,7 @@ function PhotoLibraryModal({ open, loading, index, onPick, onClose }) {
       <div className="bg-white rounded-2xl w-full max-w-4xl h-[85vh] flex flex-col overflow-hidden">
         <div className="flex items-center justify-between px-5 py-4 border-b-2 border-slate-200">
           <h3 className="font-black text-lg text-slate-900">{t('library_title')}</h3>
-          <button
-            onClick={onClose}
-            className="p-2.5 bg-slate-200 border border-slate-300 text-slate-700 rounded-full hover:bg-slate-300 active:scale-95"
-          >
-            <X size={20} />
-          </button>
+          <IconButton icon={X} label={t('close')} tone="plain" onClick={onClose} />
         </div>
 
         <div className="px-5 py-3 border-b border-slate-200">
