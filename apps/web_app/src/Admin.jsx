@@ -611,6 +611,85 @@ function Toast({ toast, onClose }) {
   );
 }
 
+// One set of buttons for the whole panel. Before these, 97 buttons were styled
+// inline in a dozen variants; size, radius and colour now come from here.
+// Phones get at least 40 px of touch target.
+const BTN_TONES = {
+  primary: 'bg-primary text-white border-primary hover:opacity-90 shadow-sm shadow-primary/20',
+  dark: 'bg-slate-900 text-white border-slate-900 hover:bg-slate-700',
+  secondary: 'bg-white text-slate-700 border-slate-300 hover:border-primary hover:text-primary',
+  danger: 'bg-rose-600 text-white border-rose-600 hover:bg-rose-700',
+  'danger-outline': 'bg-white text-rose-600 border-rose-200 hover:bg-rose-50',
+  ghost: 'bg-transparent text-slate-600 border-transparent hover:bg-slate-100 hover:text-slate-900',
+};
+
+function Button({ variant = 'secondary', size = 'md', loading = false, icon: Icon, block = false, className = '', disabled, children, ...rest }) {
+  const sz = size === 'sm'
+    ? 'min-h-9 px-3 text-xs gap-1.5'
+    : 'min-h-10 px-4 text-sm gap-2';
+  return (
+    <button
+      type="button"
+      disabled={disabled || loading}
+      className={`inline-flex items-center justify-center rounded-xl border font-bold whitespace-nowrap transition-all active:scale-[0.98] disabled:opacity-50 disabled:cursor-not-allowed disabled:active:scale-100 ${sz} ${BTN_TONES[variant] ?? BTN_TONES.secondary} ${block ? 'w-full' : ''} ${className}`}
+      {...rest}
+    >
+      {loading ? <Loader2 size={size === 'sm' ? 14 : 16} className="animate-spin shrink-0" /> : Icon && <Icon size={size === 'sm' ? 14 : 16} className="shrink-0" />}
+      {children}
+    </button>
+  );
+}
+
+// Icon-only button: the label is required and becomes the tooltip and the
+// screen-reader name, so no icon is left unexplained.
+function IconButton({ icon: Icon, label, tone = 'default', loading = false, className = '', disabled, ...rest }) {
+  const tones = {
+    default: 'border-slate-300 text-slate-600 hover:text-primary hover:border-primary',
+    danger: 'border-slate-300 text-slate-600 hover:text-rose-600 hover:border-rose-300',
+    success: 'border-emerald-300 text-emerald-600 hover:text-primary hover:border-primary',
+    plain: 'border-transparent text-slate-400 hover:text-slate-700 hover:bg-slate-100',
+  };
+  return (
+    <button
+      type="button"
+      title={label}
+      aria-label={label}
+      disabled={disabled || loading}
+      className={`inline-flex items-center justify-center w-10 h-10 sm:w-9 sm:h-9 shrink-0 rounded-xl border bg-white transition-all disabled:opacity-40 disabled:cursor-not-allowed ${tones[tone] ?? tones.default} ${tone === 'plain' ? 'bg-transparent' : ''} ${className}`}
+      {...rest}
+    >
+      {loading ? <Loader2 size={16} className="animate-spin" /> : <Icon size={16} />}
+    </button>
+  );
+}
+
+// Confirmation for any action, not only deletes: the caller names the button
+// and its colour. The dialog stays open with a spinner until onYes finishes,
+// so a second tap cannot fire the action twice.
+function ConfirmDialog({ action, onClose }) {
+  const { t } = useTranslation();
+  const [busy, setBusy] = useState(false);
+  if (!action) return null;
+  const tone = action.tone ?? 'danger';
+  async function yes() {
+    setBusy(true);
+    try { await action.onYes(); } finally { setBusy(false); onClose(); }
+  }
+  return (
+    <div className="fixed inset-0 z-[110] bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4">
+      <div className="bg-white rounded-3xl p-6 w-full max-w-sm shadow-2xl border-2 border-slate-300">
+        <p className="font-bold text-slate-900 text-sm mb-6 leading-relaxed">{action.message}</p>
+        <div className="flex gap-2">
+          <Button variant="secondary" block onClick={onClose} disabled={busy}>{t('cancel')}</Button>
+          <Button variant={tone === 'danger' ? 'danger' : 'primary'} block loading={busy} onClick={yes}>
+            {action.yesLabel ?? t('delete_forever')}
+          </Button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // Connection state of one machine, from its heartbeat.
 //
 // Three states, not two, because "the tablet answers" and "the board answers"
@@ -1012,7 +1091,7 @@ export default function Admin() {
   // creating more dialogs", and once the operator ticks it confirm() returns
   // false instantly — the delete button then does nothing at all, silently and
   // for the rest of the session, with no clue that anything was suppressed.
-  const [confirmAction, setConfirmAction] = useState(null); // {message, onYes}
+  const [confirmAction, setConfirmAction] = useState(null); // {message, onYes, yesLabel?, tone?}
   const catalogFileInputRef = useRef(null);
 
   // Photo source menu + the shared library picker behind it. The index is
@@ -1916,6 +1995,8 @@ export default function Admin() {
   async function unpairBoard(market) {
     setConfirmAction({
       message: t('pair_board_unpair_confirm'),
+      yesLabel: t('pair_board_unpair'),
+      tone: 'danger',
       onYes: async () => {
         const { error } = await supabase.rpc('unpair_device', { p_machid: market.id });
         if (error) { showToast(error.message, 'error'); return; }
@@ -1929,6 +2010,8 @@ export default function Admin() {
   async function restoreSaleStock(sale) {
     setConfirmAction({
       message: t('restore_stock_confirm'),
+      yesLabel: t('restore_stock'),
+      tone: 'primary',
       onYes: async () => {
         const { error } = await supabase.rpc('restore_sale_stock', { p_sale_id: sale.id });
         if (error) { showToast(error.message, 'error'); return; }
@@ -3469,27 +3552,7 @@ export default function Admin() {
       {/* Catalog edit modal — separate form from inventory edit since
           catalog rows have different fields (volume_ml, description,
           is_draft, is_archived) and no per-slot price/stock. */}
-      {confirmAction && (
-        <div className="fixed inset-0 z-[60] bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className="bg-white rounded-3xl p-6 w-full max-w-sm shadow-2xl border-2 border-slate-300">
-            <p className="font-bold text-slate-900 text-sm mb-6">{confirmAction.message}</p>
-            <div className="flex gap-2">
-              <button
-                onClick={() => setConfirmAction(null)}
-                className="flex-1 bg-white border-2 border-slate-300 text-slate-700 py-2.5 rounded-xl font-bold text-sm hover:bg-slate-50 transition-all"
-              >
-                {t('cancel')}
-              </button>
-              <button
-                onClick={() => { const a = confirmAction; setConfirmAction(null); a.onYes(); }}
-                className="flex-1 bg-red-600 text-white py-2.5 rounded-xl font-black text-sm hover:bg-red-700 transition-all border-2 border-red-600"
-              >
-                {t('delete_forever')}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+      <ConfirmDialog action={confirmAction} onClose={() => setConfirmAction(null)} />
 
       {editingCatalog && (
         <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4">
