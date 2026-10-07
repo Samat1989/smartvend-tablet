@@ -97,7 +97,7 @@ Deno.serve(async (req) => {
     if (action === "list") {
       const { data: markets, error } = await supabase
         .from("micromarkets")
-        .select("id, name, kind, status, owner_id")
+        .select("id, name, kind, status, owner_id, open_seconds")
         .order("id");
       if (error) throw error;
 
@@ -108,8 +108,14 @@ Deno.serve(async (req) => {
       // why this read has to happen here under service_role.
       const { data: beats } = await supabase
         .from("device_status_view")
-        .select("machid, last_seen_at, board_ok, online, ter_number");
+        .select("machid, last_seen_at, board_ok, online, ter_number, app_version");
       const beatById = new Map((beats ?? []).map((b) => [b.machid, b]));
+
+      // Lock boards on the Realtime firmware (service_role only table).
+      const { data: rts } = await supabase
+        .from("device_rt")
+        .select("machid, topic, device_id, paired_at, last_seen_at, board_ver");
+      const rtById = new Map((rts ?? []).map((r) => [r.machid, r]));
 
       // Resolve owner_id → email. listUsers is one call; joining auth.users
       // through PostgREST isn't possible (it's not in the exposed schema).
@@ -123,6 +129,7 @@ Deno.serve(async (req) => {
           // Undefined when the machine never reported — the UI says
           // "never seen" rather than calling a fresh install a fault.
           heartbeat: beatById.get(m.id) ?? null,
+          rt: rtById.get(m.id) ?? null,
         })),
         owners: (list?.users ?? []).map((u) => ({ id: u.id, email: u.email })),
       });
