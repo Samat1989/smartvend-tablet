@@ -1136,6 +1136,7 @@ export default function Admin() {
   const [productToDelete, setProductToDelete] = useState(null);
   const [activeTab, setActiveTab] = useState('sales'); // 'sales' | 'inventory' | 'catalog'
   const [sales, setSales] = useState([]);
+  const [openSales, setOpenSales] = useState(() => new Set()); // multi-item sales shown in full
   const [timeFilter, setTimeFilter] = useState('recent'); // 'recent'|'day'|'week'|'month'|'period'
   const [periodFrom, setPeriodFrom] = useState('');
   const [periodTo, setPeriodTo] = useState('');
@@ -3145,13 +3146,30 @@ export default function Admin() {
                     // У одиночной позиции ячейка уже стоит рядом с суммой —
                     // второй раз в бейдже возврата она не нужна.
                     const refundSlot = single ? null : failedSlot;
+                    // One status per sale, one colour: the strip on the left
+                    // and the pill under the amount say the same thing.
+                    const outcome = saleOutcome(sale);
+                    const tone = {
+                      ok: { strip: 'border-l-emerald-400', pill: 'bg-emerald-50 text-emerald-700', icon: CheckCircle2, text: t('sale_ok') },
+                      partial: { strip: 'border-l-rose-500', pill: 'bg-rose-50 text-rose-600', icon: AlertTriangle, text: `${refundSlot ? `${refundSlot} · ` : ''}${t('refund_due')}: ${outcome.refund} ${currencyForMachine(sale.micromarket_id)}` },
+                      failed: { strip: 'border-l-rose-500', pill: 'bg-rose-50 text-rose-600', icon: XCircle, text: `${refundSlot ? `${refundSlot} · ` : ''}${t('refund_due')}: ${outcome.refund} ${currencyForMachine(sale.micromarket_id)}` },
+                      pending: { strip: 'border-l-amber-400', pill: 'bg-amber-50 text-amber-700', icon: Loader2, text: t('door_pending') },
+                      progress: { strip: 'border-l-amber-400', pill: 'bg-amber-50 text-amber-700', icon: AlertTriangle, text: t('sale_in_progress') },
+                      restored: { strip: 'border-l-slate-300', pill: 'bg-slate-100 text-slate-500', icon: CheckCircle2, text: t('stock_restored') },
+                    }[outcome.state];
+                    const StatusIcon = tone.icon;
+                    const doorBad = sale.door_status === 'failed' || sale.door_status === 'no_ack';
+                    const showAll = openSales.has(sale.id);
+                    // Long receipts fold: the first two lines and every failed
+                    // line stay visible, the rest behind "+N more".
+                    const visibleItems = showAll
+                      ? items
+                      : items.filter((it, i) => i < 2 || it.dispensed === false);
+                    const hiddenCount = items.length - visibleItems.length;
                     return (
-                    <div key={sale.id} className="bg-white border-2 border-slate-200 rounded-2xl p-4 md:p-6 hover:border-primary/40 hover:shadow-md transition-all">
-                      <div className="flex flex-wrap justify-between items-start gap-4">
-                        <div className="flex items-center gap-4 min-w-0 flex-1">
-                          <div className="w-10 h-10 bg-primary/10 text-primary rounded-xl flex items-center justify-center shrink-0">
-                            <Receipt size={20} />
-                          </div>
+                    <div key={sale.id} className={`bg-white border border-slate-200 border-l-4 ${tone.strip} rounded-2xl p-3 md:p-4 hover:shadow-md transition-all`}>
+                      <div className="flex justify-between items-start gap-3">
+                        <div className="flex items-center gap-3 min-w-0 flex-1">
                           <div className="min-w-0">
                             {/* Заголовок записи — товар, а не аппарат: чтобы
                                 узнать, что купили, раньше приходилось
@@ -3180,10 +3198,6 @@ export default function Admin() {
                                 добивал и без того мелкий шрифт. */}
                             <div className="flex flex-wrap items-center gap-x-2 text-xs font-bold text-slate-600 tabular-nums">
                               <span className="truncate">{sale.micromarkets?.name || `${t('apparatus_no')}${sale.micromarket_id}`}</span>
-                              <span className="inline-flex items-center gap-1">
-                                <Calendar size={13} className="shrink-0" />
-                                {formatSaleDate(sale.created_at, i18n.language)}
-                              </span>
                               <span className="text-slate-400">· {totalUnits} {t('items_short')}</span>
                               {/* Номер платежа здесь, а не отдельным подвалом:
                                   раскрытия больше нет, и целый блок с рамкой
@@ -3212,34 +3226,20 @@ export default function Admin() {
                                 money is taken, the door opens after. failed /
                                 no_ack mean "paid, door stayed shut" — the
                                 owner refunds by hand (no refund API at LV). */}
-                            {sale.door_status && sale.door_status !== 'opened' && (
-                              <div className="mt-1 flex flex-wrap items-center gap-2">
-                                <span
-                                  title={sale.door_status === 'pending' ? undefined : t('door_failed_hint')}
-                                  className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-black uppercase tracking-wider ${
-                                    sale.door_status === 'pending' ? 'bg-amber-50 text-amber-700' : 'bg-rose-50 text-rose-600'
-                                  }`}
-                                >
-                                  <AlertTriangle size={11} />
+                            {/* Realtime boards: the sale is written when the
+                                money is taken, the door opens after. failed /
+                                no_ack mean "paid, door stayed shut" — the
+                                owner refunds by hand (no refund API at LV). */}
+                            {doorBad && (
+                              <div className="mt-1.5 flex flex-wrap items-center gap-2">
+                                <span className="text-[11px] font-bold text-rose-500" title={t('door_failed_hint')}>
                                   {t(`door_${sale.door_status}`)}
                                 </span>
-                                {sale.door_status !== 'pending' && !sale.stock_restored_at && (
-                                  <button
-                                    onClick={() => restoreSaleStock(sale)}
-                                    className="px-2 py-0.5 rounded-full border border-slate-300 text-[10px] font-black uppercase tracking-wider text-slate-600 hover:border-primary hover:text-primary"
-                                  >
+                                {!sale.stock_restored_at && (
+                                  <Button size="sm" variant="secondary" onClick={() => restoreSaleStock(sale)}>
                                     {t('restore_stock')}
-                                  </button>
+                                  </Button>
                                 )}
-                                {sale.stock_restored_at && (
-                                  <span className="text-[10px] font-bold text-slate-400">{t('stock_restored')}</span>
-                                )}
-                              </div>
-                            )}
-                            {inProgress && (
-                              <div className="mt-1 inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-amber-50 text-amber-700 text-[10px] font-black uppercase tracking-wider">
-                                <AlertTriangle size={11} />
-                                {t('sale_in_progress')}
                               </div>
                             )}
                           </div>
@@ -3265,34 +3265,31 @@ export default function Admin() {
                             </div>
                           )}
                           <div className="text-right">
-                            <div className="text-xl font-black text-primary">{sale.amount} {currencyForMachine(sale.micromarket_id)}</div>
-                            {failedItems.length > 0 && (
-                              <div className="mt-1 inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-rose-50 text-rose-600 text-[10px] font-black uppercase tracking-wider">
-                                <AlertTriangle size={11} />
-                                {refundSlot && (
-                                  <span
-                                    className="tabular-nums"
-                                    title={market?.kind === 'micromarket_screen' ? t('cell_number') : t('slot_in_machine')}
-                                  >
-                                    {refundSlot} ·
-                                  </span>
-                                )}
-                                {t('refund_due')}: {refundTotal} {currencyForMachine(sale.micromarket_id)}
-                              </div>
-                            )}
+                            <div className={`text-xl font-black tabular-nums ${outcome.state === 'failed' ? 'text-slate-400 line-through' : 'text-slate-900'}`}>
+                              {sale.amount} <span className="text-sm">{currencyForMachine(sale.micromarket_id)}</span>
+                            </div>
+                            <div className="text-[11px] font-bold text-slate-500 tabular-nums whitespace-nowrap">
+                              {formatSaleDate(sale.created_at, i18n.language)}
+                            </div>
                           </div>
                         </div>
                       </div>
+                      {outcome.state !== 'ok' && (
+                        <div className={`mt-2 inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-bold ${tone.pill}`}>
+                          <StatusIcon size={12} className={outcome.state === 'pending' ? 'animate-spin' : ''} />
+                          {tone.text}
+                        </div>
+                      )}
 
                       {!single && items.length > 0 && (
-                      <div className="space-y-3 mt-4 pt-3 border-t border-slate-100">
+                      <div className="space-y-2.5 mt-3 pt-3 border-t border-slate-100">
                         {/* Здесь позиции НЕ группируются, в отличие от
                             заголовка, и это осознанно: вид диагностический, а
                             две строки одного товара могут иметь разные
                             result_code — одна выдалась, вторая застряла.
                             Склейка в «Gorilla ×2» уничтожила бы ровно то, ради
                             чего список и нужен. */}
-                        {items.map(item => {
+                        {visibleItems.map(item => {
                           const failed = item.dispensed === false;
                           const slot = saleSlotLabel(
                             item.inventory?.motor_id,
@@ -3342,6 +3339,19 @@ export default function Admin() {
                           </div>
                           );
                         })}
+                        {(hiddenCount > 0 || (showAll && items.length > 2)) && (
+                          <button
+                            type="button"
+                            onClick={() => setOpenSales((prev) => {
+                              const next = new Set(prev);
+                              if (next.has(sale.id)) next.delete(sale.id); else next.add(sale.id);
+                              return next;
+                            })}
+                            className="text-xs font-bold text-primary hover:underline min-h-8"
+                          >
+                            {showAll ? t('show_less') : t('show_more_n', { n: hiddenCount })}
+                          </button>
+                        )}
                       </div>
                       )}
                     </div>
