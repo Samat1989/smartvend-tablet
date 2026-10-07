@@ -1917,8 +1917,10 @@ export default function Admin() {
   // device list. Listen only: the moment of leaving is stamped by the owner's
   // panel and the board's own beat, not from here.
   const [adminRtOnline, setAdminRtOnline] = useState({});
+  // Own machines are already listened to above: a second channel with the
+  // same name would be the same object and be closed by the other cleanup.
   const adminRtKey = (isSuperadmin && activeTab === 'users' ? (adminDevices ?? []) : [])
-    .filter((m) => m.rt?.topic && m.rt?.device_id)
+    .filter((m) => m.rt?.topic && m.rt?.device_id && !markets.some((x) => x.rt?.topic === m.rt.topic))
     .map((m) => `${m.id}:${m.rt.topic}:${m.rt.device_id}`)
     .sort()
     .join(',');
@@ -2548,7 +2550,7 @@ export default function Admin() {
               currentUserId={session?.user?.id}
               onRefresh={() => { fetchUsers(); fetchAdminDevices(); }}
               devices={adminDevices}
-              rtOnline={adminRtOnline}
+              rtOnline={{ ...adminRtOnline, ...rtOnline }}
               devicesLoading={devicesLoading}
               onTransfer={(m) => setTransferTarget(m)}
               onDelete={(machid) => deleteDevice(machid)}
