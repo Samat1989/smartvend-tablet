@@ -45,7 +45,29 @@
   
   /* Shadows */
   --shadow-kinetic: 0 8px 24px rgba(47, 46, 50, 0.06);
+
+  /* Admin panel (MicroVend). Separate from `primary`, which the storefront
+     still uses for its graphite look. */
+  --color-brand: #2563eb;
+  --color-brand-dark: #1d4ed8;
+  --color-brand-soft: #dbeafe;
+  --color-canvas: #eef2f7;
+  --color-ink: #0f172a;
+  --color-sidebar: #0f1b2d;
+  --color-sidebar-raised: #17253b;
+  --color-sidebar-active: #1c2b45;
+  --color-sidebar-line: #24324b;
+  --shadow-card: 0 1px 3px rgba(15, 23, 42, 0.06);
 }
+
+/* The panel reads in Inter throughout, headings included; the base rule
+   below puts Lexend on every h1–h4 for the storefront. */
+.admin-ui,
+.admin-ui h1, .admin-ui h2, .admin-ui h3, .admin-ui h4 {
+  font-family: 'Inter', sans-serif;
+  letter-spacing: normal;
+}
+.admin-ui h1 { letter-spacing: -0.02em; }
 
 @utility product-card-shadow {
   box-shadow: 0 8px 24px rgba(47, 46, 50, 0.06);
@@ -83,6 +105,8 @@
     letter-spacing: -0.04em;
   }
 }
+
+html { scrollbar-gutter: stable; }
 
 .no-scrollbar::-webkit-scrollbar {
   display: none;

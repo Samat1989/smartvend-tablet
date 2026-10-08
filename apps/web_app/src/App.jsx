@@ -31,7 +31,7 @@ function FullScreenNotice({ icon: Icon, children }) {
       <div className="w-20 h-20 rounded-full bg-primary/10 flex items-center justify-center mb-6">
         <Icon className="text-primary" size={36} />
       </div>
-      <h1 className="text-primary font-lexend font-black text-2xl mb-3">Micromart</h1>
+      <h1 className="text-primary font-lexend font-black text-2xl mb-3">MicroVend</h1>
       {children}
     </div>
   );
@@ -397,7 +397,7 @@ function App() {
             <ShoppingBag className="text-primary" size={20} />
           </div>
           <div className="flex flex-col">
-            <h1 className="text-primary font-lexend font-black text-xl md:text-2xl tracking-tight leading-tight">Micromart</h1>
+            <h1 className="text-primary font-lexend font-black text-xl md:text-2xl tracking-tight leading-tight">MicroVend</h1>
             <span className="text-[10px] font-lexend font-bold opacity-50 uppercase tracking-wider">
               {t('apparatus_no', { defaultValue: 'Аппарат №' })}{currentMarketId || '...'}
             </span>

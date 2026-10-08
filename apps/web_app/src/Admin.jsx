@@ -1,1193 +1,57 @@
-import React, { useState, useEffect, useRef, Fragment } from 'react';
-import { supabase } from './supabaseClient';
-import { Image, Upload, Download, Plus, Minus, Save, Trash2, X, Loader2, Pencil, Receipt, Calendar, ShoppingBag, History, Languages, CheckCircle2, XCircle, AlertTriangle, ChevronRight, ChevronLeft, ChevronDown, Package, QrCode, KeyRound, Unlink as LinkOff, HelpCircle, Link2, Signal, SignalHigh, SignalMedium, SignalLow, SignalZero, Wifi, WifiHigh, WifiLow, WifiZero, Users, Tag, Settings, RefreshCw, LogOut } from 'lucide-react';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { LayoutGrid, LineChart, ShieldCheck, Tag } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
+import { supabase } from './supabaseClient';
 import './i18n';
-import Cropper from 'react-easy-crop';
-import QRCode from 'qrcode';
 
-// Longest side handed to the cropper. Canvas stops rendering somewhere around
-// 16.7 Mpx on Safari/iOS and phones shoot well past that, so anything bigger
-// is downscaled first. The crop is re-encoded to 600px anyway.
-const MAX_SOURCE_PX = 2000;
-const MAX_SOURCE_BYTES = 40 * 1024 * 1024;
+import Shell from './admin/layout/Shell';
+import Login from './admin/layout/Login';
+import { ConfirmDialog, Toast } from './admin/ui/Feedback';
+import SalesTab from './admin/tabs/SalesTab';
+import MachinesTab from './admin/tabs/MachinesTab';
+import MachineDetail from './admin/tabs/MachineDetail';
+import CatalogTab from './admin/tabs/CatalogTab';
+import AdminTab from './admin/tabs/AdminTab';
+import QrModal from './admin/modals/QrModal';
+import MachineSettingsModal from './admin/modals/MachineSettingsModal';
+import PhotoLibraryModal from './admin/modals/PhotoLibraryModal';
+import {
+  AddDeviceModal, CatalogEditModal, CatalogPickerModal, CategoryManagerModal, CropperModal,
+  InventoryEditModal, NewUserModal, PasswordModal, RenameModal, TransferModal,
+} from './admin/modals/Forms';
+import { deleteRow, isNetworkFailure, patchRow } from './admin/lib/net';
+import { CELL_MAX, CELL_MIN, currencyOf, machineName, nextFreeCellNumber, parseLayout } from './admin/lib/machines';
+import { LIBRARY_BASE, getCroppedImg, prepareForCrop } from './admin/lib/photo';
 
-// What the file dialog offers. `image/*` alone let through HEIC and TIFF,
-// which the browser then refused to decode; the explicit list puts the
-// formats that work first and keeps `image/*` as the fallback for Android's
-// file picker, which narrows badly on a strict list.
-const PHOTO_ACCEPT =
-  'image/jpeg,image/png,image/webp,image/avif,image/gif,image/heic,image/heif,image/*';
-
-// The shared photo bank, published by scripts/import_photo_library.py. Names
-// are the md5 of the file, so these URLs are immutable and cache for a year:
-//   <base>/<md5>.webp      600px, what a shopper sees
-//   <base>/t/<md5>.webp     200px, the grid below
-//   <base>/index.json       [{ n: name, f: md5 }, ...]
-const LIBRARY_BASE =
-  `${import.meta.env.VITE_SUPABASE_URL}/storage/v1/object/public/product-images/library`;
-
-// How many tiles are added per page. The whole bank is ~3000 entries and
-// rendering them at once would mean ~3000 image requests; the index itself is
-// only names, so searching stays instant regardless.
-const LIBRARY_PAGE = 60;
-
-// Build a minimal one-page A4 PDF Blob embedding `canvas` as a JPEG image.
-// Dependency-free (no jsPDF) — bundling jsPDF produced an unusable constructor
-// in the Vercel/Node production build, so we emit the PDF bytes ourselves.
-function buildPdfBlobFromCanvas(canvas) {
-  const jpegB64 = canvas.toDataURL('image/jpeg', 0.92).split(',')[1];
-  const bin = atob(jpegB64);
-  const jpeg = new Uint8Array(bin.length);
-  for (let i = 0; i < bin.length; i++) jpeg[i] = bin.charCodeAt(i);
-
-  const W = canvas.width, H = canvas.height;
-  const CM = 28.3465; // points per cm
-  const pageW = 7 * CM;          // 7cm wide
-  const pageH = pageW * (H / W); // height follows the canvas — no empty bottom
-  const drawW = pageW;
-  const drawH = pageH;
-  const x = 0;
-  const y = 0;
-  const content = `q\n${drawW.toFixed(2)} 0 0 ${drawH.toFixed(2)} ${x.toFixed(2)} ${y.toFixed(2)} cm\n/Im0 Do\nQ\n`;
-
-  const enc = new TextEncoder();
-  const parts = [];
-  const offsets = [];
-  let length = 0;
-  const push = (u8) => { parts.push(u8); length += u8.length; };
-  const pushStr = (s) => push(enc.encode(s));
-  const addObj = (fn) => { offsets.push(length); fn(); };
-
-  pushStr('%PDF-1.3\n');
-  addObj(() => pushStr('1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n'));
-  addObj(() => pushStr('2 0 obj\n<< /Type /Pages /Kids [3 0 R] /Count 1 >>\nendobj\n'));
-  addObj(() => pushStr(`3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ${pageW} ${pageH}] /Resources << /XObject << /Im0 4 0 R >> >> /Contents 5 0 R >>\nendobj\n`));
-  addObj(() => {
-    pushStr(`4 0 obj\n<< /Type /XObject /Subtype /Image /Width ${W} /Height ${H} /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode /Length ${jpeg.length} >>\nstream\n`);
-    push(jpeg);
-    pushStr('\nendstream\nendobj\n');
-  });
-  const contentBytes = enc.encode(content);
-  addObj(() => {
-    pushStr(`5 0 obj\n<< /Length ${contentBytes.length} >>\nstream\n`);
-    push(contentBytes);
-    pushStr('\nendstream\nendobj\n');
-  });
-
-  const xrefStart = length;
-  let xref = 'xref\n0 6\n0000000000 65535 f \n';
-  for (const off of offsets) xref += String(off).padStart(10, '0') + ' 00000 n \n';
-  pushStr(xref);
-  pushStr(`trailer\n<< /Size 6 /Root 1 0 R >>\nstartxref\n${xrefStart}\n%%EOF`);
-
-  const out = new Uint8Array(length);
-  let pos = 0;
-  for (const p of parts) { out.set(p, pos); pos += p.length; }
-  return new Blob([out], { type: 'application/pdf' });
-}
-
-// How many most-recent sales to load (avoid pulling the whole history).
-const SALES_PAGE_SIZE = 10;
-
-// Base URL the QR points at — the customer storefront. Set VITE_STOREFRONT_URL
-// to the deployed storefront origin; falls back to the current origin.
-const STOREFRONT_BASE = import.meta.env.VITE_STOREFRONT_URL || (typeof window !== 'undefined' ? window.location.origin : '');
-
-// Ответ от базы или запрос, который до неё не доехал?
-//
-// postgrest-js ловит упавший fetch сам и возвращает его как обычную ошибку
-// PostgREST — только без HTTP-статуса и с пустым `code`, а в message кладёт имя
-// исходной ошибки. В Chrome это читается ровно как "TypeError: Failed to fetch",
-// и именно эта строка уезжала оператору в тост вместо чего-то осмысленного.
-//
-// Любая ошибка с `code` — это ответ Postgres (нарушен constraint, не прошла
-// RLS): её повторять бессмысленно, сервер уже всё решил. Отличаем одно от
-// другого здесь, в одном месте.
-function isNetworkFailure(err) {
-  if (!err) return false;
-  if (err.code) return false;              // настоящий ответ PostgREST/Postgres
-  if (err.status && err.status !== 0) return false;
-  return /TypeError|FetchError|Failed to fetch|Load failed|NetworkError|network request failed/i
-    .test(`${err.name || ''} ${err.message || ''}`);
-}
-
-/**
- * Правка строки: PATCH, а если он до сервера не доехал — то же тело POST-ом.
- *
- * Зачем. У одного из операторов добавление товара проходило (29 строк
- * в products за один день), а сохранение правок падало с
- * "TypeError: Failed to fetch" — то есть ответа не было вовсе. В базе это
- * видно без всяких логов: у всех 29 строк updated_at равен created_at, при
- * том что у полутора десятков других владельцев правки в те же минуты
- * ложились нормально. Значит сервер здоров, а до него не доходит конкретно
- * PATCH: разница между работающим insert() и падающим update() только в
- * методе. PATCH (и его CORS-preflight) режут корпоративные прокси,
- * антивирусы с проверкой HTTPS и часть расширений браузера; POST пускают все.
- *
- * upsert бьётся в первичный ключ, то есть уходит ровно в ту же строку.
- * `fullRow` — полный набор колонок на случай, если строку успели удалить и
- * upsert окажется вставкой: без него в каталоге завёлся бы безымянный призрак.
- * Он же несёт owner_id / micromarket_id, которые при upsert обязательны —
- * RLS проверяет тогда и INSERT-политику, а она требует своего владельца.
- *
- * Его можно и не передавать — тогда вставка заведомо не пройдёт RLS, и это
- * ровно то, что нужно там, где призрак недопустим (см. renameMarket).
- *
- * INSERT здесь намеренно не повторяется нигде: POST мог дойти и потерять
- * только ответ, и второй заход создал бы дубль.
- */
-async function patchRow(table, id, patch, fullRow) {
-  let { error } = await supabase.from(table).update(patch).eq('id', id);
-  if (isNetworkFailure(error)) {
-    console.warn(`PATCH ${table} не дошёл, повтор через upsert:`, error.message);
-    // created_at/updated_at выкидываем: их ведёт база, и слать своё значение
-    // туда, где вызывающий просто передал строку из списка, — только портить.
-    const row = { ...fullRow };
-    delete row.created_at;
-    delete row.updated_at;
-    ({ error } = await supabase.from(table).upsert({ ...row, ...patch, id }));
-  }
-  return error;
-}
-
-/**
- * Удаление строки: DELETE, а если он до сервера не доехал — та же работа
- * через RPC, то есть POST-ом на /rest/v1/rpc/<rpcName>.
- *
- * Тот же диагноз, что и у patchRow(), только лечится иначе: у PostgREST
- * удаление — это всегда метод DELETE, подменить его на POST на клиенте
- * нечем. Поэтому в базе лежат три security invoker функции
- * (supabase/migrations/20260921120000_delete_rpcs_for_blocked_delete_method.sql),
- * которые делают ровно тот же delete под теми же RLS-политиками.
- *
- * Возвращает количество удалённых строк — как `.select('id')` у обычного
- * DELETE. Ноль значит «строку не отдала RLS»: PostgREST на удаление без
- * прав отвечает не ошибкой, а пустым результатом, и без этой цифры панель
- * бодро рапортовала бы об успехе.
- */
-async function deleteRow(table, id, rpcName) {
-  const { data, error } = await supabase.from(table).delete().eq('id', id).select('id');
-  if (!isNetworkFailure(error)) return { error, deleted: data?.length ?? 0 };
-
-  console.warn(`DELETE ${table} не дошёл, повтор через RPC ${rpcName}:`, error.message);
-  const { data: count, error: rpcError } = await supabase.rpc(rpcName, { p_id: id });
-  return { error: rpcError, deleted: rpcError ? 0 : (count ?? 0) };
-}
-
-// Build + download a printable PDF with the machine's QR (encodes
-// <storefront>/?marketId=<id>). Rendered via canvas so Cyrillic text works
-// (jsPDF's built-in fonts don't support it).
-async function buildMarketQrPdf(market, qrDataUrl, t) {
-  const url = `${STOREFRONT_BASE}/micromarket?t=${market.qr_token}`;
-  if (!qrDataUrl) qrDataUrl = await QRCode.toDataURL(url, { width: 900, margin: 1, errorCorrectionLevel: 'M' });
-
-  // Canvas aspect = 7:15 to match the printed label (7cm wide × 15cm tall).
-  // 100 px per cm. QR is kept square so it scans reliably.
-  // 7cm wide; the height is trimmed to the content (no empty bottom). QR stays
-  // square so it scans. 100 px per cm.
-  const canvas = document.createElement('canvas');
-  canvas.width = 700;
-  canvas.height = 920;
-  const ctx = canvas.getContext('2d');
-  ctx.fillStyle = '#ffffff';
-  ctx.fillRect(0, 0, canvas.width, canvas.height);
-  ctx.textAlign = 'center';
-  const cx = canvas.width / 2;
-
-  ctx.fillStyle = '#111827';
-  ctx.font = 'bold 42px sans-serif';
-  ctx.fillText(`${t('apparatus_no')}${market.id}`, cx, 72);
-
-  // NB: `Image` is imported from lucide-react in this file, so use the global
-  // browser constructor explicitly (new Image() would hit the lucide icon).
-  const img = new window.Image();
-  await new Promise((resolve, reject) => {
-    img.onload = resolve;
-    img.onerror = reject;
-    img.src = qrDataUrl;
-  });
-  const qrSize = 620; // ~6.2 cm square
-  ctx.drawImage(img, (canvas.width - qrSize) / 2, 110, qrSize, qrSize);
-
-  ctx.fillStyle = '#111827';
-  ctx.font = 'bold 42px sans-serif';
-  ctx.fillText(t('qr_scan_to'), cx, 800);
-  ctx.fillText(t('qr_to_buy'), cx, 850);
-  ctx.fillStyle = '#9ca3af';
-  ctx.font = '20px sans-serif';
-  ctx.fillText(url, cx, 895);
-
-  return buildPdfBlobFromCanvas(canvas);
-}
-
-// Modal that previews a machine's QR (links to the storefront on this same
-// Vercel deployment) with a button to download it as a printable PDF.
-function QrModal({ market, onClose }) {
-  const { t } = useTranslation();
-  const [qrSrc, setQrSrc] = useState(null);
-  const [pdfUrl, setPdfUrl] = useState(null);
-  const [pdfErr, setPdfErr] = useState(null);
-  const url = `${STOREFRONT_BASE}/micromarket?t=${market.qr_token}`;
-  useEffect(() => {
-    let alive = true;
-    let createdUrl = null;
-    (async () => {
-      const qr = await QRCode.toDataURL(url, { width: 600, margin: 1, errorCorrectionLevel: 'M' });
-      if (!alive) return;
-      setQrSrc(qr);
-      // Pre-build the PDF blob now (not on click) so the download is a plain
-      // anchor click — avoids browsers blocking a download triggered after await.
-      const blob = await buildMarketQrPdf(market, qr, t);
-      if (!alive) return;
-      createdUrl = URL.createObjectURL(blob);
-      setPdfUrl(createdUrl);
-    })().catch((e) => { console.error('[QrModal] build failed', e); if (alive) setPdfErr(String((e && e.message) || e)); });
-    return () => { alive = false; if (createdUrl) URL.revokeObjectURL(createdUrl); };
-  }, [url, market]);
-
-  return (
-    <div className="fixed inset-0 z-[60] bg-black/50 flex items-center justify-center p-4" onClick={onClose}>
-      <div className="bg-white rounded-3xl p-6 w-full max-w-sm shadow-2xl" onClick={(e) => e.stopPropagation()}>
-        <div className="flex items-center justify-between mb-4">
-          <h3 className="text-lg font-black text-slate-900">{t('qr_machine')}</h3>
-          <IconButton icon={X} label={t('close')} tone="plain" onClick={onClose} />
-        </div>
-        <div className="text-center">
-          <div className="font-bold text-slate-900">{market.name || `${t('apparatus_no')}${market.id}`}</div>
-          <div className="text-[11px] font-bold text-slate-500 uppercase tracking-widest mb-4">{t('apparatus_no')}{market.id}</div>
-          <div className="bg-white border-2 border-slate-200 rounded-2xl p-4 inline-block">
-            {qrSrc ? (
-              <img src={qrSrc} alt="QR" className="w-56 h-56" />
-            ) : (
-              <div className="w-56 h-56 flex items-center justify-center"><Loader2 className="animate-spin text-slate-300" size={32} /></div>
-            )}
-          </div>
-          <a href={url} target="_blank" rel="noreferrer" className="mt-3 block text-[11px] text-slate-400 hover:text-slate-600 break-all">{url}</a>
-        </div>
-        {pdfUrl ? (
-          <a
-            href={pdfUrl}
-            download={`qr-apparat-${market.id}.pdf`}
-            className="mt-5 w-full flex items-center justify-center gap-2 bg-slate-900 text-white py-3 rounded-xl font-bold hover:bg-slate-700 transition-all"
-          >
-            <Download size={18} /> {t('download_qr_pdf')}
-          </a>
-        ) : pdfErr ? (
-          <div className="mt-5 w-full text-center bg-rose-50 border border-rose-200 text-rose-700 py-3 px-3 rounded-xl text-xs font-bold break-words">
-            {t('pdf_error')}: {pdfErr}
-          </div>
-        ) : (
-          <Button
-            variant="secondary"
-            block className="mt-5"
-            loading={true}
-            disabled
-          >
-            {t('preparing')}
-          </Button>
-        )}
-      </div>
-    </div>
-  );
-}
-
-// Привязка платы на Realtime-прошивке (firmware/esp-rt). Владелец получает
-// одноразовый код на 30 минут и вводит его на плате вместе с номером аппарата;
-// плата обменивает код на свой канал и ключ подписи (RPC device_pair). Новая
-// привязка выдаёт новые канал и ключ, так что прежняя плата аппарата глохнет.
-// Settings of one machine with a lock board (gear in the machine list): board
-// status, open time, pairing with step-by-step hints, firmware check for the
-// superadmin, and unpairing set apart at the bottom. `market` is the live row,
-// so a board that pairs while the dialog is open shows up here by itself.
-function MachineSettingsModal({ market, rtLive, rtState, onClose, onUnpair, onRefresh, onCheckUpdate }) {
-  const { t, i18n } = useTranslation();
-  const paired = !!market.rt;
-  const [busy, setBusy] = useState(false);
-  // Open time of the machine (micromarkets.open_seconds): one number for paid
-  // orders and service opens, sent to the board in every signed command. The
-  // lock only latches shut when the door's reed switch sees its magnet, so this
-  // is the window to pull the door open, not how long it stays unlocked.
-  const [openSec, setOpenSec] = useState(String(market.open_seconds ?? 20));
-  const [savingSec, setSavingSec] = useState(false);
-  const [secMsg, setSecMsg] = useState(null); // {ok, text}
-  const [code, setCode] = useState(null); // {code, expires_at}
-  const [error, setError] = useState(null);
-  const [now, setNow] = useState(Date.now());
-  const [otaBusy, setOtaBusy] = useState(false);
-  const [otaMsg, setOtaMsg] = useState(null); // {ok, text}
-  const [repair, setRepair] = useState(false); // re-pair section of a paired board unfolded
-  const pairedAt = market.rt?.paired_at;
-
-  async function checkUpdate() {
-    setOtaBusy(true);
-    setOtaMsg(null);
-    setOtaMsg(await onCheckUpdate());
-    setOtaBusy(false);
-  }
-
-  useEffect(() => {
-    if (!code) return undefined;
-    const id = setInterval(() => setNow(Date.now()), 1000);
-    return () => clearInterval(id);
-  }, [code]);
-
-  // While a code is on screen, look for the board every 5 s: the moment it
-  // pairs, the status at the top turns green without closing the dialog.
-  useEffect(() => {
-    if (!code) return undefined;
-    const id = setInterval(() => onRefresh?.(), 5000);
-    return () => clearInterval(id);
-  }, [code]);
-
-  // A new pairing landed: the code is spent.
-  const firstPairedAt = useRef(pairedAt);
-  useEffect(() => {
-    if (pairedAt && pairedAt !== firstPairedAt.current) {
-      firstPairedAt.current = pairedAt;
-      setCode(null);
-      setRepair(false);
-    }
-  }, [pairedAt]);
-
-  async function getCode() {
-    setBusy(true);
-    setError(null);
-    const { data, error: err } = await supabase.rpc('create_pair_code', { p_machid: market.id });
-    setBusy(false);
-    if (err) setError(err.message);
-    else setCode(data);
-  }
-
-  async function saveOpenSeconds(value = openSec) {
-    const n = parseInt(value, 10);
-    if (!Number.isInteger(n) || n < 1 || n > 600) {
-      setSecMsg({ ok: false, text: t('open_seconds_range') });
-      return;
-    }
-    setSavingSec(true);
-    setSecMsg(null);
-    const { error: err } = await supabase.rpc('set_open_seconds', { p_machid: market.id, p_seconds: n });
-    setSavingSec(false);
-    if (err) { setSecMsg({ ok: false, text: err.message }); return; }
-    setOpenSec(String(n));
-    setSecMsg({ ok: true, text: t('open_seconds_saved') });
-    onRefresh?.();
-  }
-
-  const left = code ? Math.max(0, Math.floor((new Date(code.expires_at).getTime() - now) / 1000)) : 0;
-  const mmss = `${Math.floor(left / 60)}:${String(left % 60).padStart(2, '0')}`;
-  const section = 'mt-5 pt-5 border-t border-slate-200';
-  const head = 'text-[11px] font-black text-slate-500 uppercase tracking-widest mb-2';
-
-  const pairing = (
-    <>
-      <ol className="space-y-2 text-xs text-slate-600 leading-relaxed">
-        {[1, 2, 3, 4].map((i) => (
-          <li key={i} className="flex gap-2">
-            <span className="shrink-0 w-5 h-5 rounded-full bg-slate-900 text-white text-[11px] font-black flex items-center justify-center">{i}</span>
-            <span>{t(`settings_step_${i}`)}</span>
-          </li>
-        ))}
-      </ol>
-      {code && left > 0 && (
-        <div className="mt-4 text-center rounded-2xl bg-slate-50 border border-slate-200 py-3">
-          <div className="text-[11px] font-bold text-slate-500 uppercase tracking-widest">{t('pair_board_code')}</div>
-          <div className="text-4xl font-black tracking-[0.3em] text-slate-900 tabular-nums select-all">{code.code}</div>
-          <div className="text-xs font-bold text-slate-500 tabular-nums">{t('pair_board_expires')} {mmss}</div>
-          <div className="mt-1 text-[11px] font-bold text-slate-400 inline-flex items-center gap-1.5">
-            <Loader2 size={12} className="animate-spin" /> {t('settings_waiting_board')}
-          </div>
-        </div>
-      )}
-      {code && left === 0 && (
-        <div className="mt-4 rounded-xl px-3 py-3 bg-amber-50 border border-amber-200 text-amber-800 text-xs font-bold">
-          {t('pair_board_expired')}
-        </div>
-      )}
-      {error && (
-        <div className="mt-4 rounded-xl px-3 py-3 bg-rose-50 border border-rose-200 text-rose-700 text-xs font-bold break-words">
-          {error}
-        </div>
-      )}
-      <Button variant="dark" block className="mt-4" loading={busy} icon={Link2} onClick={getCode}>
-        {code ? t('pair_board_new_code') : t('pair_board_get_code')}
-      </Button>
-    </>
-  );
-
-  return (
-    <div className="fixed inset-0 z-[60] bg-black/50 flex items-end sm:items-center justify-center sm:p-4" onClick={onClose}>
-      <div
-        className="bg-white rounded-t-3xl sm:rounded-3xl p-5 sm:p-6 w-full sm:max-w-md shadow-2xl max-h-[92vh] overflow-y-auto"
-        onClick={(e) => e.stopPropagation()}
-      >
-        <div className="flex items-start justify-between gap-3">
-          <div className="min-w-0">
-            <h3 className="text-lg font-black text-slate-900">{t('machine_settings')}</h3>
-            <div className="text-sm font-bold text-slate-700 truncate">
-              {market.name || `${t('apparatus_no')}${market.id}`}
-              <span className="text-slate-400 font-medium"> · {t('apparatus_no')}{market.id}</span>
-            </div>
-          </div>
-          <IconButton icon={X} label={t('close')} tone="plain" onClick={onClose} />
-        </div>
-
-        {/* 1. Плата */}
-        <div className="mt-4 rounded-2xl border border-slate-200 bg-slate-50 p-3">
-          <div className="flex items-center justify-between gap-2">
-            <span className="text-[11px] font-black text-slate-500 uppercase tracking-widest">{t('settings_board')}</span>
-            {paired
-              ? <BoardLamp rt={rtLive} rtState={rtState} rtRow={market.rt} withLabel />
-              : <span className="text-[11px] font-black uppercase tracking-wider text-amber-600">{t('pair_board_not_paired')}</span>}
-          </div>
-          {paired && (
-            <dl className="mt-2 grid grid-cols-[auto,1fr] gap-x-3 gap-y-1 text-xs">
-              <dt className="text-slate-500">ID</dt>
-              <dd className="font-mono font-bold text-slate-800 truncate">{market.rt.device_id || '—'}</dd>
-              <dt className="text-slate-500">{t('settings_firmware')}</dt>
-              <dd className="font-bold text-slate-800">{market.rt.board_ver || '—'}</dd>
-              <dt className="text-slate-500">{t('adm_paired_at')}</dt>
-              <dd className="font-bold text-slate-800">{pairedAt ? new Date(pairedAt).toLocaleString(i18n.language) : '—'}</dd>
-              {rtLive === false && market.rt.last_seen_at && (
-                <>
-                  <dt className="text-slate-500">{t('status_last_seen')}</dt>
-                  <dd className="font-bold text-slate-800">{new Date(market.rt.last_seen_at).toLocaleString(i18n.language)}</dd>
-                </>
-              )}
-            </dl>
-          )}
-        </div>
-
-        {/* 2. Время открытия */}
-        {paired && (
-          <div className={section}>
-            <div className={head}>{t('open_seconds_label')}</div>
-            <div className="flex gap-2">
-              <input
-                type="number" min="1" max="600" inputMode="numeric"
-                value={openSec}
-                onChange={(e) => { setOpenSec(e.target.value); setSecMsg(null); }}
-                className="w-24 min-h-10 px-3 rounded-xl border border-slate-300 font-bold text-slate-900 tabular-nums"
-              />
-              <Button variant="primary" className="flex-1" loading={savingSec} onClick={() => saveOpenSeconds()}>
-                {t('open_seconds_save')}
-              </Button>
-            </div>
-            <div className="flex gap-1.5 mt-2">
-              {[10, 20, 30, 60].map((v) => (
-                <button
-                  key={v}
-                  type="button"
-                  onClick={() => { setOpenSec(String(v)); saveOpenSeconds(v); }}
-                  className={`flex-1 min-h-9 rounded-lg border text-xs font-bold transition-all ${String(v) === openSec ? 'border-primary bg-primary/5 text-primary' : 'border-slate-200 text-slate-600 hover:border-slate-400'}`}
-                >
-                  {v} {t('adm_sec')}
-                </button>
-              ))}
-            </div>
-            <p className="mt-2 text-[11px] text-slate-500 leading-snug">{t('open_seconds_hint')}</p>
-            {secMsg && (
-              <p className={`mt-1 text-xs font-bold ${secMsg.ok ? 'text-emerald-700' : 'text-rose-600'}`}>{secMsg.text}</p>
-            )}
-          </div>
-        )}
-
-        {/* 3. Привязка */}
-        <div className={section}>
-          {paired && !repair ? (
-            <button
-              type="button"
-              onClick={() => setRepair(true)}
-              className="w-full flex items-center justify-between min-h-10 text-left"
-            >
-              <span>
-                <span className="block text-sm font-bold text-slate-800">{t('settings_repair')}</span>
-                <span className="block text-[11px] text-slate-500">{t('settings_repair_hint')}</span>
-              </span>
-              <ChevronDown size={18} className="text-slate-400 shrink-0" />
-            </button>
-          ) : (
-            <>
-              <div className={head}>{paired ? t('settings_repair') : t('pair_board')}</div>
-              {paired && (
-                <p className="mb-3 rounded-xl bg-amber-50 border border-amber-200 px-3 py-2 text-[11px] font-bold text-amber-800">
-                  {t('settings_repair_warn')}
-                </p>
-              )}
-              {pairing}
-            </>
-          )}
-        </div>
-
-        {/* 4. Обновление прошивки (суперадмин) */}
-        {paired && onCheckUpdate && (
-          <div className={section}>
-            <div className={head}>{t('settings_firmware')}</div>
-            <Button variant="secondary" block loading={otaBusy} icon={Download} onClick={checkUpdate}>
-              {t('ota_check')}
-            </Button>
-            {otaMsg && (
-              <p className={`mt-1 text-xs font-bold ${otaMsg.ok ? 'text-emerald-700' : 'text-rose-600'}`}>{otaMsg.text}</p>
-            )}
-          </div>
-        )}
-
-        {/* 5. Опасная зона */}
-        {paired && (
-          <div className="mt-5 rounded-2xl border border-rose-200 bg-rose-50/40 p-3">
-            <div className="text-[11px] font-black text-rose-600 uppercase tracking-widest mb-1">{t('settings_danger_zone')}</div>
-            <p className="text-[11px] text-slate-600 mb-3 leading-snug">{t('unpair_hint')}</p>
-            <Button variant="danger-outline" block icon={LinkOff} onClick={onUnpair}>
-              {t('pair_board_unpair')}
-            </Button>
-          </div>
-        )}
-      </div>
-    </div>
-  );
-}
-
-// Map an M102 poll result byte → i18n key. The codes are emitted by the
-// vending tablet's `BoardClient.dispense` and persisted to
-// `sales_items.result_code` (see m102_tester migration
-// 20260513120000_sales_items_result_details.sql).
-const RESULT_CODE_I18N = {
-  1: 'result_overload',
-  2: 'result_wire_break',
-  3: 'result_timeout',
-  4: 'result_curtain_err',
-  5: 'result_lock_not_open',
-  10: 'result_microswitch',
+// Machine-readable codes from supabase/functions/device-claim/index.ts →
+// operator-facing text. Anything else falls through to the raw message.
+// (`secret_required` only fires on the function's curl-only `force` path.)
+const DEVICE_CLAIM_ERRORS = {
+  bad_machid: 'device_err_bad_machid',
+  machine_not_found: 'device_err_not_found',
+  secret_mismatch: 'device_err_secret_mismatch',
 };
 
-// Build the default factory 6×6 layout (matches LayoutTemplate.factory6x6
-// on the tablet). Used as a fallback when micromarkets.layout_json is
-// null — newly-paired machines or anything that hasn't run a layout
-// editor on-device yet.
-function buildFactory6x6Layout() {
-  const shelves = [];
-  for (let s = 1; s <= 6; s++) {
-    const slots = [];
-    for (let j = 1; j <= 6; j++) {
-      const motor = (10 - s) * 10 + (10 - j);
-      const n = (s - 1) * 6 + j;
-      slots.push({ label: n.toString().padStart(3, '0'), motorIds: [motor] });
-    }
-    const first = (s - 1) * 6 + 1;
-    const last = s * 6;
-    shelves.push({
-      label: `${first.toString().padStart(3, '0')} — ${last.toString().padStart(3, '0')}`,
-      slots,
-    });
-  }
-  return { shelves };
-}
-
-// Parse layout_json from Supabase. Falls back to factory 6×6 on null,
-// malformed JSON, or empty shelves. Same on-disk shape as the tablet's
-// MachineLayout.encode().
-function parseLayout(rawJson) {
-  if (rawJson == null) return { ...buildFactory6x6Layout(), _source: 'fallback' };
-  try {
-    const obj = typeof rawJson === 'string' ? JSON.parse(rawJson) : rawJson;
-    if (!obj?.shelves || !Array.isArray(obj.shelves) || obj.shelves.length === 0) {
-      return { ...buildFactory6x6Layout(), _source: 'fallback' };
-    }
-    return {
-      _source: 'db',
-      shelves: obj.shelves.map(sh => ({
-        label: sh.label ?? '',
-        slots: (sh.slots ?? []).map(sl => ({
-          label: sl.label ?? '',
-          motorIds: (sl.motorIds ?? []).map(n => Number(n)),
-        })),
-      })),
-    };
-  } catch (_) {
-    return { ...buildFactory6x6Layout(), _source: 'fallback' };
-  }
-}
-
-// Build a Map<motorId, slot> for O(1) lookup of which slot a given
-// motor belongs to. Twin spirals have multiple motorIds → all map to
-// the same slot record. Inventory rows store the primary motor_id, so
-// matching covers the common case + the rare "operator wired the
-// secondary" case.
-function buildSlotByMotor(layout) {
-  const byMotor = new Map();
-  for (const sh of layout.shelves) {
-    for (const sl of sh.slots) {
-      for (const m of sl.motorIds) {
-        byMotor.set(m, sl);
-      }
-    }
-  }
-  return byMotor;
-}
-
-// Translate an M102 motor index into the printed slot label on the
-// cabinet door, using the operator-defined layout when available.
-function motorToSlotLabel(motorId, layout) {
-  if (motorId == null) return null;
-  const id = Number(motorId);
-  if (!Number.isInteger(id)) return null;
-  if (layout) {
-    const byMotor = layout._byMotorCache ?? buildSlotByMotor(layout);
-    if (!layout._byMotorCache) layout._byMotorCache = byMotor;
-    const slot = byMotor.get(id);
-    if (slot) return slot.label;
-  }
-  // Fallback to factory 6×6 formula when caller didn't pass a layout
-  // (e.g. for the inventory list view where we render rows before the
-  // full layout is loaded).
-  if (id < 0 || id > 99) return null;
-  const row = 10 - Math.floor(id / 10);
-  const col = 10 - (id % 10);
-  if (row < 1 || row > 9 || col < 1 || col > 9) return null;
-  const n = (row - 1) * 10 + col;
-  return n.toString().padStart(3, '0');
-}
-
-// Cell numbers on a screen micromarket are always two digits (10..99): the
-// numpad then searches on its own after the second key and needs no «OK», and
-// the number on the shelf sticker is the number the buyer types — no leading
-// zero to explain. Returns the lowest free one, or null when all 90 are taken
-// (the field then stays empty and the operator decides).
-//
-// Pass the machine's WHOLE inventory, not the category-filtered list: a filter
-// would hide part of the taken numbers and this would hand out a duplicate.
-const CELL_MIN = 10;
-const CELL_MAX = 99;
-
-function nextFreeCellNumber(rows, min = CELL_MIN, max = CELL_MAX) {
-  const taken = new Set();
-  for (const r of rows ?? []) {
-    // Explicit null check: Number(null) === 0 would silently take a slot.
-    if (r?.motor_id == null) continue;
-    const n = Number(r.motor_id);
-    if (Number.isInteger(n)) taken.add(n);
-  }
-  for (let n = min; n <= max; n++) if (!taken.has(n)) return n;
-  return null;
-}
-
-// Порядок списка у машины с экраном — по номеру ячейки, как товар стоит на
-// полке. motorToSlotLabel здесь применять нельзя: она переводит номер по
-// вендинговой раскладке, и «15» стало бы «085», а «10» — «?». Позиции без
-// номера уходят в конец: на экране их всё равно нет.
-function byCellNumber(a, b) {
-  const ca = a?.motor_id == null ? null : Number(a.motor_id);
-  const cb = b?.motor_id == null ? null : Number(b.motor_id);
-  if (ca == null && cb == null) return (a.name || '').localeCompare(b.name || '');
-  if (ca == null) return 1;
-  if (cb == null) return -1;
-  return ca - cb;
-}
-
-// Single notification surface for the whole admin — green when something
-// succeeded, red for a rejection or an error, and nothing else. It sits above
-// every overlay on purpose: most warnings are raised while a modal is open
-// (a rejected device, a failed save), and underneath the dialogs the operator
-// would see nothing happen at all. Layer map in this file: 50 edit modal,
-// 60 QR / catalog picker, 100 cropper, 110 dialogs, 120 transfer confirm,
-// 300 toast — keep the toast highest.
-//
-// Rendered on the login screen too, which returns before the main tree, so
-// sign-in failures get the same treatment instead of a system alert().
-function Toast({ toast, onClose }) {
-  if (!toast) return null;
-  const isError = toast.type === 'error';
-  return (
-    <div
-      onClick={onClose}
-      role="alert"
-      className={`fixed bottom-20 sm:bottom-6 left-1/2 -translate-x-1/2 px-5 py-3 rounded-2xl font-bold text-white shadow-2xl z-[300] max-w-[92vw] sm:max-w-md flex items-start gap-2 cursor-pointer animate-in fade-in slide-in-from-bottom-5 ${isError ? 'bg-red-600' : 'bg-emerald-600'}`}
-    >
-      <span className="shrink-0 mt-0.5">
-        {isError ? <AlertTriangle size={16} /> : <CheckCircle2 size={16} />}
-      </span>
-      <span className="text-sm leading-snug">{toast.message}</span>
-    </div>
-  );
-}
-
-// One set of buttons for the whole panel. Before these, 97 buttons were styled
-// inline in a dozen variants; size, radius and colour now come from here.
-// Phones get at least 40 px of touch target.
-const BTN_TONES = {
-  primary: 'bg-primary text-white border-primary hover:opacity-90 shadow-sm shadow-primary/20',
-  dark: 'bg-slate-900 text-white border-slate-900 hover:bg-slate-700',
-  secondary: 'bg-white text-slate-700 border-slate-300 hover:border-primary hover:text-primary',
-  danger: 'bg-rose-600 text-white border-rose-600 hover:bg-rose-700',
-  success: 'bg-emerald-600 text-white border-emerald-600 hover:bg-emerald-700',
-  warning: 'bg-amber-500 text-white border-amber-500 hover:bg-amber-600',
-  'danger-outline': 'bg-white text-rose-600 border-rose-200 hover:bg-rose-50',
-  ghost: 'bg-transparent text-slate-600 border-transparent hover:bg-slate-100 hover:text-slate-900',
-};
-
-function Button({ variant = 'secondary', size = 'md', loading = false, icon: Icon, block = false, className = '', disabled, children, ...rest }) {
-  const sz = size === 'sm'
-    ? 'min-h-9 px-3 text-xs gap-1.5'
-    : 'min-h-10 px-4 text-sm gap-2';
-  return (
-    <button
-      type="button"
-      disabled={disabled || loading}
-      className={`inline-flex items-center justify-center rounded-xl border font-bold whitespace-nowrap transition-all active:scale-[0.98] disabled:opacity-50 disabled:cursor-not-allowed disabled:active:scale-100 ${sz} ${BTN_TONES[variant] ?? BTN_TONES.secondary} ${block ? 'w-full' : ''} ${className}`}
-      {...rest}
-    >
-      {loading ? <Loader2 size={size === 'sm' ? 14 : 16} className="animate-spin shrink-0" /> : Icon && <Icon size={size === 'sm' ? 14 : 16} className="shrink-0" />}
-      {children}
-    </button>
-  );
-}
-
-// Icon-only button: the label is required and becomes the tooltip and the
-// screen-reader name, so no icon is left unexplained.
-function IconButton({ icon: Icon, label, tone = 'default', loading = false, className = '', disabled, ...rest }) {
-  const tones = {
-    default: 'border-slate-300 text-slate-600 hover:text-primary hover:border-primary',
-    danger: 'border-slate-300 text-slate-600 hover:text-rose-600 hover:border-rose-300',
-    success: 'border-emerald-300 text-emerald-600 hover:text-primary hover:border-primary',
-    plain: 'border-transparent text-slate-400 hover:text-slate-700 hover:bg-slate-100',
-  };
-  return (
-    <button
-      type="button"
-      title={label}
-      aria-label={label}
-      disabled={disabled || loading}
-      className={`inline-flex items-center justify-center w-10 h-10 sm:w-9 sm:h-9 shrink-0 rounded-xl border bg-white transition-all disabled:opacity-40 disabled:cursor-not-allowed ${tones[tone] ?? tones.default} ${tone === 'plain' ? 'bg-transparent' : ''} ${className}`}
-      {...rest}
-    >
-      {loading ? <Loader2 size={16} className="animate-spin" /> : <Icon size={16} />}
-    </button>
-  );
-}
-
-// Confirmation for any action, not only deletes: the caller names the button
-// and its colour. The dialog stays open with a spinner until onYes finishes,
-// so a second tap cannot fire the action twice.
-function ConfirmDialog({ action, onClose }) {
-  const { t } = useTranslation();
-  const [busy, setBusy] = useState(false);
-  if (!action) return null;
-  const tone = action.tone ?? 'danger';
-  async function yes() {
-    setBusy(true);
-    try { await action.onYes(); } finally { setBusy(false); onClose(); }
-  }
-  return (
-    <div className="fixed inset-0 z-[110] bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4">
-      <div className="bg-white rounded-3xl p-6 w-full max-w-sm shadow-2xl border-2 border-slate-300">
-        <p className="font-bold text-slate-900 text-sm mb-6 leading-relaxed">{action.message}</p>
-        <div className="flex gap-2">
-          <Button variant="secondary" block onClick={onClose} disabled={busy}>{t('cancel')}</Button>
-          <Button variant={tone === 'danger' ? 'danger' : 'primary'} block loading={busy} onClick={yes}>
-            {action.yesLabel ?? t('delete_forever')}
-          </Button>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-// What a sale means for the money. `refund` is what the owner owes back:
-// items that did not come out, or the whole sale when the door of a Realtime
-// board stayed shut (paid, nothing taken). Restoring the stock marks such a
-// sale as handled. A sale still in progress counts nowhere yet.
-function saleOutcome(sale) {
-  if (sale.status === 'in_progress') return { state: 'progress', refund: 0 };
-  const items = sale.sales_items || [];
-  const failed = items.filter((i) => i.dispensed === false);
-  const doorBad = sale.door_status === 'failed' || sale.door_status === 'no_ack';
-  if (doorBad) {
-    return sale.stock_restored_at
-      ? { state: 'restored', refund: 0 }
-      : { state: 'failed', refund: sale.amount || 0 };
-  }
-  if (sale.door_status === 'pending') return { state: 'pending', refund: 0 };
-  if (failed.length) {
-    const refund = failed.reduce((s, i) => s + (i.price || 0) * (i.quantity || 1), 0);
-    return { state: failed.length === items.length ? 'failed' : 'partial', refund };
-  }
-  return { state: 'ok', refund: 0 };
-}
-
-// Revenue bars for the selected period: hours for "today", days otherwise.
-// Plain SVG, no chart library; a tap or hover shows the bar's numbers.
-function SalesChart({ buckets, currency, note }) {
-  const { t } = useTranslation();
-  const [hover, setHover] = useState(null);
-  const max = Math.max(1, ...buckets.map((b) => b.value));
-  const n = buckets.length;
-  const W = 100, H = 40, gap = n > 40 ? 0.15 : 0.6;
-  const bw = W / n - gap;
-  const every = Math.ceil(n / 8);
-  const h = hover != null ? buckets[hover] : null;
-  return (
-    <div className="bg-white border border-slate-200 rounded-2xl p-4 shadow-sm">
-      <div className="flex items-baseline justify-between gap-3 mb-3 min-h-5">
-        <div className="text-[11px] font-black text-slate-500 uppercase tracking-widest">{t('chart_revenue')}</div>
-        <div className="text-xs font-bold text-slate-700 tabular-nums text-right">
-          {h ? <>{h.tip}: <span className="text-primary">{h.value} {currency}</span> · {h.count} {t('orders_short')}</> : note}
-        </div>
-      </div>
-      <svg viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="none" className="w-full h-36" onMouseLeave={() => setHover(null)}>
-        <line x1="0" y1={H - 0.1} x2={W} y2={H - 0.1} stroke="#e2e8f0" strokeWidth="0.2" />
-        {buckets.map((b, i) => {
-          const bh = b.value > 0 ? Math.max(0.6, (b.value / max) * (H - 2)) : 0;
-          const x = i * (W / n) + gap / 2;
-          return (
-            <g key={i} onMouseEnter={() => setHover(i)} onClick={() => setHover(hover === i ? null : i)} className="cursor-pointer">
-              <rect x={x} y="0" width={bw} height={H} fill="transparent" />
-              <rect x={x} y={H - bh} width={bw} height={bh} rx="0.4"
-                className={hover === i ? 'fill-primary' : 'fill-primary/60'} />
-            </g>
-          );
-        })}
-      </svg>
-      <div className="flex mt-1 text-[10px] font-bold text-slate-400 tabular-nums">
-        {buckets.map((b, i) => (
-          <span key={i} className="flex-1 text-center truncate">{i % every === 0 ? b.label : ''}</span>
-        ))}
-      </div>
-    </div>
-  );
-}
-
-// Connection state of one machine, from its heartbeat.
-//
-// Three states, not two, because "the tablet answers" and "the board answers"
-// are different faults with different call-outs: a machine can be perfectly
-// online while nothing dispenses. One lamp would hide exactly the failure
-// that costs the owner money.
-//
-//   зелёный — на связи, плата отвечает
-//   жёлтый  — на связи, но плата молчит  → выехать к автомату, не к сети
-//   серый   — не видели дольше порога, или ни разу (новый аппарат)
-//
-// `online` is computed server-side (device_status_view, 3-minute threshold);
-// this only renders it.
-// Три типа машин, а проверка была одна: "static или вендинг". С появлением
-// micromarket_tablet тернарник начал врать — планшетный микромаркет
-// показывался как вендинг. Одно место вместо трёх копий.
-// Цвет бейджа по типу. Планшетный микромаркет отличается от static-QR не
-// косметически: у него есть устройство, которое отчитывается, поэтому у него
-// горит лампочка связи — и в списке он не должен сливаться с тем, у которого
-// её никогда не будет.
-function kindTint(kind) {
-  if (kind === 'micromarket_static') return 'bg-emerald-100 text-emerald-700';
-  if (kind === 'micromarket_tablet') return 'bg-amber-100 text-amber-700';
-  if (kind === 'micromarket_screen') return 'bg-violet-100 text-violet-700';
-  return 'bg-indigo-100 text-indigo-700';
-}
-
-function kindLabel(kind, t) {
-  if (kind === 'micromarket_static') return t('badge_micromarket');
-  if (kind === 'micromarket_tablet') return t('badge_micromarket_tablet');
-  if (kind === 'micromarket_screen') return t('badge_micromarket_screen');
-  return t('badge_vending');
-}
-
-// Тот же бейдж типа, но его можно переключить — только в списке флота, где
-// действует суперадмин. Селект, а не кнопка с диалогом: значений четыре, все
-// известны заранее, и подтверждать нечего — смена типа обратима и ничего не
-// удаляет, в отличие от прежнего способа «удалить и завести заново».
-function KindSelect({ kind, t, onChange }) {
-  return (
-    <select
-      value={kind || 'vending'}
-      onChange={(e) => onChange(e.target.value)}
-      title={t('device_kind_change')}
-      className={`text-[9px] font-black uppercase tracking-wider px-2 py-1 rounded-lg border-0 cursor-pointer appearance-none ${kindTint(kind)}`}
-    >
-      {['vending', 'micromarket_tablet', 'micromarket_static', 'micromarket_screen'].map((k) => (
-        <option key={k} value={k}>{kindLabel(k, t)}</option>
-      ))}
-    </select>
-  );
-}
-
-// Открытая полка: ни моторов, ни раскладки. Инвентарь рисуется плоским
-// списком, и позиции заводит сам владелец — планшета, который создал бы их на
-// месте, у таких машин нет.
-function isOpenShelfKind(kind) {
-  return kind === 'micromarket_static' || kind === 'micromarket_screen';
-}
-
-// Which payment rail the cabinet reported on its last heartbeat. Only drawn
-// when it is not the default: an unmarked machine takes Kaspi, which is every
-// machine in Kazakhstan and needs no badge. The tablet is what chooses this
-// (a tick at pairing) — the panel only repeats what the tablet said, so a
-// machine that was re-paired without the tick loses the badge after one beat.
-function PayChannelBadge({ status }) {
-  if (status?.ter_number !== 'ODG') return null;
-  return (
-    <span
-      className="text-[9px] font-black uppercase tracking-wider px-2 py-1 rounded-lg shrink-0 bg-sky-100 text-sky-700"
-      title="O!Деньги · Кыргызстан · сом"
-    >
-      O!
-    </span>
-  );
-}
-
-const TENGE = '₸';
-// The som is a 'с' with a bar under it. U+20C0 SOM SIGN exists for exactly
-// that and is deliberately NOT used: no system font on the tablets or the
-// handsets we checked carries the glyph, so it renders as a tofu box. A
-// Cyrillic 'с' plus U+0332 COMBINING LOW LINE draws the same mark out of
-// fonts that are actually installed. Same call as the tablet's
-// DeviceStorage.currencySymbol — keep the two in step.
-const SOM = 'с̲';
-
-// What a machine charges in. Follows the payment channel its tablet reported,
-// not the owner's interface language: a Kyrgyz cabinet takes som whether the
-// panel is being read in Russian or English. Unmarked machines take Kaspi.
-function currencyOf(market) {
-  return market?.status?.ter_number === 'ODG' ? SOM : TENGE;
-}
-
-// `rt` is the live Presence of a board on the Realtime firmware: true/false,
-// null while the channel is still connecting, undefined for machines without
-// such a board. Presence is the board's last will — Realtime drops it the
-// moment the board's socket dies — so it needs no heartbeat threshold.
-// Signal of a Realtime board from its Presence state, drawn the way a phone
-// does: cellular bars for GSM, the Wi-Fi fan for Wi-Fi. dBm is negative for
-// both (closer to 0 = stronger); for GSM the modem's own CSQ scale (0..31,
-// 99 = unknown) goes in the tooltip too, since that is what installers know.
-function SignalIcon({ state }) {
-  const dbm = Number(state?.rssi_dbm);
-  if (!dbm) return null;
-  const gsm = state.net === 'gsm';
-  let Icon, level;
-  if (gsm) {
-    const csq = Number(state.csq);
-    level = csq >= 20 ? 4 : csq >= 15 ? 3 : csq >= 10 ? 2 : csq >= 1 ? 1 : 0;
-    Icon = [SignalZero, SignalLow, SignalMedium, SignalHigh, Signal][level];
-  } else {
-    level = dbm >= -55 ? 3 : dbm >= -67 ? 2 : dbm >= -75 ? 1 : 0;
-    Icon = [WifiZero, WifiLow, WifiHigh, Wifi][level];
-  }
-  const tone = level >= 2 ? 'text-emerald-600' : level === 1 ? 'text-amber-500' : 'text-rose-500';
-  const title = [
-    gsm ? 'GSM' : 'Wi-Fi',
-    gsm && Number(state.csq) <= 31 ? `CSQ ${state.csq}/31` : null,
-    `${dbm} dBm`,
-    state.ver && `v${state.ver}`,
-  ].filter(Boolean).join(' · ');
-  return (
-    <span className={`shrink-0 ${tone}`} title={title}>
-      <Icon size={14} strokeWidth={2.5} />
-    </span>
-  );
-}
-
-// Lamp of a lock board on the Realtime firmware. Presence only knows "right
-// now"; when the board is gone, the last time it was around is
-// device_rt.last_seen_at: the board reports every 15 minutes (device_beat) and
-// the panel stamps the exact moment it sees the board leave (touch_device_seen).
-// It lives in device_rt, not device_status: on a machine with a tablet that row
-// is the tablet's own.
-function BoardLamp({ rt, rtState, rtRow, withLabel, prefix }) {
-  const { t, i18n } = useTranslation();
-  const label = rt === true ? t('status_online') : rt === false ? t('status_offline') : t('status_checking');
-  const tone = rt === true ? 'bg-emerald-500' : rt === false ? 'bg-slate-400' : 'bg-slate-300 animate-pulse';
-  const lastSeen = rt === false && rtRow?.last_seen_at
-    ? `${t('status_last_seen')} ${new Date(rtRow.last_seen_at).toLocaleString(i18n.language)}`
-    : null;
-  const head = prefix ? `${prefix}: ` : '';
-  return (
-    <span className="flex items-center gap-1.5 shrink-0" title={[head + label, lastSeen].filter(Boolean).join(' · ')}>
-      <span className={`w-2.5 h-2.5 rounded-full ${tone}`} />
-      {withLabel && (
-        <span className="text-[10px] font-bold uppercase tracking-wider text-slate-500">{head}{label}</span>
-      )}
-      {rt === true && <SignalIcon state={rtState} />}
-    </span>
-  );
-}
-
-function DeviceStatusDot({ status, kind, withLabel = false, rt, rtState, rtRow }) {
-  const { t, i18n } = useTranslation();
-
-  if (kind === 'micromarket_static' && rt !== undefined) {
-    return <BoardLamp rt={rt} rtState={rtState} rtRow={rtRow} withLabel={withLabel} />;
-  }
-
-  // A static-QR micromarket has no tablet — the ESP relay doesn't report yet,
-  // so there is nothing to draw. Showing it as permanently green would be the
-  // same lie as storing `online` in a column: a claim about a device we have
-  // no signal from. The lamp appears on its own once the relay starts beating.
-  //
-  // A screen micromarket is the opposite case: its ESP32 calls device_ping
-  // every five minutes exactly like a tablet, so it has a real heartbeat and
-  // hiding it would be the same lie in reverse.
-  if (kind === 'micromarket_static') return null;
-
-  const seen = status?.last_seen_at ? new Date(status.last_seen_at) : null;
-  // A tablet machine with a paired lock board draws two lamps; each says which
-  // device it speaks for.
-  const two = kind === 'micromarket_tablet' && rt !== undefined;
-  const who = two ? t('lamp_tablet') : null;
-
-  let tone, label, note;
-  if (!status) {
-    tone = 'bg-slate-300';
-    label = t('status_never');
-  } else if (!status.online) {
-    tone = 'bg-slate-400';
-    label = t('status_offline');
-  } else if (status.board_ok === false) {
-    tone = 'bg-amber-500';
-    label = t('status_board_down');
-  } else {
-    tone = 'bg-emerald-500';
-    label = t('status_online');
-    // null ≠ false. BarysVend has no health poll, so the tablet reports
-    // "unknown" and the lamp only speaks for the tablet. Said out loud in
-    // the tooltip, otherwise it looks like the board check silently works
-    // on some machines and not others.
-    if (status.board_ok == null) note = two ? null : t('status_board_unknown');
-  }
-
-  const title = [
-    who ? `${who}: ${label}` : label,
-    seen && `${t('status_last_seen')} ${seen.toLocaleString(i18n.language)}`,
-    note,
-  ].filter(Boolean).join(' · ');
-
-  const tabletLamp = (
-    <span className="flex items-center gap-1.5 shrink-0" title={title}>
-      <span className={`w-2.5 h-2.5 rounded-full ${tone}`} />
-      {withLabel && (
-        <span className="text-[10px] font-bold uppercase tracking-wider text-slate-500">
-          {who ? `${who}: ${label}` : label}
-        </span>
-      )}
-    </span>
-  );
-  if (!two) return tabletLamp;
-  return (
-    <span className="flex items-center gap-3 flex-wrap">
-      {tabletLamp}
-      <BoardLamp rt={rt} rtState={rtState} rtRow={rtRow} withLabel={withLabel} prefix={t('lamp_board')} />
-    </span>
-  );
-}
-
-function resultLabel(t, item) {
-  const key = item.result_code != null ? RESULT_CODE_I18N[item.result_code] : null;
-  if (key) return t(key);
-  // No mapped label for this byte. In practice that means `0`, which the
-  // board sends for "motor finished, no error" — the tablet still refunded
-  // because the drop sensor never fired or the poll loop timed out. Printing
-  // a bare "Код ошибки 0" hides that; the actual reason is the free-form
-  // message the tablet stores alongside the byte ("Мотор отработал, но
-  // датчик падения не сработал", "Таймаут выдачи (20с)"), so prefer it.
-  //
-  // Same fallback covers transport-level failures, where there is no poll
-  // byte at all ("Нет ответа от платы", "Плата занята" etc.).
-  if (item.result_message) return item.result_message;
-  if (item.result_code != null) return `${t('result_unknown')} ${item.result_code}`;
-  return t('dispense_failed');
-}
-
-// Локаль для даты продажи. i18n.language здесь — 'ru' | 'kz' | 'en', и 'kz'
-// сам по себе не язык, а страна: Intl на нём молча свалится в локаль браузера.
-const SALE_DATE_LOCALE = { ru: 'ru-RU', kz: 'kk-KZ', en: 'en-GB' };
-
 /**
- * Дата продажи в списке: «21.09.2026, 14:02».
- *
- * Секунды убраны — это список чеков, а не журнал отладки, и третья пара цифр
- * только удлиняла строку. Локаль раньше была захардкожена 'ru-RU' мимо
- * переключателя языка: казахская и английская панели показывали русский формат.
+ * MicroVend owner panel. This component holds the session, the machine list
+ * with its live board presence, and every write the panel makes; the screens
+ * themselves live in ./admin/tabs and the dialogs in ./admin/modals.
  */
-function formatSaleDate(iso, lang) {
-  return new Date(iso).toLocaleString(SALE_DATE_LOCALE[lang] || SALE_DATE_LOCALE.ru, {
-    day: '2-digit', month: '2-digit', year: 'numeric',
-    hour: '2-digit', minute: '2-digit',
-  });
-}
-
-/**
- * Свести позиции чека к тому, что помещается в свёрнутую строку.
- *
- * Группировка по товару здесь обязательна: на вендинге планшет пишет каждую
- * штуку ОТДЕЛЬНОЙ строкой с quantity = 1 — количество разворачивается в цикл
- * по моторам, — поэтому чек на две банки одного энергетика приезжает двумя
- * строками, и без склейки заголовок читался бы «Gorilla, Gorilla». Static-QR,
- * наоборот, пишет настоящий count, так что units складывает оба случая.
- *
- * Ключ — product_id (это внешний ключ на inventory.id), с запасным вариантом
- * на id самой строки: позиции без product_id иначе слиплись бы в одну
- * непонятную группу. Порядок — первого появления, его Map даёт сама: чек
- * читается в том порядке, в котором его набирали.
- */
-function summarizeSaleItems(items) {
-  const groups = new Map();
-  let totalUnits = 0;
-
-  for (const item of items || []) {
-    const units = item.quantity || 1;
-    totalUnits += units;
-
-    const key = item.product_id ?? `#${item.id}`;
-    const seen = groups.get(key);
-    if (seen) {
-      seen.units += units;
-      seen.hasFailed = seen.hasFailed || item.dispensed === false;
-      continue;
-    }
-
-    const inv = item.inventory;
-    groups.set(key, {
-      key,
-      // Снимок имени впереди живых ссылок: product_name записан в момент
-      // продажи, и это единственное, что переживает удаление позиции из
-      // аппарата. Дальше — имя позиции, потом каталожное: имя позиции
-      // оператор правит руками под конкретный аппарат, и это законное
-      // отличие, а не протухшая копия.
-      name: item.product_name || inv?.name || inv?.products?.name || null,
-      units,
-      hasFailed: item.dispensed === false,
-      motorId: inv?.motor_id ?? null,
-    });
-  }
-
-  return { groups: [...groups.values()], totalUnits };
-}
-
-/**
- * Номер ячейки для строки продажи — или null, когда его нет либо он соврёт.
- *
- * О достоверности, честно: в sales_items номера мотора нет вообще. Он берётся
- * из ТЕКУЩЕГО inventory.motor_id по ссылке product_id, то есть показывает, где
- * товар стоит сейчас, а не откуда его выдавали. Переставили товар в другую
- * спираль — у старой продажи покажется новая ячейка. Ради чего номер и нужен —
- * разбор свежего сбоя — это верно; чек месячной давности может врать. Закрыть
- * дыру можно только колонкой в sales_items, которую планшет заполнял бы в
- * момент выдачи.
- *
- * У машины с экраном motor_id — это и есть номер, написанный на полке, и
- * переводить его нельзя: motorToSlotLabel считает по вендинговой раскладке, и
- * «15» стало бы «085», а «10» — «?» (тот же капкан описан у byCellNumber).
- * У статичного микромаркета спиралей нет, motor_id там всегда пустой.
- */
-function saleSlotLabel(motorId, kind, layout) {
-  if (motorId == null) return null;
-  if (kind === 'micromarket_screen') return String(motorId);
-  if (kind !== 'vending') return null;
-  return motorToSlotLabel(motorId, layout);
-}
-
 export default function Admin() {
-  const { t, i18n } = useTranslation();
+  const { t } = useTranslation();
+  const [session, setSession] = useState(null);
+  const [toast, setToast] = useState(null); // { message, type }
+  const [activeTab, setActiveTab] = useState('sales'); // 'sales' | 'inventory' | 'catalog' | 'users'
+  const [confirmAction, setConfirmAction] = useState(null); // {message, onYes, yesLabel?, tone?, subject?, warning?}
+
+  // ── Machines ────────────────────────────────────────────────────────────
   const [markets, setMarkets] = useState([]);
+  const [marketsLoaded, setMarketsLoaded] = useState(false);
   const [selectedMarketId, setSelectedMarketId] = useState(null);
+  const [qrModalMarket, setQrModalMarket] = useState(null);
+  const [serviceOpening, setServiceOpening] = useState(null); // machid whose door is being opened for service
+  const [renamingMarket, setRenamingMarket] = useState(null); // {id,name,viaAdmin?}
+  const [pairMarket, setPairMarket] = useState(null);         // machine whose settings dialog is open
 
   // Drilling into a machine used to be pure React state, so on a phone the
   // back swipe found nothing to pop and left the site altogether — the
@@ -1201,150 +65,74 @@ export default function Admin() {
   const openMarket = (id) => {
     window.history.pushState({ mmMarket: id }, '');
     setSelectedMarketId(id);
+    setActiveTab('inventory');
   };
-
   const closeMarket = () => {
     if (window.history.state?.mmMarket != null) window.history.back();
     else setSelectedMarketId(null);
   };
-
   useEffect(() => {
     const onPop = () => setSelectedMarketId(null);
     window.addEventListener('popstate', onPop);
     return () => window.removeEventListener('popstate', onPop);
   }, []);
-  const [products, setProducts] = useState([]);
-  const [loading, setLoading] = useState(false);
-  const [editingProduct, setEditingProduct] = useState(null);
-  const [uploadingImage, setUploadingImage] = useState(false);
-  const [session, setSession] = useState(null);
-  const [email, setEmail] = useState('');
-  const [password, setPassword] = useState('');
-  const [authLoading, setAuthLoading] = useState(false);
-  const [toast, setToast] = useState(null); // { message, type }
 
-  // Состояния для обрезки
+  // A new screen starts at the top; switching sections kept the old scroll
+  // and opened Sales somewhere in the middle of the list.
+  useEffect(() => { window.scrollTo(0, 0); }, [activeTab, selectedMarketId]);
+
+  // ── Inventory of the open machine ───────────────────────────────────────
+  const [products, setProducts] = useState([]);
+  const [inventoryLoading, setInventoryLoading] = useState(false);
+  const [editingProduct, setEditingProduct] = useState(null);
+  const [savingProduct, setSavingProduct] = useState(false);
+  const [categories, setCategories] = useState([]);
+  const [showCategoryManager, setShowCategoryManager] = useState(false);
+  const [showCatalogPicker, setShowCatalogPicker] = useState(false);
+  const [pickerProducts, setPickerProducts] = useState(null);
+
+  // ── Catalog ─────────────────────────────────────────────────────────────
+  // Separate from inventory: products are reusable across micromarkets and
+  // only carry name/photo/category/volume; per-slot fields like price/stock/
+  // motor_id live on inventory rows that reference them.
+  const [catalogProducts, setCatalogProducts] = useState([]);
+  const [catalogLoading, setCatalogLoading] = useState(false);
+  const [catalogFilter, setCatalogFilter] = useState('active');
+  const [editingCatalog, setEditingCatalog] = useState(null);
+  const [savingCatalog, setSavingCatalog] = useState(false);
+  const [uploadingImage, setUploadingImage] = useState(false);
+  const catalogFileInputRef = useRef(null);
   const [cropImageSrc, setCropImageSrc] = useState(null);
   const [crop, setCrop] = useState({ x: 0, y: 0 });
   const [zoom, setZoom] = useState(1);
   const [croppedAreaPixels, setCroppedAreaPixels] = useState(null);
-
-  // Состояния категорий
-  const [categories, setCategories] = useState([]);
-  const [showCategoryManager, setShowCategoryManager] = useState(false);
-  const [newCatRu, setNewCatRu] = useState('');
-  const [newCatKz, setNewCatKz] = useState('');
-  const [newCatEn, setNewCatEn] = useState('');
-  const [selectedCategoryFilter, setSelectedCategoryFilter] = useState('All');
-  const [productToDelete, setProductToDelete] = useState(null);
-  const [activeTab, setActiveTab] = useState('sales'); // 'sales' | 'inventory' | 'catalog'
-  const [sales, setSales] = useState([]);
-  const [openSales, setOpenSales] = useState(() => new Set()); // multi-item sales shown in full
-  const [timeFilter, setTimeFilter] = useState('recent'); // 'recent'|'day'|'week'|'month'|'period'
-  const [periodFrom, setPeriodFrom] = useState('');
-  const [periodTo, setPeriodTo] = useState('');
-  const [selectedSalesMarket, setSelectedSalesMarket] = useState('all');
-  const [qrModalMarket, setQrModalMarket] = useState(null); // machine whose QR modal is open
-  const [serviceOpening, setServiceOpening] = useState(null); // machid whose door is being opened for service
-
-  // Catalog tab — products table (SKU catalog, owner-scoped).
-  // Separate from inventory: products are reusable across micromarkets
-  // and only carry name/photo/category/volume; per-slot fields like
-  // price/stock/motor_id live on inventory rows that reference them.
-  const [catalogProducts, setCatalogProducts] = useState([]);
-  const [catalogFilter, setCatalogFilter] = useState('active'); // 'active' | 'drafts' | 'archived'
-  const [editingCatalog, setEditingCatalog] = useState(null);
-  // In-app confirmation instead of window.confirm(). The native dialog is a
-  // trap here: after a few of them the browser offers "prevent this page from
-  // creating more dialogs", and once the operator ticks it confirm() returns
-  // false instantly — the delete button then does nothing at all, silently and
-  // for the rest of the session, with no clue that anything was suppressed.
-  const [confirmAction, setConfirmAction] = useState(null); // {message, onYes, yesLabel?, tone?}
-  const catalogFileInputRef = useRef(null);
-
-  // Photo source menu + the shared library picker behind it. The index is
-  // fetched once per session and kept here rather than in the modal, so
-  // closing and reopening the picker costs nothing.
-  const [photoMenuOpen, setPhotoMenuOpen] = useState(false);
+  // The shared photo library: the index is fetched once per session and kept
+  // here rather than in the modal, so reopening the picker costs nothing.
   const [libraryOpen, setLibraryOpen] = useState(false);
   const [libraryIndex, setLibraryIndex] = useState(null);
   const [libraryLoading, setLibraryLoading] = useState(false);
 
-  // Picker overlay used by the inventory edit modal to pick a catalog
-  // SKU. The product list is loaded lazily on first open.
-  const [showCatalogPicker, setShowCatalogPicker] = useState(false);
-  const [pickerProducts, setPickerProducts] = useState(null);
-  const [pickerSearch, setPickerSearch] = useState('');
-
-  // Platform admin (only the operator running the whole fleet). The flag comes
-  // from app_metadata, which only the service_role can write — see migration
-  // 20260804120000_superadmin_role.sql. Hiding the tab is cosmetic; the real
-  // check is inside the admin-create-user function.
+  // ── Superadmin ──────────────────────────────────────────────────────────
+  // The flag comes from app_metadata, which only the service_role can write —
+  // see migration 20260804120000_superadmin_role.sql. Hiding the section is
+  // cosmetic; the real check is inside the admin edge functions.
   const isSuperadmin = session?.user?.app_metadata?.is_superadmin === true;
   const [users, setUsers] = useState(null);
   const [usersLoading, setUsersLoading] = useState(false);
   const [newUser, setNewUser] = useState(null);      // {email,password,full_name} while the form is open
   const [userSaving, setUserSaving] = useState(false);
-  const [pwdTarget, setPwdTarget] = useState(null);      // {id,email,password}
-  const [userDeleteTarget, setUserDeleteTarget] = useState(null); // {id,email}
-
-  // "Add device" modal — the superadmin types the machine's SmartVend Internal
-  // ID, and optionally its Secret; device-claim resolves whatever wasn't typed
-  // (secret when left blank, always the name) upstream and writes micromarkets.
+  const [pwdTarget, setPwdTarget] = useState(null);  // {id,email,password}
+  // "Add device": the superadmin types the machine's SmartVend Internal ID and
+  // optionally its Secret; device-claim resolves the rest upstream.
   const [addingDevice, setAddingDevice] = useState(null); // {machid,secret,kind}
   const [deviceSaving, setDeviceSaving] = useState(false);
-
-  // Fleet view for the superadmin. RLS hides other owners' machines from the
-  // browser session, so this list comes from the device-admin function.
+  // Fleet view. RLS hides other owners' machines from the browser session, so
+  // this list comes from the device-admin function.
   const [adminDevices, setAdminDevices] = useState(null);
   const [adminOwners, setAdminOwners] = useState([]);
   const [devicesLoading, setDevicesLoading] = useState(false);
-  const [transferTarget, setTransferTarget] = useState(null); // {id,name,owner_id}
-  const [transferConfirm, setTransferConfirm] = useState(null); // {market,from,to}
+  const [transferTarget, setTransferTarget] = useState(null);
   const [transferring, setTransferring] = useState(false);
-  const [deleteTarget, setDeleteTarget] = useState(null);     // {machid,name,sales,inventory}
-
-  // Rename, available to the owner of the machine (plain RLS-scoped UPDATE).
-  const [renamingMarket, setRenamingMarket] = useState(null); // {id,name}
-  const [pairMarket, setPairMarket] = useState(null); // machine whose board-pairing dialog is open
-  const [releaseTarget, setReleaseTarget] = useState(null);   // {id,name}
-
-
-  async function openCatalogPicker() {
-    setShowCatalogPicker(true);
-    // Пустой список не кэшируем. Раньше условием было только `== null`, а обе
-    // ветки отказа — сетевая ошибка и «сессия ещё не поднялась» — записывают
-    // сюда []. Один такой промах, и пикер до перезагрузки страницы показывает
-    // «Каталог пуст», хотя товары есть: повторное открытие в базу уже не шло.
-    // Перезапрос стоит один select по своему owner_id и только когда показывать
-    // всё равно нечего.
-    if (pickerProducts == null || pickerProducts.length === 0) {
-      try {
-        // Owner-scoped — RLS enforces it server-side, the .eq() is
-        // belt-and-suspenders so the query plan filters early and the
-        // result is empty on dev DBs before the RLS migration is applied.
-        const ownerId = session?.user?.id;
-        if (!ownerId) {
-          // Не «каталог пуст», а «мы не знаем, чей каталог показывать».
-          showToast(t('catalog_load_error'), 'error');
-          setPickerProducts([]);
-          return;
-        }
-        const { data, error } = await supabase
-          .from('products')
-          .select('id,name,image_url,emoji,category_id,volume_ml')
-          .eq('owner_id', ownerId)
-          .eq('is_archived', false)
-          .eq('is_draft', false)
-          .order('name');
-        if (error) throw error;
-        setPickerProducts(data || []);
-      } catch (err) {
-        showToast(t('catalog_load_error'), 'error');
-        setPickerProducts([]);
-      }
-    }
-  }
 
   // One shared timer: without clearing the previous one, an older toast's
   // timeout would cut a newly raised warning short.
@@ -1357,46 +145,88 @@ export default function Admin() {
     toastTimer.current = setTimeout(() => setToast(null), type === 'error' ? 6000 : 3000);
   };
 
+  // ── Session ─────────────────────────────────────────────────────────────
   useEffect(() => {
     // Both sources below hand us a structurally identical session object with a
     // fresh identity: getSession() resolves once, and onAuthStateChange fires
     // for INITIAL_SESSION right after it, on every token refresh (~hourly), and
     // whenever the tab regains focus. Storing a new object each time re-renders
-    // the panel and re-runs all six effects keyed on `session` — which is why
-    // the edge functions saw every request twice, milliseconds apart.
+    // the panel and re-runs every effect keyed on `session` — which is why the
+    // edge functions saw every request twice, milliseconds apart.
     //
     // Keep the previous object while the token is unchanged, so only a real auth
-    // change propagates. Compared by access_token rather than user id: nothing
-    // here reads the token out of state today, but parking a stale one would be
-    // a trap for whoever does next.
+    // change propagates.
     const keepIfSame = (s) =>
       setSession(prev => (prev?.access_token === s?.access_token ? prev : s));
 
     supabase.auth.getSession().then(({ data: { session } }) => keepIfSame(session));
-
     const { data: { subscription } } = supabase.auth.onAuthStateChange(
       (_event, session) => keepIfSame(session),
     );
-
     return () => subscription.unsubscribe();
   }, []);
+
+  // A dead session arrives in two disguises. PostgREST answers 42501: the
+  // request fell through to the `anon` role, which lost its direct grants in
+  // the June lockdown, so "permission denied for table micromarkets" really
+  // means "no token". Edge functions answer 401 from their own getUser check.
+  // Re-check the session, and if it is really gone, drop to the login screen.
+  // Returns true when it handled the error, so callers can skip their own toast.
+  async function handleAuthFailure(err) {
+    const looksAuth =
+      err?.code === '42501' || err?.code === 'PGRST301' ||
+      err?.status === 401 || err?.context?.status === 401;
+    if (!looksAuth) return false;
+
+    const { data } = await supabase.auth.getSession();
+    if (data?.session) return false;   // signed in after all — a genuine denial
+
+    setSession(null);
+    showToast(t('session_expired'), 'error');
+    return true;
+  }
+
+  // Call one of the admin edge functions with the operator's own session token
+  // (supabase-js attaches it automatically while a session exists). invoke()
+  // reports every non-2xx as the same generic message, so dig the function's
+  // own JSON `error` out of the response body.
+  async function invokeAdminFn(name, options) {
+    const { data, error } = await supabase.functions.invoke(name, options);
+    if (error) {
+      let payload = null;
+      try { payload = await error.context?.json(); } catch { /* not JSON */ }
+      const err = new Error(payload?.error || error.message);
+      err.code = payload?.error;   // stable machine-readable code
+      err.status = error.context?.status;
+      err.details = payload;       // full body — e.g. the row counts on a delete
+      if (err.status === 401) await handleAuthFailure(err);
+      throw err;
+    }
+    return data;
+  }
 
   useEffect(() => {
     if (session) {
       fetchMarkets();
       fetchCategories();
+    } else {
+      setMarketsLoaded(false);
     }
   }, [session]);
 
-  // Keep the connection lamps current while a machine list is on screen.
-  // Without this the panel showed the snapshot it loaded with — a tab left
-  // open for an hour reported hour-old state, which is worse than no lamp:
-  // the operator trusts it.
-  //
-  // Only while the relevant tab is open, and only while the page is actually
-  // visible: a phone in a pocket or a background tab has nobody looking at
-  // it, and browsers throttle its timers anyway. Coming back to the tab
-  // refreshes immediately rather than waiting out the interval.
+  // The superadmin lands on Administration — it's the section they actually
+  // open the panel for. Runs once: after that the operator's choice stands.
+  const landedRef = useRef(false);
+  useEffect(() => {
+    if (session && isSuperadmin && !landedRef.current) {
+      landedRef.current = true;
+      setActiveTab('users');
+    }
+  }, [session, isSuperadmin]);
+
+  // Keep the connection lamps current while a machine list is on screen, and
+  // only while the page is actually visible. Coming back to the tab refreshes
+  // immediately rather than waiting out the interval.
   useEffect(() => {
     if (!session) return;
     const onDevices = activeTab === 'inventory';
@@ -1416,48 +246,13 @@ export default function Admin() {
     };
   }, [session, activeTab, isSuperadmin]);
 
-  async function fetchCategories() {
-    try {
-      // RLS limits categories to owner_id=auth.uid() OR owner_id IS NULL
-      // (legacy shared rows from before the per-owner migration). No
-      // explicit .eq() here so the legacy NULL rows still show up.
-      const { data, error } = await supabase.from('categories').select('*').order('name_ru');
-      if (error && error.code !== '42P01') throw error; // Ignore table missing error until user runs SQL
-      if (data) setCategories(data);
-    } catch (err) {
-      console.error('Error fetching categories:', err);
-    }
-  }
-
   useEffect(() => {
-    if (selectedMarketId && activeTab === 'inventory') {
-      fetchProducts(selectedMarketId);
-    }
+    if (selectedMarketId && activeTab === 'inventory') fetchProducts(selectedMarketId);
   }, [selectedMarketId, activeTab]);
 
   useEffect(() => {
-    if (session && activeTab === 'sales') {
-      fetchSales();
-    }
-    // Re-query server-side whenever a sales filter changes.
-  }, [session, activeTab, timeFilter, selectedSalesMarket, periodFrom, periodTo]);
-
-  useEffect(() => {
-    if (session && activeTab === 'catalog') {
-      fetchCatalogProducts();
-    }
+    if (session && activeTab === 'catalog') fetchCatalogProducts();
   }, [session, activeTab]);
-
-  // The superadmin lands on Administration, not Sales — it's the panel they
-  // actually open the app for. Runs once: after that the operator's own tab
-  // choice stands, including going back to Sales.
-  const landedRef = useRef(false);
-  useEffect(() => {
-    if (session && isSuperadmin && !landedRef.current) {
-      landedRef.current = true;
-      setActiveTab('users');
-    }
-  }, [session, isSuperadmin]);
 
   useEffect(() => {
     if (session && isSuperadmin && activeTab === 'users') {
@@ -1466,29 +261,104 @@ export default function Admin() {
     }
   }, [session, isSuperadmin, activeTab]);
 
-  // Call one of the admin edge functions with the operator's own session token
-  // (supabase-js attaches it automatically while a session exists). invoke()
-  // reports every non-2xx as the same generic message, so dig the function's
-  // own JSON `error` out of the response body.
-  async function invokeAdminFn(name, options) {
-    const { data, error } = await supabase.functions.invoke(name, options);
-    if (error) {
-      let payload = null;
-      try { payload = await error.context?.json(); } catch (_) { /* not JSON */ }
-      const err = new Error(payload?.error || error.message);
-      err.code = payload?.error;   // stable machine-readable code
-      err.status = error.context?.status;
-      err.details = payload;       // full body — e.g. the row counts on a delete
-      // 401 here means the function's own getUser() rejected our token.
-      if (err.status === 401) await handleAuthFailure(err);
-      throw err;
+  // ── Machines: load ──────────────────────────────────────────────────────
+  async function fetchMarkets() {
+    try {
+      // Two queries, merged here rather than one embedded select: PostgREST
+      // can't infer a relationship to a view, and `online` has to come from
+      // the view — the 3-minute threshold is evaluated in SQL against the
+      // database clock. Computing it here would compare the tablet's beat
+      // to the browser's clock, which on a kiosk network is often minutes
+      // out and would flip machines offline at random.
+      const [marketsRes, statusRes, rtRes] = await Promise.all([
+        supabase.from('micromarkets').select('id, name, layout_json, kind, qr_token, open_seconds'),
+        supabase.from('device_status_view').select('machid, last_seen_at, board_ok, online, app_version, ter_number'),
+        // Boards on the Realtime firmware. Missing RPC (migration not applied
+        // yet) just means "none" — the panel keeps working.
+        supabase.rpc('my_device_rt'),
+      ]);
+      if (marketsRes.error) throw marketsRes.error;
+      const byId = new Map((statusRes.data || []).map((s) => [String(s.machid), s]));
+      // A failed my_device_rt must not erase what the list already knows: it
+      // would drop the connection lamp of every paired board until the next
+      // poll, and a machine without a lamp reads as "no board", not "no data".
+      if (rtRes.error) console.error('my_device_rt failed, keeping last known:', rtRes.error);
+      const rtById = new Map((rtRes.error ? [] : rtRes.data || []).map((r) => [String(r.machid), r]));
+      setMarkets((prev) => {
+        const prevRt = new Map(prev.map((m) => [String(m.id), m.rt]));
+        return (marketsRes.data || [])
+          .map((m) => ({
+            ...m,
+            // Absent row = the machine has never reported. Left undefined so the
+            // badge can say "never seen" instead of claiming it's offline.
+            status: byId.get(String(m.id)),
+            rt: rtRes.error ? prevRt.get(String(m.id)) : rtById.get(String(m.id)),
+          }))
+          .sort((a, b) => (a.name || '').localeCompare(b.name || '') || a.id - b.id);
+      });
+      setMarketsLoaded(true);
+    } catch (err) {
+      console.error('Error fetching markets:', err);
+      if (await handleAuthFailure(err)) return;
+      setMarketsLoaded(true);
+      showToast(t('could_not_load_markets'), 'error');
     }
-    return data;
   }
 
-  // Superadmin: ask the board to look for a firmware update right now. The
-  // answer is the board's own (current / updating / skipped / failed), or
-  // offline / busy from the server. Returns {ok, text} for the modal.
+  async function fetchCategories() {
+    try {
+      // RLS limits categories to owner_id=auth.uid() OR owner_id IS NULL
+      // (legacy shared rows from before the per-owner migration).
+      const { data, error } = await supabase.from('categories').select('*').order('name_ru');
+      if (error && error.code !== '42P01') throw error;
+      if (data) setCategories(data);
+    } catch (err) {
+      console.error('Error fetching categories:', err);
+    }
+  }
+
+  // Live connection of boards on the Realtime firmware: one presence-only
+  // channel per board. The board tracks itself under its own ID (MAC) and
+  // publishes its state there {device, ver, variant, net, rssi_dbm, csq, heap};
+  // the panel only listens. rtOnline[machid] = that state, or null when the
+  // board is not in the channel.
+  const [rtOnline, setRtOnline] = useState({});
+  const rtWasOnline = useRef({});
+  const rtTopicsKey = markets
+    .filter((m) => m.rt?.topic && m.rt?.device_id)
+    .map((m) => `${m.id}:${m.rt.topic}:${m.rt.device_id}`)
+    .sort()
+    .join(',');
+  useEffect(() => {
+    if (!rtTopicsKey) { setRtOnline({}); return undefined; }
+    const channels = rtTopicsKey.split(',').map((entry) => {
+      const [machid, topic, deviceId] = entry.split(':');
+      const ch = supabase.channel(`dev:${topic}`, { config: { presence: { key: '' } } });
+      const update = () => {
+        const metas = ch.presenceState()[deviceId];
+        const meta = Array.isArray(metas) && metas.length ? metas[metas.length - 1] : null;
+        setRtOnline((prev) => ({ ...prev, [machid]: meta }));
+        // Seen online, now gone: Presence just fired the board's "last will".
+        // Stamp the moment in device_rt (the board's own 15-minute beat can
+        // only say "alive at about"), then refresh the lamp tooltip.
+        const was = rtWasOnline.current[machid];
+        rtWasOnline.current[machid] = !!meta;
+        if (was && !meta) {
+          supabase.rpc('touch_device_seen', { p_machid: Number(machid) }).then(() => fetchMarkets());
+        }
+      };
+      ch.on('presence', { event: 'sync' }, update);
+      // An empty channel may never sync; settle it to "offline" after a beat.
+      ch.subscribe((st) => { if (st === 'SUBSCRIBED') setTimeout(update, 2000); });
+      return ch;
+    });
+    return () => { channels.forEach((ch) => supabase.removeChannel(ch)); };
+  }, [rtTopicsKey]);
+
+  const rtLiveOf = (m) => (m?.rt ? (m.id in rtOnline ? !!rtOnline[m.id] : null) : undefined);
+
+  // ── Machines: actions ───────────────────────────────────────────────────
+  // Superadmin: ask the board to look for a firmware update right now.
   async function checkBoardUpdate(market) {
     try {
       const data = await invokeAdminFn('device-ota', { body: { machid: market.id } });
@@ -1500,11 +370,9 @@ export default function Admin() {
     }
   }
 
-  // Payment-free unlock for refilling. No duration: the board holds the lock
-  // for the open time saved in its setup portal and reports it back.
-  // The answer is what the board said, not a guess: opened true/false from a
-  // board on the Realtime firmware, nudge:false when nothing answered (offline,
-  // or an old MQTT board that no longer gets the signal).
+  // Payment-free unlock for refilling. The answer is what the board said, not
+  // a guess: opened true/false from a board on the Realtime firmware,
+  // nudge:false when nothing answered (offline, or an old MQTT board).
   async function openForService(market) {
     setServiceOpening(market.id);
     try {
@@ -1519,6 +387,485 @@ export default function Admin() {
     }
   }
 
+  function unpairBoard(market) {
+    setConfirmAction({
+      message: t('pair_board_unpair_confirm'),
+      yesLabel: t('pair_board_unpair'),
+      tone: 'danger',
+      onYes: async () => {
+        const { error } = await supabase.rpc('unpair_device', { p_machid: market.id });
+        if (error) { showToast(error.message, 'error'); return; }
+        showToast(t('pair_board_unpaired'));
+        setPairMarket(null);
+        fetchMarkets();
+      },
+    });
+  }
+
+  // Frees a machine whose tablet can't sign itself out — smashed, lost, or
+  // already wiped. Without it the machid stays claimed forever and no
+  // replacement can pair. Explicit confirmation because the machine keeps
+  // working until its next heartbeat and then drops to the pairing screen.
+  function releaseTablet(m) {
+    setConfirmAction({
+      title: t('release_tablet_title'),
+      subject: machineName(m, t),
+      message: t('release_tablet_hint'),
+      yesLabel: t('release_tablet'),
+      tone: 'warning',
+      onYes: async () => {
+        try {
+          const { error } = await supabase.rpc('admin_release_machine', { p_machid: m.id });
+          if (error) throw error;
+          await fetchMarkets();
+          showToast(t('tablet_released'));
+        } catch (err) {
+          showToast(`${t('tablet_release_error')}: ${err.message}`, 'error');
+        }
+      },
+    });
+  }
+
+  // An owner renaming its own machine goes straight to the table: the "Owner
+  // manages micromarkets" policy already limits authenticated UPDATEs to
+  // owner_id = auth.uid(). From the superadmin's fleet list (viaAdmin) the same
+  // UPDATE would match zero rows for someone else's machine, so that path goes
+  // through device-admin.
+  async function renameMarket() {
+    const name = (renamingMarket?.name || '').trim();
+    if (!name) return showToast(t('device_name_required'), 'error');
+    try {
+      if (renamingMarket.viaAdmin) {
+        await invokeAdminFn('device-admin', { body: { action: 'rename', machid: renamingMarket.id, name } });
+      } else {
+        // Обход заблокированного PATCH — см. patchRow(). Полная строка сюда
+        // намеренно не передаётся: список машин читается частичным select, и
+        // отправить его целиком значило бы записать обратно свой layout_json,
+        // который правит планшет. А без owner_id вставка-призрак не пройдёт RLS.
+        const error = await patchRow('micromarkets', renamingMarket.id, { name });
+        if (error) throw error;
+      }
+      setRenamingMarket(null);
+      await fetchMarkets();
+      if (isSuperadmin && adminDevices) fetchAdminDevices();
+      showToast(t('device_renamed'));
+    } catch (err) {
+      showToast(`${t('device_rename_error')}: ${err.message}`, 'error');
+    }
+  }
+
+  // ── Inventory ───────────────────────────────────────────────────────────
+  const selectedMarket = markets.find(m => String(m.id) === String(selectedMarketId));
+  const isScreenMarket = selectedMarket?.kind === 'micromarket_screen';
+  const selectedMarketLayout = useMemo(() => parseLayout(selectedMarket?.layout_json), [selectedMarket?.layout_json]);
+
+  async function fetchProducts(marketId) {
+    setInventoryLoading(true);
+    try {
+      // Pull the joined products row so the list can display the canonical
+      // SKU image/name even when the inventory row's own image_url is stale.
+      const { data, error } = await supabase
+        .from('inventory')
+        .select('*, products(id,name,image_url,emoji,category_id,volume_ml,is_draft)')
+        .eq('micromarket_id', marketId);
+      if (error) throw error;
+      setProducts(data || []);
+    } catch (err) {
+      console.error('Error fetching products:', err);
+      if (await handleAuthFailure(err)) return;
+      showToast(t('inventory_load_error'), 'error');
+    } finally {
+      setInventoryLoading(false);
+    }
+  }
+
+  function addStaticProduct() {
+    setEditingProduct({
+      id: 'new', product_id: null, name: '', price: 0, stock: 0,
+      image_url: '', emoji: '', category_id: null,
+      // Предлагаем номер сразу: у машины с экраном позиция без номера покупателю
+      // недоступна. products здесь — весь инвентарь машины, до фильтров, иначе
+      // автономер предложил бы уже занятый.
+      motor_id: isScreenMarket ? nextFreeCellNumber(products) : null,
+    });
+  }
+
+  async function openCatalogPicker() {
+    setShowCatalogPicker(true);
+    // Пустой список не кэшируем: и сетевая ошибка, и «сессия ещё не поднялась»
+    // записывают сюда []. Один такой промах — и пикер до перезагрузки
+    // показывал бы «Каталог пуст», хотя товары есть.
+    if (pickerProducts == null || pickerProducts.length === 0) {
+      try {
+        const ownerId = session?.user?.id;
+        if (!ownerId) {
+          showToast(t('catalog_load_error'), 'error');
+          setPickerProducts([]);
+          return;
+        }
+        const { data, error } = await supabase
+          .from('products')
+          .select('id,name,image_url,emoji,category_id,volume_ml')
+          .eq('owner_id', ownerId)
+          .eq('is_archived', false)
+          .eq('is_draft', false)
+          .order('name');
+        if (error) throw error;
+        setPickerProducts(data || []);
+      } catch {
+        showToast(t('catalog_load_error'), 'error');
+        setPickerProducts([]);
+      }
+    }
+  }
+
+  /// Apply a chosen catalog product into the inventory edit form: mirror its
+  /// display fields onto editingProduct and record the FK.
+  function applyCatalogToInventory(cp) {
+    setEditingProduct(prev => ({
+      ...prev,
+      product_id: cp.id,
+      name: cp.name,
+      image_url: cp.image_url || '',
+      emoji: cp.emoji || '',
+      category_id: cp.category_id || null,
+    }));
+    setShowCatalogPicker(false);
+  }
+
+  async function saveProduct() {
+    if (!editingProduct.product_id) return showToast(t('pick_product_from_catalog'), 'error');
+    if (editingProduct.price == null || editingProduct.price === '') return showToast(t('specify_price'), 'error');
+
+    // Номер ячейки правится только у машины с экраном — см. payload ниже.
+    let cellNumber = null;
+    if (isScreenMarket) {
+      const raw = editingProduct.motor_id;
+      if (raw != null && String(raw).trim() !== '') {
+        cellNumber = Number(raw);
+        if (!Number.isInteger(cellNumber) || cellNumber < CELL_MIN || cellNumber > CELL_MAX) {
+          return showToast(t('cell_number_range', { min: CELL_MIN, max: CELL_MAX }), 'error');
+        }
+        // Обычный случай — «взял номер соседа» — объясняем до похода в базу.
+        // Арбитром всё равно остаётся индекс: список в состоянии может отставать.
+        const clash = products.find(p =>
+          String(p.id) !== String(editingProduct.id) && Number(p.motor_id) === cellNumber);
+        if (clash) return showToast(t('cell_number_taken', { n: cellNumber, name: clash.name || '—' }), 'error');
+      }
+    }
+
+    setSavingProduct(true);
+    try {
+      // Keep name/image_url/emoji/category_id mirrored on inventory for
+      // back-compat with older tablet builds that read those columns directly.
+      //
+      // motor_type and curtain_mode are never in the payload, and motor_id
+      // only for a screen micromarket. For vending motor_id is a physical
+      // spiral owned by the tablet's Motor Setup screen; a screen micromarket
+      // has no spirals and no tablet — motor_id there is the number written on
+      // the shelf, and this form is the only place it can be set.
+      const payload = {
+        product_id: editingProduct.product_id,
+        name: editingProduct.name || '',
+        category_id: editingProduct.category_id || null,
+        price: Number(editingProduct.price),
+        stock: Number(editingProduct.stock) || 0,
+        image_url: editingProduct.image_url || null,
+        emoji: editingProduct.emoji || null,
+      };
+      // null здесь — не «не трогать», а «снять номер».
+      if (isScreenMarket) payload.motor_id = cellNumber;
+      if (editingProduct.id === 'new') {
+        const { error } = await supabase.from('inventory').insert({ ...payload, micromarket_id: selectedMarketId });
+        if (error) throw error;
+      } else {
+        const error = await patchRow('inventory', editingProduct.id, payload, {
+          micromarket_id: editingProduct.micromarket_id || selectedMarketId,
+        });
+        if (error) throw error;
+      }
+      setEditingProduct(null);
+      showToast(t('product_saved'));
+      fetchProducts(selectedMarketId);
+    } catch (err) {
+      console.error('Error saving product:', err);
+      // 23505 on inventory_market_motor_uk (micromarket_id, motor_id): the
+      // number was taken between drawing the list and saving — a second tab,
+      // a second operator. The index name is checked explicitly: it is not
+      // the only constraint on inventory.
+      const cellClash = err?.code === '23505'
+        && `${err.message || ''} ${err.details || ''}`.includes('inventory_market_motor_uk');
+      if (cellClash) {
+        const holder = products.find(p => Number(p.motor_id) === cellNumber);
+        showToast(
+          holder
+            ? t('cell_number_taken', { n: cellNumber, name: holder.name || '—' })
+            : t('cell_number_taken_unknown', { n: cellNumber }),
+          'error',
+        );
+        fetchProducts(selectedMarketId);
+        return;
+      }
+      showToast(
+        isNetworkFailure(err) ? t('network_save_error') : `${t('save_product_error')}: ${err.message || JSON.stringify(err)}`,
+        'error',
+      );
+    } finally {
+      setSavingProduct(false);
+    }
+  }
+
+  function deleteProduct(p) {
+    setConfirmAction({
+      title: t('delete_product_title'),
+      subject: p.name,
+      message: t('delete_product_confirm'),
+      yesLabel: t('yes_delete'),
+      onYes: async () => {
+        try {
+          const { error } = await deleteRow('inventory', p.id, 'delete_inventory_item');
+          if (error) throw error;
+          showToast(t('product_deleted'));
+          fetchProducts(selectedMarketId);
+        } catch (err) {
+          console.error('Delete inventory error:', err);
+          showToast(t('delete_error') + ': ' + err.message, 'error');
+        }
+      },
+    });
+  }
+
+  async function addCategory({ ru, kz, en }) {
+    if (!ru.trim() || !kz.trim() || !en.trim()) { showToast(t('fill_all_languages'), 'error'); return false; }
+    try {
+      const ownerId = session?.user?.id;
+      if (!ownerId) { showToast(t('session_inactive'), 'error'); return false; }
+      const { error } = await supabase.from('categories').insert({
+        name_ru: ru.trim(), name_kz: kz.trim(), name_en: en.trim(), owner_id: ownerId,
+      });
+      if (error) throw error;
+      fetchCategories();
+      showToast(t('category_added'));
+      return true;
+    } catch (err) {
+      showToast(`${t('save_error')}: ${err.message}`, 'error');
+      return false;
+    }
+  }
+
+  function deleteCategory(id) {
+    setConfirmAction({
+      message: t('delete_category_confirm'),
+      onYes: async () => {
+        try {
+          // supabase-js returns the error instead of throwing it; without this
+          // check the panel reported «deleted» even when nothing was.
+          const { error } = await deleteRow('categories', id, 'delete_category');
+          if (error) throw error;
+          fetchCategories();
+          showToast(t('category_deleted'));
+        } catch (err) {
+          console.error('Delete category error:', err);
+          showToast(t('category_delete_error'), 'error');
+        }
+      },
+    });
+  }
+
+  // ── Catalog ─────────────────────────────────────────────────────────────
+  async function fetchCatalogProducts() {
+    setCatalogLoading(true);
+    try {
+      const ownerId = session?.user?.id;
+      if (!ownerId) { setCatalogProducts([]); return; }
+      const { data, error } = await supabase
+        .from('products')
+        .select('*')
+        .eq('owner_id', ownerId)
+        .order('is_draft', { ascending: false })
+        .order('name', { ascending: true });
+      if (error) throw error;
+      setCatalogProducts(data || []);
+    } catch (err) {
+      console.error('Error fetching catalog:', err);
+      if (await handleAuthFailure(err)) return;
+      showToast(t('catalog_load_error'), 'error');
+    } finally {
+      setCatalogLoading(false);
+    }
+  }
+
+  async function saveCatalogProduct() {
+    if (!editingCatalog?.name?.trim()) return showToast(t('name_required'), 'error');
+    setSavingCatalog(true);
+    try {
+      const payload = {
+        name: editingCatalog.name.trim(),
+        image_url: editingCatalog.image_url || null,
+        emoji: editingCatalog.emoji || null,
+        category_id: editingCatalog.category_id || null,
+        volume_ml: editingCatalog.volume_ml === '' || editingCatalog.volume_ml == null ? null : Number(editingCatalog.volume_ml),
+        description: editingCatalog.description || null,
+        is_draft: !!editingCatalog.is_draft,
+      };
+      if (editingCatalog.id === 'new') {
+        const { error } = await supabase.from('products').insert({
+          ...payload,
+          owner_id: session?.user?.id || null,
+          is_draft: false, // admin-created rows are published immediately
+        });
+        if (error) throw error;
+        showToast(t('product_added'));
+      } else {
+        const error = await patchRow('products', editingCatalog.id, payload, {
+          owner_id: editingCatalog.owner_id || session?.user?.id || null,
+          is_archived: !!editingCatalog.is_archived,
+        });
+        if (error) throw error;
+        showToast(t('product_saved'));
+      }
+      setEditingCatalog(null);
+      setPickerProducts(null);
+      fetchCatalogProducts();
+    } catch (err) {
+      console.error('Save catalog error:', err);
+      // The dialog stays open with everything typed in — Save can be pressed
+      // again without retyping anything.
+      showToast(isNetworkFailure(err) ? t('network_save_error') : `${t('save_error')}: ${err.message}`, 'error');
+    } finally {
+      setSavingCatalog(false);
+    }
+  }
+
+  async function archiveCatalogProduct(p) {
+    try {
+      const error = await patchRow('products', p.id, { is_archived: !p.is_archived }, p);
+      if (error) throw error;
+      showToast(p.is_archived ? t('restored') : t('archived_toast'));
+      fetchCatalogProducts();
+    } catch (err) {
+      showToast(t('save_error') + ': ' + err.message, 'error');
+    }
+  }
+
+  async function publishDraft(p) {
+    try {
+      const error = await patchRow('products', p.id, { is_draft: false }, p);
+      if (error) throw error;
+      showToast(t('published'));
+      fetchCatalogProducts();
+    } catch (err) {
+      showToast(t('save_error') + ': ' + err.message, 'error');
+    }
+  }
+
+  function deleteCatalogProduct(p) {
+    setConfirmAction({
+      title: t('delete_product_title'),
+      subject: p.name,
+      message: t('delete_catalog_confirm_body'),
+      onYes: async () => {
+        try {
+          // `deleted` matters: PostgREST answers 204 both when it deleted the
+          // row and when RLS filtered every candidate out.
+          const { deleted, error } = await deleteRow('products', p.id, 'delete_product');
+          if (error) throw error;
+          if (deleted === 0) { showToast(t('delete_catalog_no_rights'), 'error'); return; }
+          showToast(t('deleted_toast'));
+          fetchCatalogProducts();
+        } catch (err) {
+          console.error('Delete catalog product error:', err);
+          // 23503 = still referenced by inventory (ON DELETE RESTRICT) — the one
+          // failure an operator can act on, so name it.
+          showToast(err.code === '23503' ? t('delete_catalog_in_use') : `${t('delete_catalog_failed')}: ${err.message}`, 'error');
+        }
+      },
+    });
+  }
+
+  const onCatalogFileChange = async (e) => {
+    const file = e.target.files?.[0];
+    // Clear the input right away: otherwise picking the SAME file again after
+    // an error fires no change event and the operator thinks nothing happened.
+    e.target.value = '';
+    if (!file) return;
+    setUploadingImage(true);
+    try {
+      setCropImageSrc(await prepareForCrop(file, t));
+    } catch (err) {
+      console.error('Photo pick failed:', err);
+      showToast(err.message, 'error');
+    } finally {
+      setUploadingImage(false);
+    }
+  };
+
+  // index.json holds only names and hashes; thumbnails are requested by the
+  // grid itself, a page at a time, and every one is cached for a year.
+  async function openPhotoLibrary() {
+    setLibraryOpen(true);
+    if (libraryIndex || libraryLoading) return;
+    setLibraryLoading(true);
+    try {
+      const resp = await fetch(`${LIBRARY_BASE}/index.json`);
+      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+      setLibraryIndex(await resp.json());
+    } catch (err) {
+      console.error('Photo library index failed:', err);
+      showToast(t('library_error'), 'error');
+      setLibraryOpen(false);
+    } finally {
+      setLibraryLoading(false);
+    }
+  }
+
+  // image_url points straight at the shared object — nothing is copied, so
+  // the tablet's disk cache fetches it once across the fleet. The name is
+  // filled in only when the field is still empty.
+  function pickFromLibrary(entry) {
+    setEditingCatalog(prev => prev ? {
+      ...prev,
+      image_url: `${LIBRARY_BASE}/${entry.f}.webp`,
+      name: prev.name?.trim() ? prev.name : entry.n,
+    } : prev);
+    setLibraryOpen(false);
+  }
+
+  const closeCropper = () => {
+    if (cropImageSrc?.startsWith('blob:')) URL.revokeObjectURL(cropImageSrc);
+    setCropImageSrc(null);
+    setCroppedAreaPixels(null);
+    setCrop({ x: 0, y: 0 });
+    setZoom(1);
+  };
+
+  const handleUploadCrop = async () => {
+    if (!cropImageSrc || !croppedAreaPixels) return;
+    setUploadingImage(true);
+    try {
+      const processedBlob = await getCroppedImg(cropImageSrc, croppedAreaPixels, t);
+      const filePath = `products/${Math.random().toString(36).substring(2, 15)}.webp`;
+      const { error: uploadError } = await supabase.storage
+        .from('product-images')
+        .upload(filePath, processedBlob, {
+          // Random name + upsert:false: each URL is immutable, cache a year.
+          cacheControl: '31536000',
+          upsert: false,
+          contentType: 'image/webp',
+        });
+      if (uploadError) throw uploadError;
+      const { data } = supabase.storage.from('product-images').getPublicUrl(filePath);
+      setEditingCatalog(prev => prev ? { ...prev, image_url: data.publicUrl } : prev);
+      closeCropper();
+    } catch (err) {
+      console.error('Error uploading image:', err);
+      showToast(`${t('photo_upload_error')}: ${err.message || JSON.stringify(err)}`, 'error');
+    } finally {
+      setUploadingImage(false);
+    }
+  };
+
+  // ── Superadmin ──────────────────────────────────────────────────────────
   async function fetchUsers() {
     setUsersLoading(true);
     try {
@@ -1533,12 +880,26 @@ export default function Admin() {
     }
   }
 
+  async function fetchAdminDevices() {
+    setDevicesLoading(true);
+    try {
+      const data = await invokeAdminFn('device-admin', { body: { action: 'list' } });
+      setAdminDevices(data?.markets || []);
+      setAdminOwners(data?.owners || []);
+    } catch (err) {
+      console.error('Error fetching devices:', err);
+      showToast(`${t('devices_load_error')}: ${err.message}`, 'error');
+      setAdminDevices([]);
+    } finally {
+      setDevicesLoading(false);
+    }
+  }
+
   async function createUser() {
     const email = (newUser?.email || '').trim();
     const password = newUser?.password || '';
     if (!email) return showToast(t('user_email_required'), 'error');
     if (password.length < 8) return showToast(t('user_password_too_short'), 'error');
-
     setUserSaving(true);
     try {
       const data = await invokeAdminFn('admin-create-user', {
@@ -1562,9 +923,7 @@ export default function Admin() {
     if (password.length < 8) return showToast(t('user_password_too_short'), 'error');
     setUserSaving(true);
     try {
-      await invokeAdminFn('admin-create-user', {
-        body: { action: 'set_password', user_id: pwdTarget.id, password },
-      });
+      await invokeAdminFn('admin-create-user', { body: { action: 'set_password', user_id: pwdTarget.id, password } });
       setPwdTarget(null);
       showToast(t('password_changed'));
     } catch (err) {
@@ -1574,56 +933,36 @@ export default function Admin() {
     }
   }
 
-  async function deleteUser() {
-    if (!userDeleteTarget) return;
-    setUserSaving(true);
-    try {
-      await invokeAdminFn('admin-create-user', {
-        body: { action: 'delete', user_id: userDeleteTarget.id },
-      });
-      setUserDeleteTarget(null);
-      await fetchUsers();
-      showToast(t('user_deleted'));
-    } catch (err) {
-      // The function blocks deletion while the account still owns machines —
-      // orphaned rows would be invisible in every panel.
-      if (err.code === 'has_machines') {
-        showToast(t('user_err_has_machines', { count: err.details?.machines ?? 0 }), 'error');
-      } else if (err.code === 'cannot_delete_self') {
-        showToast(t('user_err_cannot_delete_self'), 'error');
-      } else {
-        showToast(`${t('user_delete_error')}: ${err.message}`, 'error');
-      }
-      setUserDeleteTarget(null);
-    } finally {
-      setUserSaving(false);
-    }
+  // The function refuses while the account still owns machines — orphaned
+  // rows would be invisible in every panel.
+  function deleteUser(u) {
+    setConfirmAction({
+      title: t('delete_user_title'),
+      subject: u.email,
+      message: t('delete_user_hint'),
+      yesLabel: t('yes_delete'),
+      onYes: async () => {
+        try {
+          await invokeAdminFn('admin-create-user', { body: { action: 'delete', user_id: u.id } });
+          await fetchUsers();
+          showToast(t('user_deleted'));
+        } catch (err) {
+          if (err.code === 'has_machines') showToast(t('user_err_has_machines', { count: err.details?.machines ?? 0 }), 'error');
+          else if (err.code === 'cannot_delete_self') showToast(t('user_err_cannot_delete_self'), 'error');
+          else showToast(`${t('user_delete_error')}: ${err.message}`, 'error');
+        }
+      },
+    });
   }
 
-  async function fetchAdminDevices() {
-    setDevicesLoading(true);
-    try {
-      const data = await invokeAdminFn('device-admin', { body: { action: 'list' } });
-      setAdminDevices(data?.markets || []);
-      setAdminOwners(data?.owners || []);
-    } catch (err) {
-      console.error('Error fetching devices:', err);
-      showToast(`${t('devices_load_error')}: ${err.message}`, 'error');
-      setAdminDevices([]);
-    } finally {
-      setDevicesLoading(false);
-    }
-  }
-
-  async function transferDevice() {
-    const { market, to } = transferConfirm || {};
+  async function transferDevice(to) {
+    const market = transferTarget;
     if (!market || !to) return;
     setTransferring(true);
     try {
       const data = await invokeAdminFn('device-admin', {
         body: { action: 'transfer', machid: market.id, owner_id: to.id },
       });
-      setTransferConfirm(null);
       setTransferTarget(null);
       await Promise.all([fetchAdminDevices(), fetchUsers(), fetchMarkets()]);
       showToast(`${t('device_transferred')} → ${data?.owner_email ?? to.email}`);
@@ -1634,18 +973,14 @@ export default function Admin() {
     }
   }
 
-  // Сменить тип аппарата, не заводя его заново. Раньше «переехал с планшета
-  // на статический QR» стоило всей истории продаж: единственным способом было
-  // удалить машину и создать новую.
+  // Change the machine type without enrolling it anew — that used to cost the
+  // whole sales history.
   async function changeDeviceKind(machid, kind) {
     try {
-      const data = await invokeAdminFn('device-admin', {
-        body: { action: 'kind', machid, kind },
-      });
+      const data = await invokeAdminFn('device-admin', { body: { action: 'kind', machid, kind } });
       await Promise.all([fetchAdminDevices(), fetchMarkets()]);
-      // Предупреждение о ненумерованных ячейках приходит вместе с успехом:
-      // тип сменился, но витрина screen-машины покажет не всё, и узнать об
-      // этом лучше здесь, чем со звонка с точки.
+      // The unnumbered-cells warning arrives with the success: the type changed,
+      // but the screen machine's storefront won't show everything.
       if (data?.warn?.code === 'cells_need_numbers') {
         showToast(t('device_kind_cells_warn', {
           unnumbered: data.warn.unnumbered ?? 0,
@@ -1659,106 +994,52 @@ export default function Admin() {
     }
   }
 
-  // Two-phase on purpose: the first call comes back with `confirm_required`
-  // plus the row counts, so the confirmation dialog can say exactly how much
-  // sales history the CASCADE is about to take with it.
-  async function deleteDevice(machid, confirm = false) {
-    try {
-      await invokeAdminFn('device-admin', { body: { action: 'delete', machid, confirm } });
-      setDeleteTarget(null);
-      await Promise.all([fetchAdminDevices(), fetchMarkets()]);
-      showToast(t('device_deleted'));
-    } catch (err) {
-      if (err.code === 'confirm_required') {
-        setDeleteTarget(err.details || { machid });
-        return;
+  // Delete is destructive: inventory and sales cascade. Ask first; the server
+  // then refuses a machine with sales until `confirm`, and reports the counts,
+  // which the second dialog spells out.
+  function deleteDevice(machid) {
+    const m = (adminDevices ?? []).find((d) => d.id === machid) ?? { id: machid };
+    const reallyDelete = async (confirm) => {
+      try {
+        await invokeAdminFn('device-admin', { body: { action: 'delete', machid, confirm } });
+        await Promise.all([fetchAdminDevices(), fetchMarkets()]);
+        showToast(t('device_deleted'));
+      } catch (err) {
+        if (err.code === 'confirm_required') {
+          const d = err.details || {};
+          setTimeout(() => setConfirmAction({
+            title: t('delete_device_title'),
+            subject: d.name || machineName(m, t),
+            message: t('delete_device_irreversible'),
+            warning: t('delete_device_cascade', { sales: d.sales ?? 0, inventory: d.inventory ?? 0, orders: d.orders ?? 0 }),
+            yesLabel: t('yes_delete'),
+            onYes: () => reallyDelete(true),
+          }), 0);
+          return;
+        }
+        if (err.code === 'has_pending_orders') { showToast(t('device_del_pending'), 'error'); return; }
+        showToast(`${t('device_delete_error')}: ${err.message}`, 'error');
       }
-      if (err.code === 'has_pending_orders') {
-        showToast(t('device_del_pending'), 'error');
-        setDeleteTarget(null);
-        return;
-      }
-      showToast(`${t('device_delete_error')}: ${err.message}`, 'error');
-      setDeleteTarget(null);
-    }
+    };
+    setConfirmAction({
+      title: t('delete_device_title'),
+      subject: machineName(m, t),
+      message: t('delete_device_irreversible'),
+      yesLabel: t('yes_delete'),
+      onYes: () => reallyDelete(false),
+    });
   }
-
-  // Frees a machine whose tablet can't sign itself out — smashed, lost, or
-  // already wiped. The only path when the tablet is gone: without it the
-  // machid stays claimed forever and no replacement can pair.
-  async function releaseTablet(m) {
-    try {
-      const { error } = await supabase.rpc('admin_release_machine', { p_machid: m.id });
-      if (error) throw error;
-      await fetchMarkets();
-      showToast(t('tablet_released'));
-    } catch (err) {
-      showToast(`${t('tablet_release_error')}: ${err.message}`, 'error');
-    } finally {
-      setReleaseTarget(null);
-    }
-  }
-
-  // An owner renaming its own machine goes straight to the table: the "Owner
-  // manages micromarkets" policy already limits authenticated UPDATEs to
-  // owner_id = auth.uid(), and only the name column is in the payload. From the
-  // superadmin's fleet list (viaAdmin) the same UPDATE would match zero rows
-  // for someone else's machine, so that path goes through device-admin.
-  async function renameMarket() {
-    const name = (renamingMarket?.name || '').trim();
-    if (!name) return showToast(t('device_name_required'), 'error');
-    try {
-      if (renamingMarket.viaAdmin) {
-        await invokeAdminFn('device-admin', {
-          body: { action: 'rename', machid: renamingMarket.id, name },
-        });
-      } else {
-        // Обход заблокированного PATCH — см. patchRow(). Полная строка сюда
-        // намеренно не передаётся, в отличие от каталога, и по двум причинам.
-        // Во-первых, список машин читается частичным select — отправить его
-        // целиком значило бы записать обратно свой layout_json, а его правит
-        // планшет, и раскладка минутной давности затёрла бы свежую. Во-вторых,
-        // призрачный аппарат страшнее призрачного товара: «Owner manages
-        // micromarkets» объявлена FOR ALL без отдельного WITH CHECK, то есть
-        // для вставки Postgres требует то же owner_id = auth.uid(). Без него
-        // вставка не пройдёт RLS — а больше upsert-у тут ничего и не нужно.
-        const error = await patchRow('micromarkets', renamingMarket.id, { name });
-        if (error) throw error;
-      }
-      setRenamingMarket(null);
-      await fetchMarkets();
-      if (isSuperadmin && adminDevices) fetchAdminDevices();
-      showToast(t('device_renamed'));
-    } catch (err) {
-      showToast(`${t('device_rename_error')}: ${err.message}`, 'error');
-    }
-  }
-
-  // Machine-readable codes from supabase/functions/device-claim/index.ts →
-  // operator-facing text. Anything else falls through to the raw message.
-  // (`secret_required` only fires on the function's curl-only `force` path.)
-  const DEVICE_CLAIM_ERRORS = {
-    bad_machid: 'device_err_bad_machid',
-    machine_not_found: 'device_err_not_found',
-    secret_mismatch: 'device_err_secret_mismatch',
-  };
 
   async function claimDevice() {
     const machid = String(addingDevice?.machid ?? '').trim();
     const secret = String(addingDevice?.secret ?? '').trim();
     if (!/^\d+$/.test(machid)) return showToast(t('device_err_bad_machid'), 'error');
-
     setDeviceSaving(true);
     try {
       // Secret is optional: omitted, device-claim resolves it from the
-      // SmartVend list server-side; typed, it's sent and wins. The name always
-      // comes from the list.
+      // SmartVend list server-side; typed, it's sent and wins.
       const data = await invokeAdminFn('device-claim', {
-        body: {
-          machid: Number(machid),
-          ...(secret ? { secret } : {}),
-          kind: addingDevice.kind || 'vending',
-        },
+        body: { machid: Number(machid), ...(secret ? { secret } : {}), kind: addingDevice.kind || 'vending' },
       });
       setAddingDevice(null);
       await fetchMarkets();
@@ -1768,9 +1049,7 @@ export default function Admin() {
       // A machine that's already assigned can only be moved via transfer —
       // name whoever holds it so it's obvious where to go next.
       if (err.code === 'already_claimed') {
-        showToast(t('device_err_already_claimed', {
-          email: err.details?.owner_email || '—',
-        }), 'error');
+        showToast(t('device_err_already_claimed', { email: err.details?.owner_email || '—' }), 'error');
         return;
       }
       const key = DEVICE_CLAIM_ERRORS[err.code];
@@ -1780,1902 +1059,152 @@ export default function Admin() {
     }
   }
 
-  async function fetchCatalogProducts() {
-    setLoading(true);
-    try {
-      const ownerId = session?.user?.id;
-      if (!ownerId) {
-        setCatalogProducts([]);
-        return;
-      }
-      const { data, error } = await supabase
-        .from('products')
-        .select('*')
-        .eq('owner_id', ownerId)
-        .order('is_draft', { ascending: false })
-        .order('name', { ascending: true });
-      if (error) throw error;
-      setCatalogProducts(data || []);
-    } catch (err) {
-      console.error('Error fetching catalog:', err);
-      if (await handleAuthFailure(err)) return;
-      showToast(t('catalog_load_error'), 'error');
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  async function saveCatalogProduct() {
-    if (!editingCatalog?.name?.trim()) return showToast(t('name_required'), 'error');
-    setLoading(true);
-    try {
-      const payload = {
-        name: editingCatalog.name.trim(),
-        image_url: editingCatalog.image_url || null,
-        emoji: editingCatalog.emoji || null,
-        category_id: editingCatalog.category_id || null,
-        volume_ml: editingCatalog.volume_ml === '' || editingCatalog.volume_ml == null
-          ? null
-          : Number(editingCatalog.volume_ml),
-        description: editingCatalog.description || null,
-        is_draft: !!editingCatalog.is_draft,
-      };
-      if (editingCatalog.id === 'new') {
-        const { error } = await supabase.from('products').insert({
-          ...payload,
-          owner_id: session?.user?.id || null,
-          is_draft: false, // admin-created rows are published immediately
-        });
-        if (error) throw error;
-        showToast(t('product_added'));
-      } else {
-        // Обход заблокированного PATCH — см. patchRow().
-        const error = await patchRow('products', editingCatalog.id, payload, {
-          owner_id: editingCatalog.owner_id || session?.user?.id || null,
-          is_archived: !!editingCatalog.is_archived,
-        });
-        if (error) throw error;
-        showToast(t('product_saved'));
-      }
-      setEditingCatalog(null);
-      fetchCatalogProducts();
-    } catch (err) {
-      console.error('Save catalog error:', err);
-      // Модалка остаётся открытой со всем, что оператор ввёл, — «Сохранить»
-      // можно нажать ещё раз, ничего не набирая заново.
-      showToast(
-        isNetworkFailure(err) ? t('network_save_error') : `${t('save_error')}: ${err.message}`,
-        'error',
-      );
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  async function archiveCatalogProduct(p) {
-    try {
-      // Полная строка во втором аргументе — она у нас на руках из списка,
-      // и при повторе POST-ом вставлять пришлось бы именно её (см. patchRow).
-      const error = await patchRow('products', p.id, { is_archived: !p.is_archived }, p);
-      if (error) throw error;
-      showToast(p.is_archived ? t('restored') : t('archived_toast'));
-      fetchCatalogProducts();
-    } catch (err) {
-      showToast(t('save_error') + ': ' + err.message, 'error');
-    }
-  }
-
-  async function publishDraft(p) {
-    try {
-      const error = await patchRow('products', p.id, { is_draft: false }, p);
-      if (error) throw error;
-      showToast(t('published'));
-      fetchCatalogProducts();
-    } catch (err) {
-      showToast(t('save_error') + ': ' + err.message, 'error');
-    }
-  }
-
-  function deleteCatalogProduct(p) {
-    setConfirmAction({
-      message: `${t('delete_catalog_confirm_prefix')}${p.name}${t('delete_catalog_confirm_suffix')}`,
-      onYes: () => reallyDeleteCatalogProduct(p),
-    });
-  }
-
-  async function reallyDeleteCatalogProduct(p) {
-    try {
-      // `deleted` смотрим не для красоты: PostgREST отвечает 204 и когда
-      // удалил строку, и когда RLS отфильтровала все кандидаты, — раньше на
-      // втором панель бодро рапортовала об успехе. Подробности в deleteRow().
-      const { deleted, error } = await deleteRow('products', p.id, 'delete_product');
-      if (error) throw error;
-      if (deleted === 0) {
-        showToast(t('delete_catalog_no_rights'), 'error');
-        return;
-      }
-      showToast(t('deleted_toast'));
-      fetchCatalogProducts();
-    } catch (err) {
-      console.error('Delete catalog product error:', err);
-      // 23503 = still referenced by inventory (products.id is ON DELETE
-      // RESTRICT there). That is the one failure an operator can actually act
-      // on, so name it instead of showing the raw Postgres text.
-      const msg = err.code === '23503'
-        ? t('delete_catalog_in_use')
-        : `${t('delete_catalog_failed')}: ${err.message}`;
-      showToast(msg, 'error');
-    }
-  }
-
-  // Catalog modal uses its own file-input handler so the shared crop
-  // modal knows to route the resulting URL into editingCatalog.
-  const onCatalogFileChange = async (e) => {
-    const file = e.target.files?.[0];
-    // Clear the input right away: otherwise picking the SAME file again after
-    // an error fires no change event and the operator thinks nothing happened.
-    e.target.value = '';
-    if (!file) return;
-
-    setUploadingImage(true);
-    try {
-      setCropImageSrc(await prepareForCrop(file));
-    } catch (err) {
-      console.error('Photo pick failed:', err);
-      showToast(err.message, 'error');
-    } finally {
-      setUploadingImage(false);
-    }
-  };
-
-  /**
-   * Turn a picked file into something <Cropper> can actually display — or
-   * throw a message worth showing to a human.
-   *
-   * Everything here exists because the previous version had no failure path
-   * at all: a file the browser cannot decode used to leave the cropper open
-   * full-screen and black until the operator pressed Cancel, with no hint of
-   * what went wrong. An iPhone photo hit that every time.
-   */
-  async function prepareForCrop(file) {
-    if (file.size > MAX_SOURCE_BYTES) throw new Error(t('photo_too_large'));
-
-    let blob = file;
-
-    // HEIC/HEIF is what an iPhone hands over by default and what nothing but
-    // Safari decodes. heic2any carries a libheif build (~1 MB), so it is
-    // imported only once one actually shows up.
-    if (/hei[cf]/i.test(file.type) || /\.hei[cf]$/i.test(file.name)) {
-      try {
-        const { default: heic2any } = await import('heic2any');
-        const out = await heic2any({ blob: file, toType: 'image/png' });
-        blob = Array.isArray(out) ? out[0] : out;
-      } catch (err) {
-        console.error('HEIC decode failed:', err);
-        throw new Error(t('photo_heic_failed'), { cause: err });
-      }
-    }
-
-    // Decode once, up front. TIFF, a truncated download, a .jpg that is not
-    // one — all fail here, and the modal never opens.
-    let bmp;
-    try {
-      bmp = await createImageBitmap(blob, { imageOrientation: 'from-image' });
-    } catch {
-      throw new Error(t('photo_format_unsupported'));
-    }
-
-    try {
-      // Small enough already: hand the original over untouched. The <img> the
-      // cropper renders applies EXIF orientation on its own, same as the
-      // bitmap above, so a portrait phone shot stays upright either way.
-      if (Math.max(bmp.width, bmp.height) <= MAX_SOURCE_PX) {
-        return URL.createObjectURL(blob);
-      }
-
-      // Canvas tops out near 16.7 Mpx on Safari/iOS and a modern phone shoots
-      // well past that, so a 50 Mpx photo would simply never render.
-      const scale = MAX_SOURCE_PX / Math.max(bmp.width, bmp.height);
-      const canvas = document.createElement('canvas');
-      canvas.width = Math.round(bmp.width * scale);
-      canvas.height = Math.round(bmp.height * scale);
-      canvas.getContext('2d').drawImage(bmp, 0, 0, canvas.width, canvas.height);
-      const small = await new Promise((resolve, reject) => canvas.toBlob(
-        b => (b ? resolve(b) : reject(new Error(t('photo_format_unsupported')))),
-        'image/webp', 0.92));
-      return URL.createObjectURL(small);
-    } finally {
-      bmp.close();
-    }
-  }
-
-  /**
-   * Open the library picker, fetching its index on first use.
-   *
-   * index.json is ~110 KB gzipped and holds only names and hashes — no
-   * pictures. Thumbnails are requested by the grid itself, a page at a time,
-   * and every one of them is immutable and cached for a year, so a second
-   * visit to the picker costs no network at all.
-   */
-  async function openPhotoLibrary() {
-    setPhotoMenuOpen(false);
-    setLibraryOpen(true);
-    if (libraryIndex || libraryLoading) return;
-
-    setLibraryLoading(true);
-    try {
-      const resp = await fetch(`${LIBRARY_BASE}/index.json`);
-      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-      setLibraryIndex(await resp.json());
-    } catch (err) {
-      console.error('Photo library index failed:', err);
-      showToast(t('library_error'), 'error');
-      setLibraryOpen(false);
-    } finally {
-      setLibraryLoading(false);
-    }
-  }
-
-  /**
-   * Take a library photo for the product being edited.
-   *
-   * image_url points straight at the shared object — nothing is copied or
-   * re-uploaded, which is the whole point: every owner who picks this picture
-   * ends up with the identical URL, so the tablet's disk cache fetches it once
-   * across the fleet. The name is filled in only when the field is still
-   * empty, so it never overwrites something the operator typed.
-   */
-  function pickFromLibrary(entry) {
-    setEditingCatalog(prev => prev ? {
-      ...prev,
-      image_url: `${LIBRARY_BASE}/${entry.f}.webp`,
-      name: prev.name?.trim() ? prev.name : entry.n,
-    } : prev);
-    setLibraryOpen(false);
-  }
-
-  /** Close the cropper and release the object URL behind it. */
-  const closeCropper = () => {
-    if (cropImageSrc?.startsWith('blob:')) URL.revokeObjectURL(cropImageSrc);
-    setCropImageSrc(null);
-    setCroppedAreaPixels(null);
-    setCrop({ x: 0, y: 0 });
-    setZoom(1);
-  };
-
-  async function fetchSales() {
-    setLoading(true);
-    try {
-      let q = supabase
-        .from('sales')
-        .select(`
-          *,
-          micromarkets(name),
-          sales_items(
-            *,
-            inventory(name, motor_id, products(name))
-          )
-        `)
-        .order('created_at', { ascending: false });
-
-      // Machine filter
-      if (selectedSalesMarket !== 'all') {
-        q = q.eq('micromarket_id', selectedSalesMarket);
-      }
-
-      // Time filter (server-side)
-      let since = null;
-      if (timeFilter === 'day') {
-        const d = new Date(); d.setHours(0, 0, 0, 0); since = d.toISOString();
-      } else if (timeFilter === 'week') {
-        const d = new Date(); d.setDate(d.getDate() - 7); since = d.toISOString();
-      } else if (timeFilter === 'month') {
-        const d = new Date(); d.setMonth(d.getMonth() - 1); since = d.toISOString();
-      }
-      if (since) q = q.gte('created_at', since);
-      if (timeFilter === 'period') {
-        if (periodFrom) q = q.gte('created_at', new Date(periodFrom).toISOString());
-        if (periodTo) {
-          const to = new Date(periodTo); to.setHours(23, 59, 59, 999);
-          q = q.lte('created_at', to.toISOString());
-        }
-      }
-
-      // "recent" = just the last few; filtered views get a higher safety cap.
-      q = q.limit(timeFilter === 'recent' ? SALES_PAGE_SIZE : 500);
-
-      const { data, error } = await q;
-      if (error) throw error;
-      setSales(data || []);
-    } catch (err) {
-      console.error('Error fetching sales:', err);
-      showToast(t('sales_load_error'), 'error');
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  // A dead session arrives in two disguises. PostgREST answers 42501: the
-  // request fell through to the `anon` role, which lost its direct grants in
-  // the June lockdown, so "permission denied for table micromarkets" really
-  // means "no token". Edge functions answer 401 from their own getUser check.
-  //
-  // Neither deserves a generic "could not load" toast. Until now the panel
-  // swallowed both and kept polling every 30 s with the anon key, showing the
-  // operator empty lists and no explanation. Re-check the session, and if it
-  // is really gone, drop to the login screen — which is what `session === null`
-  // renders.
-  //
-  // Returns true when it handled the error, so callers can skip their own toast.
-  async function handleAuthFailure(err) {
-    const looksAuth =
-      err?.code === '42501' || err?.code === 'PGRST301' ||
-      err?.status === 401 || err?.context?.status === 401;
-    if (!looksAuth) return false;
-
-    const { data } = await supabase.auth.getSession();
-    if (data?.session) return false;   // signed in after all — a genuine denial
-
-    setSession(null);
-    showToast(t('session_expired'), 'error');
-    return true;
-  }
-
-  // Live connection of boards on the Realtime firmware: one presence-only
-  // channel per board. The board tracks itself under its own ID (MAC) and
-  // publishes its state there {device, ver, variant, net, rssi_dbm, csq, heap};
-  // the panel only listens. rtOnline[machid] = that state, or null when the
-  // board is not in the channel.
-  const [rtOnline, setRtOnline] = useState({});
-  const rtWasOnline = useRef({});   // machid -> board was in its channel at the last sync
-  const rtTopicsKey = markets
-    .filter((m) => m.rt?.topic && m.rt?.device_id)
-    .map((m) => `${m.id}:${m.rt.topic}:${m.rt.device_id}`)
-    .sort()
-    .join(',');
-  useEffect(() => {
-    if (!rtTopicsKey) { setRtOnline({}); return undefined; }
-    const channels = rtTopicsKey.split(',').map((entry) => {
-      const [machid, topic, deviceId] = entry.split(':');
-      const ch = supabase.channel(`dev:${topic}`, { config: { presence: { key: '' } } });
-      const update = () => {
-        const metas = ch.presenceState()[deviceId];
-        const meta = Array.isArray(metas) && metas.length ? metas[metas.length - 1] : null;
-        setRtOnline((prev) => ({ ...prev, [machid]: meta }));
-        // Seen online, now gone: Presence just fired the board's "last will".
-        // Stamp the moment in device_rt (the board's own 15-minute beat can
-        // only say "alive at about"), then refresh the lamp tooltip.
-        const was = rtWasOnline.current[machid];
-        rtWasOnline.current[machid] = !!meta;
-        if (was && !meta) {
-          supabase.rpc('touch_device_seen', { p_machid: Number(machid) })
-            .then(() => fetchMarkets());
-        }
-      };
-      ch.on('presence', { event: 'sync' }, update);
-      // An empty channel may never sync; settle it to "offline" after a beat.
-      ch.subscribe((st) => { if (st === 'SUBSCRIBED') setTimeout(update, 2000); });
-      return ch;
-    });
-    return () => { channels.forEach((ch) => supabase.removeChannel(ch)); };
-  }, [rtTopicsKey]);
-
-  async function unpairBoard(market) {
-    setConfirmAction({
-      message: t('pair_board_unpair_confirm'),
-      yesLabel: t('pair_board_unpair'),
-      tone: 'danger',
-      onYes: async () => {
-        const { error } = await supabase.rpc('unpair_device', { p_machid: market.id });
-        if (error) { showToast(error.message, 'error'); return; }
-        showToast(t('pair_board_unpaired'));
-        setPairMarket(null);
-        fetchMarkets();
-      },
-    });
-  }
-
-  async function restoreSaleStock(sale) {
-    setConfirmAction({
-      message: t('restore_stock_confirm'),
-      yesLabel: t('restore_stock'),
-      tone: 'primary',
-      onYes: async () => {
-        const { error } = await supabase.rpc('restore_sale_stock', { p_sale_id: sale.id });
-        if (error) { showToast(error.message, 'error'); return; }
-        showToast(t('stock_restored'));
-        fetchSales();
-      },
-    });
-  }
-
-  async function fetchMarkets() {
-    try {
-      // Two queries, merged here rather than one embedded select: PostgREST
-      // can't infer a relationship to a view, and `online` has to come from
-      // the view — the 3-minute threshold is evaluated in SQL against the
-      // database clock. Computing it here would compare the tablet's beat
-      // to the browser's clock, which on a kiosk network is often minutes
-      // out and would flip machines offline at random.
-      const [marketsRes, statusRes, rtRes] = await Promise.all([
-        supabase.from('micromarkets').select('id, name, layout_json, kind, qr_token, open_seconds'),
-        supabase.from('device_status_view').select('machid, last_seen_at, board_ok, online, app_version, ter_number'),
-        // Boards on the Realtime firmware. Missing RPC (migration not applied
-        // yet) just means "none" — the panel keeps working.
-        supabase.rpc('my_device_rt'),
-      ]);
-      if (marketsRes.error) throw marketsRes.error;
-      const byId = new Map(
-        (statusRes.data || []).map((s) => [String(s.machid), s]),
-      );
-      // A failed my_device_rt must not erase what the list already knows: it
-      // would drop the connection lamp of every paired board until the next
-      // poll, and a machine without a lamp reads as "no board", not "no data".
-      // Keep the last known pairing and say so in the console.
-      if (rtRes.error) console.error('my_device_rt failed, keeping last known:', rtRes.error);
-      const rtById = new Map(
-        (rtRes.error ? [] : rtRes.data || []).map((r) => [String(r.machid), r]),
-      );
-      setMarkets((prev) => {
-        const prevRt = new Map(prev.map((m) => [String(m.id), m.rt]));
-        return (marketsRes.data || []).map((m) => ({
-          ...m,
-          // Absent row = the machine has never reported. Left undefined so the
-          // badge can say "never seen" instead of claiming it's offline —
-          // a machine that isn't installed yet isn't a fault.
-          status: byId.get(String(m.id)),
-          rt: rtRes.error ? prevRt.get(String(m.id)) : rtById.get(String(m.id)),
-        }));
-      });
-      // No auto-select: the Inventory tab opens on the machine list and the
-      // operator drills into a specific machine. Sales/Catalog don't need one.
-    } catch (err) {
-      console.error('Error fetching markets:', err);
-      if (await handleAuthFailure(err)) return;
-      showToast(t('could_not_load_markets'), 'error');
-    }
-  }
-
-  // Layout of the currently-selected market, parsed once and memoized
-  // so CabinetLayout doesn't re-parse on every render. Falls back to
-  // factory 6×6 when layout_json hasn't been pushed yet (new pairing
-  // or older client).
-  const selectedMarketLayout = React.useMemo(() => {
-    const market = markets.find(m => String(m.id) === String(selectedMarketId));
-    return parseLayout(market?.layout_json);
-  }, [markets, selectedMarketId]);
-
-  // Static and screen micromarkets are open-shelf: no motors/cabinet layout, so
-  // the admin shows a flat product list (with add/edit/delete) instead of the
-  // cabinet view. They differ in one thing only — the screen machine's buyer
-  // picks goods by the cell number on its own numpad, so its positions carry a
-  // number and static-QR ones don't.
-  const selectedMarket = markets.find(m => String(m.id) === String(selectedMarketId));
-  const isStaticMarket = selectedMarket?.kind === 'micromarket_static';
-  const isScreenMarket = selectedMarket?.kind === 'micromarket_screen';
-  const isOpenShelf = isOpenShelfKind(selectedMarket?.kind);
-
-  function addStaticProduct() {
-    setEditingProduct({
-      id: 'new', product_id: null, name: '', price: 0, stock: 0,
-      image_url: '', emoji: '', category_id: null,
-      // Предлагаем номер сразу: у машины с экраном позиция без номера покупателю
-      // недоступна, и «забыл проставить» — самый вероятный способ завести товар,
-      // которого никто не купит. products здесь — весь инвентарь машины, до
-      // фильтра по категории, иначе автономер предложил бы уже занятый.
-      motor_id: isScreenMarket ? nextFreeCellNumber(products) : null,
-    });
-  }
-
-  async function fetchProducts(marketId) {
-    setLoading(true);
-    try {
-      // Pull the joined products row so the list can display the
-      // canonical SKU image/name even when the inventory row's own
-      // image_url is stale (older clients used to write it directly).
-      const { data, error } = await supabase
-        .from('inventory')
-        .select('*, products(id,name,image_url,emoji,category_id,volume_ml,is_draft)')
-        .eq('micromarket_id', marketId);
-      if (error) throw error;
-      // Sorting happens at render time via filteredProducts so the
-      // ordering tracks the selected market's layout.
-      setProducts(data || []);
-    } catch (err) {
-      console.error('Error fetching products:', err);
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  // Вызывается при выборе файла
-  // Конвертация обрезанной области в Blob
-  const getCroppedImg = (imageSrc, pixelCrop) => {
-    return new Promise((resolve, reject) => {
-      const img = new window.Image();
-      img.src = imageSrc;
-      img.onload = () => {
-        const canvas = document.createElement('canvas');
-        const ctx = canvas.getContext('2d');
-        
-        const targetSize = 600;
-        canvas.width = targetSize;
-        canvas.height = targetSize;
-        
-        ctx.fillStyle = 'white';
-        ctx.fillRect(0, 0, targetSize, targetSize);
-        
-        ctx.drawImage(
-          img,
-          pixelCrop.x,
-          pixelCrop.y,
-          pixelCrop.width,
-          pixelCrop.height,
-          0,
-          0,
-          targetSize,
-          targetSize
-        );
-        
-        canvas.toBlob((blob) => {
-          if (!blob) return reject(new Error('Canvas empty'));
-          resolve(blob);
-        }, 'image/webp', 0.85);
-      };
-      // Was `img.onerror = reject`, which rejects with an Event — and the
-      // catch below renders it as {"isTrusted":true} in the toast.
-      img.onerror = () => reject(new Error(t('photo_format_unsupported')));
-    });
-  };
-
-  // Загрузка готового обрезанного фото
-  const handleUploadCrop = async () => {
-    // The button is disabled in this state; the guard is for the stray call.
-    if (!cropImageSrc || !croppedAreaPixels) return;
-    setUploadingImage(true);
-    try {
-      const processedBlob = await getCroppedImg(cropImageSrc, croppedAreaPixels);
-      
-      const fileName = `${Math.random().toString(36).substring(2, 15)}.webp`;
-      const filePath = `products/${fileName}`;
-
-      const { error: uploadError } = await supabase.storage
-        .from('product-images')
-        .upload(filePath, processedBlob, {
-          // Filenames are random + upsert:false, so each URL is immutable —
-          // safe to cache for a year (was 3600 = 1h, far too short).
-          cacheControl: '31536000',
-          upsert: false,
-          contentType: 'image/webp'
-        });
-
-      if (uploadError) throw uploadError;
-
-      const { data } = supabase.storage.from('product-images').getPublicUrl(filePath);
-
-      setEditingCatalog(prev => prev ? { ...prev, image_url: data.publicUrl } : prev);
-      closeCropper();
-    } catch (err) {
-      console.error('Error uploading image:', err);
-      showToast(`${t('photo_upload_error')}: ${err.message || JSON.stringify(err)}`, 'error');
-    } finally {
-      setUploadingImage(false);
-    }
-  };
-
-  async function addCategory() {
-    if (!newCatRu.trim() || !newCatKz.trim() || !newCatEn.trim()) return showToast(t('fill_all_languages'), 'error');
-    try {
-      const ownerId = session?.user?.id;
-      if (!ownerId) return showToast(t('session_inactive'), 'error');
-      const { error } = await supabase.from('categories').insert({
-        name_ru: newCatRu.trim(),
-        name_kz: newCatKz.trim(),
-        name_en: newCatEn.trim(),
-        owner_id: ownerId,
-      });
-      if (error) throw error;
-      setNewCatRu(''); setNewCatKz(''); setNewCatEn('');
-      fetchCategories();
-      showToast(t('category_added'));
-    } catch (err) {
-      showToast(`${t('save_error')}: ${err.message}`, 'error');
-    }
-  }
-
-  function deleteCategory(id) {
-    setConfirmAction({
-      message: t('delete_category_confirm'),
-      onYes: () => reallyDeleteCategory(id),
-    });
-  }
-
-  async function reallyDeleteCategory(id) {
-    try {
-      // Ошибку здесь раньше не смотрели вовсе: supabase-js её не бросает, а
-      // возвращает в результате, так что catch не срабатывал никогда и панель
-      // рапортовала «удалено» даже когда ничего не удалилось.
-      const { error } = await deleteRow('categories', id, 'delete_category');
-      if (error) throw error;
-      fetchCategories();
-      showToast(t('category_deleted'));
-    } catch (err) {
-      console.error('Delete category error:', err);
-      showToast(t('category_delete_error'), 'error');
-    }
-  }
-
-  async function saveProduct() {
-    if (!editingProduct.product_id) {
-      return showToast(t('pick_product_from_catalog'), 'error');
-    }
-    if (editingProduct.price == null || editingProduct.price === '') {
-      return showToast(t('specify_price'), 'error');
-    }
-
-    // Номер ячейки правится только у машины с экраном — см. payload ниже.
-    let cellNumber = null;
-    if (isScreenMarket) {
-      const raw = editingProduct.motor_id;
-      if (raw != null && String(raw).trim() !== '') {
-        cellNumber = Number(raw);
-        if (!Number.isInteger(cellNumber) || cellNumber < CELL_MIN || cellNumber > CELL_MAX) {
-          return showToast(t('cell_number_range', { min: CELL_MIN, max: CELL_MAX }), 'error');
-        }
-        // Обычный случай — «взял номер соседа» — объясняем до похода в базу.
-        // Арбитром всё равно остаётся индекс: список в состоянии может отставать.
-        const clash = products.find(p =>
-          String(p.id) !== String(editingProduct.id) && Number(p.motor_id) === cellNumber);
-        if (clash) {
-          return showToast(t('cell_number_taken', { n: cellNumber, name: clash.name || '—' }), 'error');
-        }
-      }
-    }
-
-    setLoading(true);
-    try {
-      // Keep name/image_url/emoji/category_id mirrored on inventory for
-      // back-compat with older tablet builds that read those columns
-      // directly. The catalog row is the source of truth — when admin
-      // edits the product, this row will fall behind until a re-link.
-      //
-      // motor_type and curtain_mode are never in the payload, and motor_id
-      // only for a screen micromarket. For vending the ban stands: there
-      // motor_id is a physical spiral, owned by the tablet's Motor Setup
-      // screen, and editing it remotely could put a product on the wrong
-      // motor. A screen micromarket has no spirals and no tablet — motor_id
-      // there is the number written on the shelf, and this form is the only
-      // place it can be set.
-      const payload = {
-        product_id: editingProduct.product_id,
-        name: editingProduct.name || '',
-        category_id: editingProduct.category_id || null,
-        price: Number(editingProduct.price),
-        stock: Number(editingProduct.stock) || 0,
-        image_url: editingProduct.image_url || null,
-        emoji: editingProduct.emoji || null,
-      };
-      // null здесь — не «не трогать», а «снять номер»: позиция остаётся в базе,
-      // но на экран автомата не попадает.
-      if (isScreenMarket) payload.motor_id = cellNumber;
-      if (editingProduct.id === 'new') {
-        const { error } = await supabase.from('inventory').insert({
-          ...payload,
-          micromarket_id: selectedMarketId,
-        });
-        if (error) throw error;
-      } else {
-        // Обход заблокированного PATCH — см. patchRow().
-        const error = await patchRow('inventory', editingProduct.id, payload, {
-          micromarket_id: editingProduct.micromarket_id || selectedMarketId,
-        });
-        if (error) throw error;
-      }
-      setEditingProduct(null);
-      fetchProducts(selectedMarketId);
-    } catch (err) {
-      console.error('Error saving product:', err);
-      // 23505 = частичный уникальный индекс inventory_market_motor_uk
-      // (micromarket_id, motor_id): номер успели занять между отрисовкой списка
-      // и сохранением — вторая вкладка, второй оператор. Имя индекса проверяем
-      // явно: на inventory это не единственное ограничение, и «номер занят»
-      // вместо чужой ошибки было бы враньём.
-      const cellClash = err?.code === '23505'
-        && `${err.message || ''} ${err.details || ''}`.includes('inventory_market_motor_uk');
-      if (cellClash) {
-        const holder = products.find(p => Number(p.motor_id) === cellNumber);
-        showToast(
-          holder
-            ? t('cell_number_taken', { n: cellNumber, name: holder.name || '—' })
-            : t('cell_number_taken_unknown', { n: cellNumber }),
-          'error',
-        );
-        fetchProducts(selectedMarketId);   // подтянуть того, кто занял номер
-        return;
-      }
-      showToast(
-        isNetworkFailure(err)
-          ? t('network_save_error')
-          : `${t('save_product_error')}: ${err.message || JSON.stringify(err)}`,
-        'error',
-      );
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  /// Apply a chosen catalog product into the inventory edit form:
-  /// the picker passes the full `products` row, we mirror its display
-  /// fields onto editingProduct + record the FK.
-  function applyCatalogToInventory(cp) {
-    setEditingProduct(prev => ({
-      ...prev,
-      product_id: cp.id,
-      name: cp.name,
-      image_url: cp.image_url || '',
-      emoji: cp.emoji || '',
-      category_id: cp.category_id || null,
-    }));
-    setShowCatalogPicker(false);
-  }
-
-  async function deleteProduct(id) {
-    setProductToDelete(id);
-  }
-
-  async function confirmDelete() {
-    if (!productToDelete) return;
-    const id = productToDelete;
-    console.log('Попытка окончательного удаления товара с ID:', id);
-    
-    try {
-      const { error } = await deleteRow('inventory', id, 'delete_inventory_item');
-      if (error) throw error;
-      
-      showToast(t('product_deleted'));
-      setProductToDelete(null);
-      fetchProducts(selectedMarketId);
-    } catch (err) {
-      console.error('Подробная ошибка удаления:', err);
-      showToast(t('delete_error') + ': ' + err.message, 'error');
-      setProductToDelete(null);
-    }
-  }
-
-  // «+1 / −1» — операция относительная, и считать её надо в базе.
-  //
-  // Раньше здесь бралcя product.stock из состояния, загруженного при открытии
-  // страницы, к нему прибавлялась дельта и писалось абсолютное значение. Окно
-  // между чтением и записью — не миллисекунды, а сколько панель открыта: пока
-  // оператор смотрит на «5», покупатель забирает товар, в базе становится 4,
-  // оператор жмёт «+1» и пишет 6. Продажа затёрта, и цифра выглядит
-  // правдоподобно, так что заметят это нескоро.
-  //
-  // adjust_inventory_stock делает stock = stock + delta одним выражением и
-  // возвращает то, что получилось. Оптимистичное значение показываем сразу,
-  // потом заменяем на ответ базы — если разошлось, оператор увидит настоящее
-  // число, а не своё.
-  async function updateStock(product, delta) {
-    const optimistic = Math.max(0, product.stock + delta);
-    setProducts(products.map(p => p.id === product.id ? { ...p, stock: optimistic } : p));
-
-    try {
-      const { data: actual, error } = await supabase
-        .rpc('adjust_inventory_stock', { p_id: product.id, p_delta: delta });
-      if (error) throw error;
-      if (typeof actual === 'number' && actual !== optimistic) {
-        setProducts(prev => prev.map(p => p.id === product.id ? { ...p, stock: actual } : p));
-      }
-      showToast(t('stock_saved'));
-    } catch (err) {
-      console.error('Error updating stock:', err);
-      showToast(t('stock_save_error'), 'error');
-      fetchProducts(selectedMarketId); // Revert on error
-    }
-  }
-
-  async function updatePrice(product, newPrice) {
-    if (newPrice === product.price || newPrice < 0) return;
-    setProducts(products.map(p => p.id === product.id ? { ...p, price: newPrice } : p));
-    
-    try {
-      const { error } = await supabase.from('inventory').update({ price: newPrice }).eq('id', product.id);
-      if (error) throw error;
-      showToast(t('price_changed'));
-    } catch (err) {
-      console.error('Error updating price:', err);
-      showToast(t('price_save_error'), 'error');
-      fetchProducts(selectedMarketId); // Revert on error
-    }
-  }
-
-  const toggleLanguage = () => {
-    const langs = ['ru', 'kk', 'en'];
-    const nextIdx = (langs.indexOf(i18n.language) + 1) % langs.length;
-    i18n.changeLanguage(langs[nextIdx]);
-  };
-
+  // ── Render ──────────────────────────────────────────────────────────────
   if (!session) {
     return (
-      <div className="min-h-screen bg-slate-50 flex items-center justify-center p-5 font-lexend">
-        <div className="bg-white p-8 rounded-3xl shadow-2xl max-w-sm w-full border border-slate-200">
-          <h2 className="text-2xl font-black text-primary mb-6 text-center">{t('login_title')}</h2>
-          <div className="space-y-4">
-            <div>
-              <label className="text-xs font-bold opacity-50 ml-2">Email</label>
-              <input
-                type="email"
-                value={email}
-                onChange={e => setEmail(e.target.value)}
-                className="w-full p-3 bg-slate-100 rounded-xl font-bold focus:outline-none focus:ring-2 focus:ring-primary/50"
-              />
-            </div>
-            <div>
-              <label className="text-xs font-bold opacity-50 ml-2">{t('password')}</label>
-              <input
-                type="password"
-                value={password}
-                onChange={e => setPassword(e.target.value)}
-                className="w-full p-3 bg-slate-100 rounded-xl font-bold focus:outline-none focus:ring-2 focus:ring-primary/50"
-              />
-            </div>
-            <Button
-              variant="primary"
-              block className="mt-4 min-h-12"
-              loading={authLoading}
-              onClick={async () => {
-                setAuthLoading(true);
-                const { error } = await supabase.auth.signInWithPassword({ email, password });
-                if (error) showToast(`${t('login_error')}: ${error.message}`, 'error');
-                setAuthLoading(false);
-              }}
-              disabled={authLoading}
-            >
-              {t('login_btn')}
-            </Button>
-          </div>
-        </div>
+      <>
+        <Login onError={(msg) => showToast(msg, 'error')} />
         <Toast toast={toast} onClose={() => setToast(null)} />
-      </div>
+      </>
     );
   }
 
-  const filteredProducts = (selectedCategoryFilter === 'All'
-    ? products
-    : products.filter(p => p.category_id === selectedCategoryFilter))
-    .slice()
-    .sort(isScreenMarket ? byCellNumber : (a, b) => {
-      // Sort by the operator's per-machine layout so the list mirrors
-      // what the cabinet view shows (MP2404 puts "01" before "11"
-      // even though motor 99 > motor 89).
-      const la = motorToSlotLabel(a.motor_id, selectedMarketLayout);
-      const lb = motorToSlotLabel(b.motor_id, selectedMarketLayout);
-      if (la == null && lb == null) return (a.name || '').localeCompare(b.name || '');
-      if (la == null) return 1;
-      if (lb == null) return -1;
-      return la.localeCompare(lb, undefined, { numeric: true });
-    });
-
-  // Filtering (market + time/period) now happens server-side in fetchSales();
-  // render exactly what was loaded.
-  const filteredSales = sales;
-  // Plain functions, not useMemo/useCallback on purpose: this sits BELOW the
-  // `if (!session)` early return above, so a hook here would run on some
-  // renders and not others — React counts them and throws. Both are cheap
-  // (a find over the machine list, one pass over the loaded sales page).
-  const currencyForMachine = (id) =>
-    currencyOf(markets.find((m) => String(m.id) === String(id)));
-  const machineFor = (id) => markets.find((m) => String(m.id) === String(id));
-
-  // Раскладки разбираются лениво и по одному разу на машину: parseLayout
-  // строит объект заново на каждый вызов, а motorToSlotLabel вешает на него
-  // карту motor → слот, так что разбирать JSON на каждую строку списка
-  // означало бы выбрасывать этот кэш пятьсот раз подряд. Обычная Map, а не
-  // useRef/useMemo — по той же причине, что и всё в этом блоке.
-  const layoutCache = new Map();
-  const layoutForMachine = (id) => {
-    const key = String(id);
-    if (!layoutCache.has(key)) layoutCache.set(key, parseLayout(machineFor(id)?.layout_json));
-    return layoutCache.get(key);
-  };
-
-  // Grouped by currency, not summed flat. With the machine filter on "all" an
-  // owner can have Kazakh and Kyrgyz cabinets in the same list, and adding
-  // tenge to som would print a number that means nothing.
-  const salesStats = (() => {
-    const byCurrency = new Map();
-    let orders = 0, refundCount = 0;
-    for (const s of filteredSales) {
-      const o = saleOutcome(s);
-      if (o.state === 'progress') continue;
-      orders += 1;
-      if (o.refund > 0) refundCount += 1;
-      const cur = currencyForMachine(s.micromarket_id);
-      const c = byCurrency.get(cur) ?? { currency: cur, gross: 0, refund: 0, okOrders: 0 };
-      c.gross += s.amount || 0;
-      c.refund += o.refund;
-      if (o.state === 'ok' || o.state === 'partial' || o.state === 'pending') c.okOrders += 1;
-      byCurrency.set(cur, c);
-    }
-    const totals = [...byCurrency.values()]
-      .map((c) => ({ ...c, net: c.gross - c.refund }))
-      .sort((a, b) => b.net - a.net);
-    return { totals, orders, refundCount };
-  })();
-
-  // Bars: hours of today, or the days of the chosen period. "Recent" is the
-  // last ten sales, not a period, so it gets no chart.
-  const salesChart = (() => {
-    if (timeFilter === 'recent' || !salesStats.totals.length) return null;
-    const main = salesStats.totals[0].currency;
-    const lang = i18n.language;
-    const buckets = [];
-    const index = new Map();
-    if (timeFilter === 'day') {
-      for (let hr = 0; hr < 24; hr++) {
-        index.set(hr, buckets.length);
-        buckets.push({ label: String(hr), tip: `${String(hr).padStart(2, '0')}:00`, value: 0, count: 0 });
-      }
-    } else {
-      const start = new Date();
-      if (timeFilter === 'week') start.setDate(start.getDate() - 7);
-      else if (timeFilter === 'month') start.setMonth(start.getMonth() - 1);
-      else if (periodFrom) start.setTime(new Date(periodFrom).getTime());
-      else if (filteredSales.length) start.setTime(new Date(filteredSales[filteredSales.length - 1].created_at).getTime());
-      const end = timeFilter === 'period' && periodTo ? new Date(periodTo) : new Date();
-      start.setHours(0, 0, 0, 0); end.setHours(0, 0, 0, 0);
-      for (let d = new Date(start), guard = 0; d <= end && guard < 400; d.setDate(d.getDate() + 1), guard++) {
-        index.set(d.toDateString(), buckets.length);
-        buckets.push({
-          label: String(d.getDate()),
-          tip: d.toLocaleDateString(lang, { day: 'numeric', month: 'short' }),
-          value: 0, count: 0,
-        });
-      }
-    }
-    for (const s of filteredSales) {
-      if (currencyForMachine(s.micromarket_id) !== main) continue;
-      const o = saleOutcome(s);
-      if (o.state === 'progress') continue;
-      const d = new Date(s.created_at);
-      const i = index.get(timeFilter === 'day' ? d.getHours() : d.toDateString());
-      if (i == null) continue;
-      buckets[i].value += (s.amount || 0) - o.refund;
-      buckets[i].count += 1;
-    }
-    const note = salesStats.totals.length > 1 ? t('chart_currency_note', { currency: main }) : null;
-    return { buckets, currency: main, note };
-  })();
-
-  // Administration first — it's the superadmin's landing tab.
-  const tabs = [
-    isSuperadmin && { key: 'users', icon: Users, label: t('tab_users'), short: t('tab_users_short'), onClick: () => setActiveTab('users') },
-    { key: 'sales', icon: ShoppingBag, label: t('sales'), short: t('sales'), onClick: () => setActiveTab('sales') },
-    { key: 'inventory', icon: Package, label: t('devices'), short: t('devices'), onClick: () => { closeMarket(); setActiveTab('inventory'); } },
-    { key: 'catalog', icon: Tag, label: t('tab_catalog'), short: t('tab_catalog'), onClick: () => setActiveTab('catalog') },
+  // Any section button, the current one included, leaves an open machine.
+  const go = (tab) => () => { if (selectedMarketId != null) closeMarket(); setActiveTab(tab); };
+  const navItems = [
+    { key: 'sales', icon: LineChart, label: t('sales'), onClick: go('sales') },
+    { key: 'inventory', icon: LayoutGrid, label: t('devices'), onClick: go('inventory') },
+    { key: 'catalog', icon: Tag, label: t('tab_catalog'), onClick: go('catalog') },
+    isSuperadmin && { key: 'users', icon: ShieldCheck, label: t('tab_users'), short: t('tab_users_short'), admin: true, onClick: go('users') },
   ].filter(Boolean);
 
   return (
-    <div className="min-h-screen bg-slate-200 text-slate-900 p-3 pb-24 sm:pb-3 md:p-6 font-lexend">
-      <header className="flex justify-between items-center mb-4 sm:mb-6 bg-white p-3 sm:p-4 rounded-2xl shadow-md border border-slate-300 flex-wrap gap-3 sm:gap-4">
-        <div className="flex flex-wrap items-center gap-3 sm:gap-4 flex-1 min-w-0">
-          <div className="flex flex-col">
-            <h1 className="text-lg sm:text-xl font-black text-slate-900 tracking-tight">Micromart</h1>
-            <span className="text-[9px] sm:text-[10px] font-bold text-slate-500 uppercase tracking-widest">{t('admin_panel')}</span>
-          </div>
-          <div className="h-10 w-[1px] bg-slate-300 hidden sm:block"></div>
-          {/* Desktop tabs; on a phone the same tabs live in the bottom bar. */}
-          <nav className="hidden sm:flex bg-slate-200 p-1 rounded-xl border border-slate-300">
-            {tabs.map(({ key, icon: Icon, label, onClick }) => (
-              <button
-                key={key}
-                onClick={onClick}
-                className={`flex items-center gap-2 px-4 min-h-9 rounded-lg font-bold transition-all text-sm ${activeTab === key ? 'bg-white text-primary shadow-md' : 'text-slate-600 hover:text-slate-900'}`}
-              >
-                <Icon size={16} /> {label}
-              </button>
-            ))}
-          </nav>
-        </div>
-        <div className="flex items-center gap-2 sm:gap-3 min-w-0 ml-auto">
-          <a
-            href="/help"
-            title={t('help_link')}
-            aria-label={t('help_link')}
-            className="inline-flex items-center gap-1.5 min-h-10 sm:min-h-9 px-2.5 rounded-xl text-slate-500 hover:text-primary hover:bg-slate-100 transition-all"
-          >
-            <HelpCircle size={18} />
-            <span className="hidden md:inline text-xs font-bold">{t('help_link')}</span>
-          </a>
-          <button
-            onClick={toggleLanguage}
-            title={t('language')}
-            aria-label={t('language')}
-            className="inline-flex items-center gap-1.5 min-h-10 sm:min-h-9 px-2.5 rounded-xl text-slate-600 hover:text-primary hover:bg-slate-100 transition-all"
-          >
-            <Languages size={18} />
-            <span className="text-xs font-black uppercase">{i18n.language}</span>
-          </button>
-          {/* No global machine picker: Sales/Catalog don't need one, and the
-              Inventory tab has its own machine list to drill into. */}
-          {session?.user?.email && (
-            <span
-              className="hidden lg:block text-[11px] font-medium text-slate-400 min-w-0 max-w-[180px] truncate"
-              title={session.user.email}
-            >
-              {session.user.email}
-            </span>
-          )}
-          <Button variant="ghost" size="sm" icon={LogOut} onClick={() => supabase.auth.signOut()} title={session?.user?.email}>
-            <span className="hidden sm:inline">{t('logout')}</span>
-          </Button>
-        </div>
-      </header>
+    <Shell
+      items={navItems}
+      active={activeTab}
+      email={session.user?.email}
+      isSuperadmin={isSuperadmin}
+      onLogout={() => supabase.auth.signOut()}
+    >
+      {activeTab === 'users' && isSuperadmin ? (
+        <AdminTab
+          users={users}
+          usersLoading={usersLoading}
+          devices={adminDevices}
+          devicesLoading={devicesLoading}
+          currentUserId={session.user?.id}
+          onRefresh={() => { fetchUsers(); fetchAdminDevices(); }}
+          onCreateUser={() => setNewUser({ email: '', password: '', full_name: '' })}
+          onAddDevice={() => setAddingDevice({ machid: '', secret: '', kind: 'vending' })}
+          onChangePassword={(u) => setPwdTarget({ id: u.id, email: u.email, password: '' })}
+          onDeleteUser={deleteUser}
+          onTransfer={(m) => setTransferTarget(m)}
+          onDeleteDevice={deleteDevice}
+          onChangeKind={changeDeviceKind}
+          onRename={(m) => setRenamingMarket({ id: m.id, name: m.name || '', viaAdmin: true })}
+        />
+      ) : activeTab === 'catalog' ? (
+        <CatalogTab
+          products={catalogProducts}
+          categories={categories}
+          filter={catalogFilter}
+          setFilter={setCatalogFilter}
+          loading={catalogLoading}
+          onCreate={() => setEditingCatalog({
+            id: 'new', name: '', image_url: '', emoji: '',
+            // No category by default: silently filing every new product under
+            // whichever sorts first was wrong more often than right.
+            category_id: null, volume_ml: '', description: '', is_draft: false, is_archived: false,
+          })}
+          onEdit={(p) => setEditingCatalog({ ...p })}
+          onArchive={archiveCatalogProduct}
+          onPublish={publishDraft}
+          onDelete={deleteCatalogProduct}
+        />
+      ) : activeTab === 'inventory' ? (
+        selectedMarketId == null ? (
+          <MachinesTab
+            markets={markets}
+            loaded={marketsLoaded}
+            rtOnline={rtOnline}
+            showToast={showToast}
+            onOpen={openMarket}
+            onRename={(m) => setRenamingMarket({ id: m.id, name: m.name || '' })}
+            onSettings={(m) => setPairMarket(m)}
+            onRelease={releaseTablet}
+          />
+        ) : (
+          <MachineDetail
+            key={selectedMarketId}
+            market={selectedMarket}
+            marketId={selectedMarketId}
+            rtLive={rtLiveOf(selectedMarket)}
+            rtState={rtOnline[selectedMarketId]}
+            products={products}
+            loading={inventoryLoading}
+            categories={categories}
+            layout={selectedMarketLayout}
+            onBack={closeMarket}
+            onAdd={addStaticProduct}
+            onQr={() => setQrModalMarket(selectedMarket || { id: selectedMarketId })}
+            onServiceOpen={() => openForService(selectedMarket || { id: selectedMarketId })}
+            serviceOpening={String(serviceOpening) === String(selectedMarketId)}
+            onSettings={() => setPairMarket(selectedMarket)}
+            onCategories={() => setShowCategoryManager(true)}
+            onEdit={(p) => setEditingProduct({ ...p })}
+            onDelete={deleteProduct}
+          />
+        )
+      ) : (
+        <SalesTab markets={markets} categories={categories} showToast={showToast} onConfirm={setConfirmAction} />
+      )}
 
-      <nav className="sm:hidden fixed bottom-0 inset-x-0 z-40 bg-white border-t border-slate-300 shadow-[0_-4px_16px_rgba(15,23,42,0.08)] flex pb-[env(safe-area-inset-bottom)]">
-        {tabs.map(({ key, icon: Icon, short, onClick }) => (
-          <button
-            key={key}
-            onClick={onClick}
-            className={`flex-1 min-w-0 flex flex-col items-center justify-center gap-0.5 h-14 text-[10px] font-bold transition-colors ${activeTab === key ? 'text-primary' : 'text-slate-500'}`}
-          >
-            <Icon size={20} />
-            <span className="truncate max-w-full px-1">{short}</span>
-          </button>
-        ))}
-      </nav>
-
-      <div className="bg-white rounded-2xl sm:rounded-3xl p-3 sm:p-4 md:p-8 shadow-lg border border-slate-300">
-          {activeTab === 'users' && isSuperadmin ? (
-            <UsersTab
-              users={users}
-              loading={usersLoading}
-              onCreate={() => setNewUser({ email: '', password: '', full_name: '' })}
-              onAddDevice={() => setAddingDevice({ machid: '', secret: '', kind: 'vending' })}
-              onChangePassword={(u) => setPwdTarget({ id: u.id, email: u.email, password: '' })}
-              onDeleteUser={(u) => setUserDeleteTarget({ id: u.id, email: u.email })}
-              currentUserId={session?.user?.id}
-              onRefresh={() => { fetchUsers(); fetchAdminDevices(); }}
-              devices={adminDevices}
-              devicesLoading={devicesLoading}
-              onTransfer={(m) => setTransferTarget(m)}
-              onDelete={(machid) => deleteDevice(machid)}
-              onChangeKind={changeDeviceKind}
-              onRename={(m) => setRenamingMarket({ ...m, viaAdmin: true })}
-            />
-          ) : activeTab === 'catalog' ? (
-            <CatalogTab
-              products={catalogProducts}
-              categories={categories}
-              filter={catalogFilter}
-              setFilter={setCatalogFilter}
-              loading={loading}
-              onCreate={() => setEditingCatalog({
-                id: 'new',
-                name: '',
-                image_url: '',
-                emoji: '',
-                // Default to no category rather than whichever one happens
-                // to sort first: silently filing every new product under it was
-                // wrong more often than right.
-                category_id: null,
-                volume_ml: '',
-                description: '',
-                is_draft: false,
-                is_archived: false,
-              })}
-              onEdit={(p) => setEditingCatalog({ ...p })}
-              onArchive={archiveCatalogProduct}
-              onPublish={publishDraft}
-              onDelete={deleteCatalogProduct}
-            />
-          ) : activeTab === 'inventory' ? (
-            !selectedMarketId ? (
-              <div>
-                {/* No "add device" button here: enrolling a machine is a
-                    platform-admin act and lives on the Users tab. This tab is
-                    what an owner sees, and device-claim refuses them anyway. */}
-                <h2 className="text-2xl font-black text-slate-900 mb-1">{t('devices')}</h2>
-                <p className="text-[11px] font-bold text-slate-500 uppercase tracking-widest mb-6">{t('select_machine')}</p>
-                <div className="space-y-2">
-                  {markets.map(m => {
-                    // Status + type badge. On a phone they don't fit on the
-                    // name's line — the row put five fixed-width items next
-                    // to a shrinking name and everything collided — so they
-                    // drop under it and get the full width instead.
-                    const meta = (
-                      <>
-                        <DeviceStatusDot
-                          status={m.status}
-                          kind={m.kind}
-                          withLabel
-                          rt={m.rt ? (m.id in rtOnline ? !!rtOnline[m.id] : null) : undefined}
-                          rtState={rtOnline[m.id]}
-                          rtRow={m.rt}
-                        />
-                        <span className={`text-[9px] font-black uppercase tracking-wider px-2 py-1 rounded-lg shrink-0 ${kindTint(m.kind)}`}>
-                          {kindLabel(m.kind, t)}
-                        </span>
-                        <PayChannelBadge status={m.status} />
-                      </>
-                    );
-                    return (
-                    <div
-                      key={m.id}
-                      className="w-full flex items-center gap-3 p-4 rounded-2xl bg-slate-50 border-2 border-slate-200 hover:border-primary hover:bg-white hover:shadow-md transition-all"
-                    >
-                      <button
-                        onClick={() => openMarket(m.id)}
-                        className="flex items-center gap-3 flex-1 min-w-0 text-left"
-                      >
-                        <div className="w-11 h-11 rounded-xl bg-indigo-600 text-white flex items-center justify-center shrink-0">
-                          <Package size={20} />
-                        </div>
-                        <div className="flex-1 min-w-0">
-                          <div className="font-bold text-slate-900 truncate">{m.name || `${t('market')} #${m.id}`}</div>
-                          <div className="text-[11px] font-bold text-slate-500 uppercase tracking-widest">{t('apparatus_no')}{m.id}</div>
-                          <div className="flex sm:hidden items-center gap-2 mt-2 flex-wrap">{meta}</div>
-                        </div>
-                      </button>
-                      <div className="hidden sm:flex items-center gap-3 shrink-0">{meta}</div>
-                      <IconButton icon={Pencil} label={t('rename')} onClick={() => setRenamingMarket({ id: m.id, name: m.name || '' })} />
-                      {/* Lock board pairing: a static-QR micromarket and a tablet
-                          micromarket (its board is separate from the tablet). */}
-                      {(m.kind === 'micromarket_static' || m.kind === 'micromarket_tablet') && (
-                        <IconButton
-                          icon={Settings}
-                          label={t('machine_settings')}
-                          tone={m.rt ? 'success' : 'default'}
-                          onClick={() => setPairMarket(m)}
-                        />
-                      )}
-                      {m.kind === 'vending' && (
-                        <IconButton icon={LinkOff} label={t('release_tablet')} onClick={() => setReleaseTarget({ id: m.id, name: m.name || '' })} />
-                      )}
-                      <button
-                        onClick={() => openMarket(m.id)}
-                        className="shrink-0 text-slate-400 hover:text-primary transition-colors"
-                      >
-                        <ChevronRight size={18} />
-                      </button>
-                    </div>
-                    );
-                  })}
-                  {markets.length === 0 && (
-                    <p className="text-sm text-slate-400 italic p-4">{t('no_machines')}</p>
-                  )}
-                </div>
-              </div>
-            ) : (
-            <>
-              {/* Was a bare text link and got missed on a phone. Now a real
-                  bordered button — and inline-flex, not flex, or a
-                  block-level button would stretch across the whole card. */}
-              <Button
-                variant="secondary"
-                className="mb-4"
-                icon={ChevronLeft}
-                onClick={closeMarket}
-              >
-                {t('all_machines_back')}
-              </Button>
-              <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 mb-8">
-                <div>
-                  <h2 className="text-2xl font-black text-slate-900">{t('inventory')}</h2>
-                  <p className="text-[11px] font-bold text-slate-500 uppercase tracking-widest">{t('apparatus_no')}{selectedMarketId}</p>
-                </div>
-                <div className="flex flex-wrap gap-2 w-full sm:w-auto items-center">
-                  {isOpenShelf && (
-                    <Button
-                      variant="primary"
-                      className="flex-1 sm:flex-none"
-                      icon={Plus}
-                      onClick={addStaticProduct}
-                    >
-                      {t('add')}
-                    </Button>
-                  )}
-                  {isStaticMarket && (
-                    <Button
-                      variant="dark"
-                      className="flex-1 sm:flex-none"
-                      icon={QrCode}
-                      onClick={() => setQrModalMarket(markets.find(m => String(m.id) === String(selectedMarketId)) || { id: selectedMarketId })}
-                    >
-                      QR
-                    </Button>
-                  )}
-                  {/* A tablet machine has no other way to unlock from the panel
-                      once its lock board is on the Realtime firmware. */}
-                  {(isStaticMarket || (selectedMarket?.kind === 'micromarket_tablet' && selectedMarket?.rt)) && (
-                    <Button
-                      variant="secondary"
-                      className="flex-1 sm:flex-none"
-                      icon={KeyRound}
-                      loading={String(serviceOpening) === String(selectedMarketId)}
-                      onClick={() => openForService(markets.find(m => String(m.id) === String(selectedMarketId)) || { id: selectedMarketId })}
-                      disabled={serviceOpening != null}
-                      title={t('service_open_title')}
-                    >
-                      <span className="hidden sm:inline">{t('service_open')}</span>
-                    </Button>
-                  )}
-                  {(selectedMarket?.kind === 'micromarket_static' || selectedMarket?.kind === 'micromarket_tablet') && (
-                    <Button
-                      variant="secondary"
-                      icon={Settings}
-                      className={`flex-1 sm:flex-none ${selectedMarket?.rt ? 'text-emerald-700 border-emerald-300' : ''}`}
-                      onClick={() => setPairMarket(selectedMarket)}
-                    >
-                      <span className="hidden sm:inline">{t('machine_settings_short')}</span>
-                    </Button>
-                  )}
-                  <Button
-                    variant="secondary"
-                    className="flex-1 sm:flex-none"
-                    onClick={() => setShowCategoryManager(true)}
-                  >
-                    {t('categories')}
-                  </Button>
-                </div>
-              </div>
-
-              {/* Фильтры */}
-              <div className="flex gap-2 mb-8 overflow-x-auto pb-3 no-scrollbar border-b border-slate-200">
-                <button
-                  onClick={() => setSelectedCategoryFilter('All')}
-                  className={`px-5 py-2 rounded-xl text-xs font-bold whitespace-nowrap transition-all ${selectedCategoryFilter === 'All' ? 'bg-slate-900 text-white shadow-md' : 'bg-white text-slate-600 border border-slate-300 hover:border-slate-400 hover:bg-slate-50'}`}
-                >
-                  {t('all_items')}
-                </button>
-                {categories.map(c => (
-                  <button
-                    key={c.id}
-                    onClick={() => setSelectedCategoryFilter(c.id)}
-                    className={`px-5 py-2 rounded-xl text-xs font-bold whitespace-nowrap transition-all ${selectedCategoryFilter === c.id ? 'bg-slate-900 text-white shadow-md' : 'bg-white text-slate-600 border border-slate-300 hover:border-slate-400 hover:bg-slate-50'}`}
-                  >
-                    {c.name_ru}
-                  </button>
-                ))}
-              </div>
-
-              {/* Vending only: admin can edit existing slots but new rows must
-                  come from the tablet (the operator maps motor_id on-site). */}
-              {!isOpenShelf && (
-              <div className="mb-3 flex items-start gap-2 bg-sky-50 border-2 border-sky-300 rounded-xl p-3">
-                <Image size={16} className="text-sky-700 mt-0.5 shrink-0" />
-                <div className="text-[12px] text-sky-900 leading-relaxed">
-                  <span className="font-black">{t('new_slots_tablet_only')}</span>
-                  <span className="opacity-80">{t('new_slots_tablet_hint')}</span>
-                </div>
-              </div>
-              )}
-
-              {!isOpenShelf && selectedMarketLayout._source === 'fallback' && (
-                <div className="mb-6 flex items-start gap-2 bg-amber-50 border-2 border-amber-400 rounded-xl p-3">
-                  <AlertTriangle size={16} className="text-amber-700 mt-0.5 shrink-0" />
-                  <div className="text-[12px] text-amber-900 leading-relaxed">
-                    <span className="font-black">{t('layout_fallback_title')}</span>
-                    <span className="opacity-80">{t('layout_fallback_hint')}</span>
-                  </div>
-                </div>
-              )}
-
-              {loading && !editingProduct ? (
-                <div className="flex justify-center p-20"><Loader2 className="animate-spin text-primary" size={32} /></div>
-              ) : isOpenShelf ? (
-                <StaticInventoryList
-                  products={filteredProducts}
-                  categories={categories}
-                  stockLabel={t('stock_label')}
-                  priceLabel={t('price_label')}
-                  currency={currencyOf(selectedMarket)}
-                  onEdit={(p) => setEditingProduct(p)}
-                  onDelete={(p) => deleteProduct(p.id)}
-                  showCells={isScreenMarket}
-                />
-              ) : (
-                <InventoryByLayout
-                  products={filteredProducts}
-                  layout={selectedMarketLayout}
-                  categories={categories}
-                  stockLabel={t('stock_label')}
-                  priceLabel={t('price_label')}
-                  currency={currencyOf(selectedMarket)}
-                  onEdit={(p) => setEditingProduct(p)}
-                  onDelete={(p) => deleteProduct(p.id)}
-                />
-              )}
-            </>
-            )
-          ) : (
-            <div className="space-y-5">
-              <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
-                <div>
-                  <h2 className="text-xl font-black text-slate-800">{t('sales_history')}</h2>
-                </div>
-                <div className="flex flex-wrap items-center gap-2 w-full sm:w-auto">
-                  <select 
-                    className="w-full sm:w-auto p-2 rounded-xl border border-slate-200 bg-slate-50 text-xs font-bold outline-none"
-                    value={selectedSalesMarket}
-                    onChange={(e) => setSelectedSalesMarket(e.target.value)}
-                  >
-                    <option value="all">{t('all_machines')}</option>
-                    {markets.map(m => (
-                      <option key={m.id} value={m.id.toString()}>{m.name || `${t('apparatus_no')}${m.id}`}</option>
-                    ))}
-                  </select>
-
-                  <div className="w-full sm:w-auto bg-slate-100 p-1 rounded-xl flex flex-wrap gap-1">
-                    {[
-                      { id: 'recent', label: t('recent') },
-                      { id: 'day', label: t('today') },
-                      { id: 'week', label: t('this_week') },
-                      { id: 'month', label: t('this_month') },
-                      { id: 'period', label: t('period') }
-                    ].map(f => (
-                      <button
-                        key={f.id}
-                        onClick={() => setTimeFilter(f.id)}
-                        className={`flex-1 sm:flex-none min-w-[62px] whitespace-nowrap px-3 min-h-9 rounded-lg text-xs font-bold transition-all ${timeFilter === f.id ? 'bg-white text-primary shadow-sm' : 'text-slate-500 hover:text-slate-800'}`}
-                      >
-                        {f.label}
-                      </button>
-                    ))}
-                  </div>
-                  {timeFilter === 'period' && (
-                    <div className="flex items-center gap-1.5 w-full sm:w-auto">
-                      <input
-                        type="date"
-                        value={periodFrom}
-                        onChange={(e) => setPeriodFrom(e.target.value)}
-                        className="flex-1 sm:flex-none p-2 rounded-xl border border-slate-200 bg-slate-50 text-xs font-bold outline-none"
-                      />
-                      <span className="text-slate-400 text-xs">—</span>
-                      <input
-                        type="date"
-                        value={periodTo}
-                        onChange={(e) => setPeriodTo(e.target.value)}
-                        className="flex-1 sm:flex-none p-2 rounded-xl border border-slate-200 bg-slate-50 text-xs font-bold outline-none"
-                      />
-                    </div>
-                  )}
-                  <IconButton icon={RefreshCw} label={t('refresh')} loading={loading} onClick={fetchSales} />
-                </div>
-              </div>
-
-              {/* Статистика */}
-              <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
-                <div className="bg-white border border-slate-200 rounded-2xl p-4 shadow-sm">
-                  <div className="text-[11px] font-black text-slate-500 uppercase tracking-widest mb-1">{t('revenue')}</div>
-                  <div className="text-2xl font-black text-primary tabular-nums">
-                    {salesStats.totals.length === 0
-                      ? <>0 <span className="text-sm">{currencyOf(null)}</span></>
-                      : salesStats.totals.map(({ currency, net }, i) => (
-                          <span key={currency}>
-                            {i > 0 && <span className="text-slate-300"> · </span>}
-                            {net} <span className="text-sm">{currency}</span>
-                          </span>
-                        ))}
-                  </div>
-                  {salesStats.totals.some((c) => c.refund > 0) && (
-                    <div className="text-[11px] font-bold text-slate-400 mt-0.5 tabular-nums">
-                      {t('paid_gross')}: {salesStats.totals.map((c) => `${c.gross} ${c.currency}`).join(' · ')}
-                    </div>
-                  )}
-                </div>
-                <div className="bg-white border border-slate-200 rounded-2xl p-4 shadow-sm">
-                  <div className="text-[11px] font-black text-slate-500 uppercase tracking-widest mb-1">{t('orders')}</div>
-                  <div className="text-2xl font-black text-slate-900 tabular-nums">{salesStats.orders}</div>
-                </div>
-                <div className="bg-white border border-slate-200 rounded-2xl p-4 shadow-sm">
-                  <div className="text-[11px] font-black text-slate-500 uppercase tracking-widest mb-1">{t('avg_check')}</div>
-                  <div className="text-2xl font-black text-slate-900 tabular-nums">
-                    {salesStats.totals.length === 0 || !salesStats.totals[0].okOrders
-                      ? '—'
-                      : <>{Math.round(salesStats.totals[0].net / salesStats.totals[0].okOrders)} <span className="text-sm">{salesStats.totals[0].currency}</span></>}
-                  </div>
-                </div>
-                <div className={`border rounded-2xl p-4 shadow-sm ${salesStats.refundCount > 0 ? 'bg-rose-50 border-rose-200' : 'bg-white border-slate-200'}`}>
-                  <div className={`text-[11px] font-black uppercase tracking-widest mb-1 ${salesStats.refundCount > 0 ? 'text-rose-600' : 'text-slate-500'}`}>{t('refund_due')}</div>
-                  <div className={`text-2xl font-black tabular-nums ${salesStats.refundCount > 0 ? 'text-rose-600' : 'text-slate-900'}`}>
-                    {salesStats.refundCount === 0
-                      ? 0
-                      : salesStats.totals.filter((c) => c.refund > 0).map((c, i) => (
-                          <span key={c.currency}>
-                            {i > 0 && <span className="text-rose-300"> · </span>}
-                            {c.refund} <span className="text-sm">{c.currency}</span>
-                          </span>
-                        ))}
-                  </div>
-                  {salesStats.refundCount > 0 && (
-                    <div className="text-[11px] font-bold text-rose-500 mt-0.5">{salesStats.refundCount} {t('orders_short')}</div>
-                  )}
-                </div>
-              </div>
-
-              {salesChart && !loading && (
-                <SalesChart buckets={salesChart.buckets} currency={salesChart.currency} note={salesChart.note} />
-              )}
-
-              {loading ? (
-                <div className="flex justify-center p-20"><Loader2 className="animate-spin text-primary" size={32} /></div>
-              ) : (
-                <div className="grid gap-4">
-                  {filteredSales.map(sale => {
-                    const items = sale.sales_items || [];
-                    // `dispensed` defaults to TRUE in the DB, so an item is
-                    // considered failed only when it's explicitly false.
-                    // (The kiosk no longer writes null — autonomous machines
-                    // collapse "unknown / timed-out" to failed → auto-refund,
-                    // since there's nobody on-site to inspect the bin.)
-                    const failedItems = items.filter(i => i.dispensed === false);
-                    const refundTotal = failedItems.reduce(
-                      (s, i) => s + ((i.price || 0) * (i.quantity || 1)),
-                      0,
-                    );
-                    const inProgress = sale.status === 'in_progress';
-                    const { groups, totalUnits } = summarizeSaleItems(items);
-                    const market = machineFor(sale.micromarket_id);
-                    // Полный состав чека — в подсказку по наведению: в строку
-                    // влезает только первый товар и счётчик остальных.
-                    const itemsTitle = groups
-                      .map(g => {
-                        const name = g.name || t('deleted_product');
-                        return g.units > 1 ? `${name} ×${g.units}` : name;
-                      })
-                      .join(', ');
-                    // Ячейку в шапку выносим, только когда невыданная позиция
-                    // ровно одна: при двух и более ячейки разные, и один номер
-                    // из них — не подсказка, а дезинформация.
-                    const failedSlot = failedItems.length === 1
-                      ? saleSlotLabel(
-                          failedItems[0].inventory?.motor_id,
-                          market?.kind,
-                          layoutForMachine(sale.micromarket_id),
-                        )
-                      : null;
-                    // Раскрывать нечего: показываем всё сразу. У 332 чеков из
-                    // 400 ровно одна строка, и для них карточка остаётся
-                    // одной строкой — товар, статус, ячейка и сумма умещаются
-                    // в шапку, а отдельный список продублировал бы их. Список
-                    // рисуется там, где строк больше: две строки одного товара
-                    // могут разойтись по результату выдачи, и это как раз то,
-                    // что нужно видеть.
-                    const single = items.length === 1 ? items[0] : null;
-                    const singleSlot = single
-                      ? saleSlotLabel(
-                          single.inventory?.motor_id,
-                          market?.kind,
-                          layoutForMachine(sale.micromarket_id),
-                        )
-                      : null;
-                    // У одиночной позиции ячейка уже стоит рядом с суммой —
-                    // второй раз в бейдже возврата она не нужна.
-                    const refundSlot = single ? null : failedSlot;
-                    // One status per sale, one colour: the strip on the left
-                    // and the pill under the amount say the same thing.
-                    const outcome = saleOutcome(sale);
-                    const tone = {
-                      ok: { strip: 'border-l-emerald-400', pill: 'bg-emerald-50 text-emerald-700', icon: CheckCircle2, text: t('sale_ok') },
-                      partial: { strip: 'border-l-rose-500', pill: 'bg-rose-50 text-rose-600', icon: AlertTriangle, text: `${refundSlot ? `${refundSlot} · ` : ''}${t('refund_due')}: ${outcome.refund} ${currencyForMachine(sale.micromarket_id)}` },
-                      failed: { strip: 'border-l-rose-500', pill: 'bg-rose-50 text-rose-600', icon: XCircle, text: `${refundSlot ? `${refundSlot} · ` : ''}${t('refund_due')}: ${outcome.refund} ${currencyForMachine(sale.micromarket_id)}` },
-                      pending: { strip: 'border-l-amber-400', pill: 'bg-amber-50 text-amber-700', icon: Loader2, text: t('door_pending') },
-                      progress: { strip: 'border-l-amber-400', pill: 'bg-amber-50 text-amber-700', icon: AlertTriangle, text: t('sale_in_progress') },
-                      restored: { strip: 'border-l-slate-300', pill: 'bg-slate-100 text-slate-500', icon: CheckCircle2, text: t('stock_restored') },
-                    }[outcome.state];
-                    const StatusIcon = tone.icon;
-                    const doorBad = sale.door_status === 'failed' || sale.door_status === 'no_ack';
-                    const showAll = openSales.has(sale.id);
-                    // Long receipts fold: the first two lines and every failed
-                    // line stay visible, the rest behind "+N more".
-                    const visibleItems = showAll
-                      ? items
-                      : items.filter((it, i) => i < 2 || it.dispensed === false);
-                    const hiddenCount = items.length - visibleItems.length;
-                    return (
-                    <div key={sale.id} className={`bg-white border border-slate-200 border-l-4 ${tone.strip} rounded-2xl p-3 md:p-4 hover:shadow-md transition-all`}>
-                      <div className="flex justify-between items-start gap-3">
-                        <div className="flex items-center gap-3 min-w-0 flex-1">
-                          <div className="min-w-0">
-                            {/* Заголовок записи — товар, а не аппарат: чтобы
-                                узнать, что купили, раньше приходилось
-                                раскрывать чек, хотя 332 из 400 состоят ровно
-                                из одной позиции. Аппарат уехал строкой ниже —
-                                при фильтре «Все аппараты» он нужен, но
-                                опознают продажу не по нему.
-                                min-w-0 + truncate обязательны — без них длинное
-                                имя товара не даст флексу сжаться и разорвёт
-                                шапку на телефоне. */}
-                            <div className="text-sm font-black text-slate-900 truncate" title={itemsTitle || undefined}>
-                              {groups.length === 0 ? (
-                                <span
-                                  className="font-bold italic text-slate-400"
-                                  title={t('sale_no_items_hint')}
-                                >
-                                  {t('sale_no_items')}
-                                </span>
-                              ) : (
-                                itemsTitle
-                              )}
-                            </div>
-                            {/* Было 10px с uppercase и tracking-tighter: на
-                                цифрах даты uppercase не даёт ничего, зато
-                                «тов.» превращает в «ТОВ.», а зажатый трекинг
-                                добивал и без того мелкий шрифт. */}
-                            <div className="flex flex-wrap items-center gap-x-2 text-xs font-bold text-slate-600 tabular-nums">
-                              <span className="truncate">{sale.micromarkets?.name || `${t('apparatus_no')}${sale.micromarket_id}`}</span>
-                              <span className="text-slate-400">· {totalUnits} {t('items_short')}</span>
-                              {/* Номер платежа здесь, а не отдельным подвалом:
-                                  раскрытия больше нет, и целый блок с рамкой
-                                  ради одного числа удлинял бы каждую карточку.
-                                  select-all оставлен — им сверяют возврат с
-                                  выпиской, и выделять его должно быть одним
-                                  движением. */}
-                              {sale.payment_id && (
-                                <span
-                                  className="font-mono text-[11px] text-slate-400 select-all break-all"
-                                  title={t('payment_id')}
-                                >
-                                  · #{sale.payment_id}
-                                </span>
-                              )}
-                            </div>
-                            {/* Причина невыдачи для одиночной позиции: списка
-                                под шапкой у неё нет, а знать, почему товар не
-                                вышел, нужно не раскрывая ничего. */}
-                            {single && single.dispensed === false && (
-                              <div className="mt-1 text-[11px] font-bold text-rose-500 truncate" title={resultLabel(t, single)}>
-                                {resultLabel(t, single)}
-                              </div>
-                            )}
-                            {/* Realtime boards: the sale is written when the
-                                money is taken, the door opens after. failed /
-                                no_ack mean "paid, door stayed shut" — the
-                                owner refunds by hand (no refund API at LV). */}
-                            {/* Realtime boards: the sale is written when the
-                                money is taken, the door opens after. failed /
-                                no_ack mean "paid, door stayed shut" — the
-                                owner refunds by hand (no refund API at LV). */}
-                            {doorBad && (
-                              <div className="mt-1.5 flex flex-wrap items-center gap-2">
-                                <span className="text-[11px] font-bold text-rose-500" title={t('door_failed_hint')}>
-                                  {t(`door_${sale.door_status}`)}
-                                </span>
-                                {!sale.stock_restored_at && (
-                                  <Button size="sm" variant="secondary" onClick={() => restoreSaleStock(sale)}>
-                                    {t('restore_stock')}
-                                  </Button>
-                                )}
-                              </div>
-                            )}
-                          </div>
-                        </div>
-                        <div className="flex items-center gap-3 shrink-0">
-                          {/* Статус и ячейка одиночной позиции — здесь, рядом с
-                              суммой: списка под шапкой у такого чека нет. */}
-                          {single && (
-                            <div className="flex items-center gap-2 shrink-0">
-                              {single.dispensed === false ? (
-                                <XCircle size={18} className="text-rose-500" />
-                              ) : (
-                                <CheckCircle2 size={18} className="text-emerald-500" />
-                              )}
-                              {singleSlot && (
-                                <span
-                                  title={market?.kind === 'micromarket_screen' ? t('cell_number') : t('slot_in_machine')}
-                                  className="px-2 py-1 rounded-lg border-2 border-indigo-700 bg-indigo-600 text-white font-black text-[11px] tabular-nums"
-                                >
-                                  {singleSlot}
-                                </span>
-                              )}
-                            </div>
-                          )}
-                          <div className="text-right">
-                            <div className={`text-xl font-black tabular-nums ${outcome.state === 'failed' ? 'text-slate-400 line-through' : 'text-slate-900'}`}>
-                              {sale.amount} <span className="text-sm">{currencyForMachine(sale.micromarket_id)}</span>
-                            </div>
-                            <div className="text-[11px] font-bold text-slate-500 tabular-nums whitespace-nowrap">
-                              {formatSaleDate(sale.created_at, i18n.language)}
-                            </div>
-                          </div>
-                        </div>
-                      </div>
-                      {outcome.state !== 'ok' && (
-                        <div className={`mt-2 inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-bold ${tone.pill}`}>
-                          <StatusIcon size={12} className={outcome.state === 'pending' ? 'animate-spin' : ''} />
-                          {tone.text}
-                        </div>
-                      )}
-
-                      {!single && items.length > 0 && (
-                      <div className="space-y-2.5 mt-3 pt-3 border-t border-slate-100">
-                        {/* Здесь позиции НЕ группируются, в отличие от
-                            заголовка, и это осознанно: вид диагностический, а
-                            две строки одного товара могут иметь разные
-                            result_code — одна выдалась, вторая застряла.
-                            Склейка в «Gorilla ×2» уничтожила бы ровно то, ради
-                            чего список и нужен. */}
-                        {visibleItems.map(item => {
-                          const failed = item.dispensed === false;
-                          const slot = saleSlotLabel(
-                            item.inventory?.motor_id,
-                            market?.kind,
-                            layoutForMachine(sale.micromarket_id),
-                          );
-                          return (
-                          <div
-                            key={item.id}
-                            className={`flex justify-between items-center gap-3 text-xs pb-2.5 border-b last:border-0 last:pb-0 ${failed ? 'border-rose-100' : 'border-slate-100'}`}
-                          >
-                            <div className="flex items-start gap-2 min-w-0 flex-1">
-                              {/* Был бэйдж 9px slate-400 на slate-50: и мелко,
-                                  и контраста почти нет. «×N» ещё и снимает
-                                  двусмысленность — голое число в рамке читается
-                                  как номер строки. */}
-                              <span className="shrink-0 min-w-7 h-6 px-1.5 bg-slate-100 border border-slate-200 rounded-md flex items-center justify-center font-black text-xs text-slate-700 tabular-nums">
-                                ×{item.quantity}
-                              </span>
-                              {failed ? (
-                                <XCircle size={14} className="shrink-0 mt-px text-rose-500" />
-                              ) : (
-                                <CheckCircle2 size={14} className="shrink-0 mt-px text-emerald-500" />
-                              )}
-                              <div className="min-w-0 flex-1">
-                                <div className="font-bold text-slate-800 truncate">{item.product_name || item.inventory?.name || item.inventory?.products?.name || t('deleted_product')}</div>
-                                {failed && (
-                                  <div className="text-[10px] font-bold text-rose-500 mt-0.5 truncate">
-                                    {resultLabel(t, item)}
-                                  </div>
-                                )}
-                              </div>
-                            </div>
-                            {/* Номера нет у микромаркетов вовсе — там не
-                                спирали, а полки, — поэтому бейдж просто не
-                                рисуется, а не показывает пустую заглушку на
-                                трёх четвертях строк. */}
-                            {slot && (
-                              <span
-                                title={market?.kind === 'micromarket_screen' ? t('cell_number') : t('slot_in_machine')}
-                                className="shrink-0 px-2 py-1 rounded-lg border-2 border-indigo-700 bg-indigo-600 text-white font-black text-[11px] tabular-nums"
-                              >
-                                {slot}
-                              </span>
-                            )}
-                            <span className={`font-black ml-1 text-sm whitespace-nowrap tabular-nums ${failed ? 'text-rose-500 line-through opacity-70' : 'text-slate-900'}`}>{item.price * item.quantity} {currencyForMachine(sale.micromarket_id)}</span>
-                          </div>
-                          );
-                        })}
-                        {(hiddenCount > 0 || (showAll && items.length > 2)) && (
-                          <button
-                            type="button"
-                            onClick={() => setOpenSales((prev) => {
-                              const next = new Set(prev);
-                              if (next.has(sale.id)) next.delete(sale.id); else next.add(sale.id);
-                              return next;
-                            })}
-                            className="text-xs font-bold text-primary hover:underline min-h-8"
-                          >
-                            {showAll ? t('show_less') : t('show_more_n', { n: hiddenCount })}
-                          </button>
-                        )}
-                      </div>
-                      )}
-                    </div>
-                    );
-                  })}
-                  {sales.length === 0 && (
-                    <div className="text-center py-20 bg-slate-50 rounded-3xl border-2 border-dashed border-slate-200">
-                      <ShoppingBag size={40} className="mx-auto mb-4 text-slate-300" />
-                      <p className="font-black text-slate-400 text-sm uppercase tracking-widest">{t('no_data_period')}</p>
-                    </div>
-                  )}
-                </div>
-              )}
-            </div>
-          )}
-        </div>
-
-      {/* Модалка редактирования — full-screen на мобильном, центр на десктопе. */}
+      {/* Dialogs. Order matters only within one layer; see Modal for layers. */}
       {editingProduct && (
-        <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-sm sm:flex sm:items-center sm:justify-center sm:p-4">
-          <div className="bg-white w-full h-full sm:h-auto sm:max-w-md sm:rounded-3xl sm:shadow-2xl sm:border-2 sm:border-slate-300 flex flex-col">
-            <div className="flex justify-between items-center px-5 py-4 sm:px-6 sm:py-5 border-b-2 border-slate-200 sm:border-b-0">
-              <h3 className="font-black text-lg sm:text-xl text-slate-900">{editingProduct.id === 'new' ? t('new_product') : t('edit_product_title')}</h3>
-              <IconButton icon={X} label={t('close')} tone="plain" onClick={() => setEditingProduct(null)} />
-            </div>
-
-            <div className="space-y-4 flex-1 overflow-y-auto px-5 sm:px-6 py-5">
-              {/* Catalog link card — name/photo/category come from the
-                  linked products row, not typed freehand. New items
-                  must pick a SKU before save. */}
-              {editingProduct.product_id ? (
-                <div className="flex gap-3 items-center bg-emerald-50 border-2 border-emerald-400 rounded-2xl p-3">
-                  <div className="w-16 h-16 bg-white rounded-xl flex items-center justify-center overflow-hidden shrink-0 border-2 border-emerald-300">
-                    {editingProduct.image_url ? (
-                      <img src={editingProduct.image_url} className="w-full h-full object-contain" alt={editingProduct.name} />
-                    ) : editingProduct.emoji ? (
-                      <span className="text-3xl">{editingProduct.emoji}</span>
-                    ) : (
-                      <Image className="text-slate-400" size={20} />
-                    )}
-                  </div>
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-1.5">
-                      <CheckCircle2 size={12} className="text-emerald-700" />
-                      <span className="text-[9px] uppercase font-black tracking-widest text-emerald-800">{t('from_catalog')}</span>
-                    </div>
-                    <h4 className="font-black text-sm truncate text-slate-900">{editingProduct.name}</h4>
-                    <span className="text-[10px] font-bold text-slate-600">
-                      {categories.find(c => c.id === editingProduct.category_id)?.name_ru || t('no_category')}
-                    </span>
-                  </div>
-                  <IconButton icon={Pencil} label={t('change_product')} tone="success" onClick={openCatalogPicker} />
-                </div>
-              ) : (
-                <button
-                  onClick={openCatalogPicker}
-                  className="w-full flex items-center justify-between gap-3 bg-indigo-50 border-2 border-indigo-300 hover:bg-indigo-100 hover:border-indigo-500 transition-all rounded-2xl p-3 text-left"
-                >
-                  <div className="flex items-center gap-3">
-                    <div className="w-12 h-12 bg-white rounded-xl flex items-center justify-center border-2 border-indigo-300">
-                      <ShoppingBag size={20} className="text-indigo-600" />
-                    </div>
-                    <div>
-                      <div className="font-black text-sm text-indigo-900">{t('pick_from_catalog')}</div>
-                      <div className="text-[11px] text-indigo-600 font-medium">{t('pick_from_catalog_hint')}</div>
-                    </div>
-                  </div>
-                  <Plus size={16} className="text-indigo-600" />
-                </button>
-              )}
-
-              {/* Cell number, two branches.
-
-                  Screen micromarket: an editable field. The number here is the
-                  one written on the shelf — the buyer types it on the machine's
-                  numpad — and there is no tablet to assign it on site, so this
-                  form is the only place it can be set at all. Empty is allowed
-                  and means «keep the position, hide it from the screen».
-
-                  Vending: read-only plaque, unchanged. Motor wiring (id + type)
-                  is edited on the tablet's «Настройка моторов» screen so the
-                  operator standing in front of the cabinet can verify the
-                  change physically. Admin can't change it remotely (a wrong
-                  motor index = wrong product dispensed). */}
-              {isScreenMarket ? (
-                <div>
-                  <label className="text-xs font-bold text-slate-700 ml-2 mb-1 block">{t('cell_number')}</label>
-                  <input
-                    type="text"
-                    inputMode="numeric"
-                    maxLength={2}
-                    placeholder={t('cell_number_none')}
-                    className="w-28 p-2.5 border-2 border-slate-300 focus:border-primary focus:outline-none rounded-xl font-black text-lg tabular-nums text-slate-900 bg-white"
-                    value={editingProduct.motor_id ?? ''}
-                    onChange={e => {
-                      // type="text" + фильтр вместо type="number": там пустое
-                      // поле схлопывается в 0, а 0 — валидный, но неверный
-                      // номер; плюс Chrome принимает «e», «+», «−» и крутит
-                      // значение колесом мыши поверх поля.
-                      const digits = e.target.value.replace(/\D/g, '').slice(0, 2);
-                      setEditingProduct({ ...editingProduct, motor_id: digits === '' ? null : Number(digits) });
-                    }}
-                  />
-                  <div className="text-[11px] text-slate-600 leading-relaxed bg-slate-100 border border-slate-300 rounded-xl p-2.5 mt-2">
-                    {t('cell_number_hint')} {t('cell_number_optional_hint')}
-                  </div>
-                </div>
-              ) : editingProduct.motor_id != null && editingProduct.motor_id !== '' ? (
-                <div className="flex items-center gap-3 bg-slate-100 border-2 border-slate-300 rounded-2xl p-3">
-                  <div className="bg-indigo-600 text-white px-3 py-1.5 rounded-lg font-black text-base tabular-nums shadow-sm shrink-0">
-                    {motorToSlotLabel(editingProduct.motor_id) ?? '?'}
-                  </div>
-                  <div className="flex-1 min-w-0">
-                    <div className="text-[10px] font-black uppercase tracking-widest text-slate-600">{t('slot_in_machine')}</div>
-                    <div className="text-xs text-slate-700 leading-snug">
-                      {t('motor_link_tablet_only')}
-                    </div>
-                  </div>
-                </div>
-              ) : null}
-
-              {/* Остаток слева, цена справа — в том же порядке, в каком они
-                  стоят в строке списка. Раньше форма и список читались
-                  зеркально друг другу. */}
-              <div className="flex gap-4">
-                <div className="flex-1">
-                  <label className="text-xs font-bold text-slate-700 ml-2 mb-1 block">{t('stock_pcs')}</label>
-                  <input
-                    type="number"
-                    className="w-full p-2.5 border-2 border-slate-300 focus:border-primary focus:outline-none rounded-xl font-bold text-slate-900 bg-white"
-                    value={editingProduct.stock === 0 ? '' : editingProduct.stock}
-                    onChange={e => setEditingProduct({...editingProduct, stock: e.target.value === '' ? 0 : Number(e.target.value)})}
-                  />
-                </div>
-                <div className="flex-1">
-                  <label className="text-xs font-bold text-slate-700 ml-2 mb-1 block">{t('price_label')} ({currencyOf(selectedMarket)})</label>
-                  <input
-                    type="number"
-                    className="w-full p-2.5 border-2 border-slate-300 focus:border-primary focus:outline-none rounded-xl font-bold text-slate-900 bg-white"
-                    value={editingProduct.price === 0 ? '' : editingProduct.price}
-                    onChange={e => setEditingProduct({...editingProduct, price: e.target.value === '' ? 0 : Number(e.target.value)})}
-                  />
-                </div>
-              </div>
-
-              <div className="text-[11px] text-slate-600 leading-relaxed bg-slate-100 border border-slate-300 rounded-xl p-2.5">
-                {t('edit_photo_in_catalog')}
-              </div>
-
-            </div>
-            {/* Sticky footer — Save stays in reach on mobile no matter
-                how much you scroll the form. */}
-            <div className="px-5 sm:px-6 py-3 sm:py-4 border-t-2 border-slate-200 bg-white sm:rounded-b-3xl">
-              <Button
-                variant="primary"
-                block className="min-h-12"
-                icon={Save}
-                loading={loading}
-                onClick={saveProduct}
-                disabled={loading || uploadingImage || !editingProduct.product_id}
-              >
-                {t('save')}
-              </Button>
-            </div>
-          </div>
-        </div>
+        <InventoryEditModal
+          value={editingProduct}
+          onChange={setEditingProduct}
+          isScreen={isScreenMarket}
+          layout={selectedMarketLayout}
+          categories={categories}
+          currency={currencyOf(selectedMarket)}
+          onPickCatalog={openCatalogPicker}
+          onSave={saveProduct}
+          saving={savingProduct}
+          onClose={() => setEditingProduct(null)}
+        />
       )}
-
-      {/* Управление Категориями */}
+      {showCatalogPicker && (
+        <CatalogPickerModal
+          products={pickerProducts}
+          categories={categories}
+          onPick={applyCatalogToInventory}
+          onClose={() => setShowCatalogPicker(false)}
+        />
+      )}
       {showCategoryManager && (
-        <div className="fixed inset-0 z-[60] bg-black/50 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className="bg-white rounded-3xl p-6 w-full max-w-sm shadow-2xl">
-            <div className="flex justify-between items-center mb-6">
-              <h3 className="font-black text-xl">{t('categories')}</h3>
-              <IconButton icon={X} label={t('close')} tone="plain" onClick={() => setShowCategoryManager(false)} />
-            </div>
-            
-            <div className="flex flex-col gap-2 mb-4">
-              <input 
-                placeholder={t('name_ru')}
-                className="p-2 border border-slate-200 rounded-xl font-bold text-sm"
-                value={newCatRu}
-                onChange={e => setNewCatRu(e.target.value)}
-              />
-              <input 
-                placeholder={t('name_kz')}
-                className="p-2 border border-slate-200 rounded-xl font-bold text-sm"
-                value={newCatKz}
-                onChange={e => setNewCatKz(e.target.value)}
-              />
-              <input 
-                placeholder={t('name_en')}
-                className="p-2 border border-slate-200 rounded-xl font-bold text-sm"
-                value={newCatEn}
-                onChange={e => setNewCatEn(e.target.value)}
-              />
-              <Button variant="primary" className="mt-2" icon={Plus} onClick={addCategory}>
-                {t('add')}
-              </Button>
-            </div>
-
-            <div className="max-h-60 overflow-y-auto flex flex-col gap-2">
-              {categories.map(c => (
-                <div key={c.id} className="flex justify-between items-center bg-slate-50 border border-slate-200 p-3 rounded-xl">
-                  <div className="flex flex-col">
-                    <span className="font-bold text-sm">{c.name_ru}</span>
-                    <span className="text-[10px] opacity-50">{c.name_kz} / {c.name_en}</span>
-                  </div>
-                  <IconButton icon={Trash2} label={t('delete')} tone="danger" onClick={() => deleteCategory(c.id)} />
-                </div>
-              ))}
-              {categories.length === 0 && <p className="text-center text-xs opacity-50 py-4">{t('no_categories')}</p>}
-            </div>
-          </div>
-        </div>
+        <CategoryManagerModal
+          categories={categories}
+          onAdd={addCategory}
+          onDelete={deleteCategory}
+          onClose={() => setShowCategoryManager(false)}
+        />
       )}
-
+      {editingCatalog && (
+        <CatalogEditModal
+          value={editingCatalog}
+          onChange={setEditingCatalog}
+          categories={categories}
+          uploading={uploadingImage}
+          saving={savingCatalog}
+          fileInputRef={catalogFileInputRef}
+          onFile={onCatalogFileChange}
+          onOpenLibrary={openPhotoLibrary}
+          onSave={saveCatalogProduct}
+          onPublish={() => { publishDraft(editingCatalog); setEditingCatalog(null); }}
+          onClose={() => setEditingCatalog(null)}
+        />
+      )}
       <PhotoLibraryModal
         open={libraryOpen}
         loading={libraryLoading}
@@ -3683,44 +1212,24 @@ export default function Admin() {
         onPick={pickFromLibrary}
         onClose={() => setLibraryOpen(false)}
       />
-
-      {/* Модалка для ручной обрезки фото */}
       {cropImageSrc && (
-        <div className="fixed inset-0 z-[100] bg-black flex flex-col">
-          <div className="flex-1 relative">
-            <Cropper
-              image={cropImageSrc}
-              crop={crop}
-              zoom={zoom}
-              aspect={1}
-              onCropChange={setCrop}
-              onZoomChange={setZoom}
-              onCropComplete={(croppedArea, croppedAreaPixels) => setCroppedAreaPixels(croppedAreaPixels)}
-            />
-          </div>
-          <div className="p-6 bg-white flex justify-end gap-4 items-center">
-            <Button
-              variant="ghost"
-              onClick={closeCropper}
-            >
-              {t('cancel')}
-            </Button>
-            <Button
-              variant="primary"
-              loading={uploadingImage}
-              onClick={handleUploadCrop}
-              disabled={uploadingImage || !croppedAreaPixels}
-            >
-              {t('save_and_upload')}
-            </Button>
-          </div>
-        </div>
+        <CropperModal
+          src={cropImageSrc}
+          crop={crop}
+          zoom={zoom}
+          onCrop={setCrop}
+          onZoom={setZoom}
+          onComplete={setCroppedAreaPixels}
+          uploading={uploadingImage}
+          canSave={!!croppedAreaPixels}
+          onSave={handleUploadCrop}
+          onCancel={closeCropper}
+        />
       )}
-
       {pairMarket && (
         <MachineSettingsModal
           market={markets.find((m) => m.id === pairMarket.id) ?? pairMarket}
-          rtLive={pairMarket.id in rtOnline ? !!rtOnline[pairMarket.id] : null}
+          rtLive={rtLiveOf(pairMarket) ?? null}
           rtState={rtOnline[pairMarket.id]}
           onClose={() => setPairMarket(null)}
           onUnpair={() => unpairBoard(pairMarket)}
@@ -3728,1618 +1237,25 @@ export default function Admin() {
           onCheckUpdate={isSuperadmin ? () => checkBoardUpdate(pairMarket) : undefined}
         />
       )}
-      {qrModalMarket && (
-        <QrModal market={qrModalMarket} onClose={() => setQrModalMarket(null)} />
-      )}
-
-      <Toast toast={toast} onClose={() => setToast(null)} />
-
-      {/* Catalog picker — overlays on top of the inventory edit modal,
-          so it's z-[60] (modal is z-50). Filters the SKU list by the
-          search box and pops back to the inventory form on selection. */}
-      {showCatalogPicker && (
-        <div className="fixed inset-0 z-[60] bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className="bg-white rounded-3xl w-full max-w-lg shadow-2xl border-2 border-slate-300 max-h-[85vh] flex flex-col">
-            <div className="flex justify-between items-center px-6 pt-6 pb-4 border-b-2 border-slate-200">
-              <div>
-                <h3 className="font-black text-xl text-slate-900">{t('tab_catalog')}</h3>
-                <span className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">
-                  {t('pick_ready_product')}
-                </span>
-              </div>
-              <IconButton icon={X} label={t('close')} tone="plain" onClick={() => setShowCatalogPicker(false)} />
-            </div>
-
-            <div className="px-6 py-4 bg-slate-50 border-b border-slate-200">
-              <input
-                placeholder={t('search_placeholder_short')}
-                value={pickerSearch}
-                onChange={e => setPickerSearch(e.target.value)}
-                className="w-full p-2.5 border-2 border-slate-300 focus:border-primary focus:outline-none rounded-xl font-medium text-sm bg-white text-slate-900 placeholder-slate-400"
-                autoFocus
-              />
-            </div>
-
-            <div className="flex-1 overflow-y-auto p-4">
-              {pickerProducts == null ? (
-                <div className="flex justify-center p-10">
-                  <Loader2 className="animate-spin text-primary" size={28} />
-                </div>
-              ) : pickerProducts.length === 0 ? (
-                <div className="text-center py-10 bg-slate-50 border-2 border-dashed border-slate-300 rounded-2xl">
-                  <Image className="mx-auto mb-3 text-slate-300" size={40} />
-                  <p className="text-xs font-bold text-slate-500 uppercase tracking-widest">
-                    {t('catalog_empty')}
-                  </p>
-                  <p className="text-[11px] text-slate-600 mt-1">
-                    {t('catalog_empty_hint')}
-                  </p>
-                </div>
-              ) : (
-                <div className="space-y-2">
-                  {pickerProducts
-                    .filter(p =>
-                      pickerSearch.trim() === '' ||
-                      p.name.toLowerCase().includes(pickerSearch.trim().toLowerCase())
-                    )
-                    .map(p => (
-                      <button
-                        key={p.id}
-                        onClick={() => applyCatalogToInventory(p)}
-                        className="w-full flex items-center gap-3 p-3 rounded-xl bg-slate-50 border-2 border-slate-200 hover:border-primary hover:bg-white hover:shadow-md transition-all text-left"
-                      >
-                        <div className="w-12 h-12 bg-white rounded-xl flex items-center justify-center overflow-hidden shrink-0 border-2 border-slate-200">
-                          {p.image_url ? (
-                            <img src={p.image_url} alt={p.name} loading="lazy" className="w-full h-full object-contain p-1" />
-                          ) : p.emoji ? (
-                            <span className="text-2xl">{p.emoji}</span>
-                          ) : (
-                            <Image className="text-slate-300" size={18} />
-                          )}
-                        </div>
-                        <div className="flex-1 min-w-0">
-                          <div className="font-bold text-sm truncate text-slate-900">{p.name}</div>
-                          <div className="flex items-center gap-2 mt-1">
-                            <span className="text-[9px] uppercase font-black text-slate-600 tracking-wider px-1.5 py-0.5 bg-white border border-slate-300 rounded">
-                              {categories.find(c => c.id === p.category_id)?.name_ru || t('no_category')}
-                            </span>
-                            {p.volume_ml != null && (
-                              <span className="text-[10px] font-bold text-slate-700 bg-white border border-slate-300 px-1.5 py-0.5 rounded">
-                                {p.volume_ml} {t('unit_ml')}
-                              </span>
-                            )}
-                          </div>
-                        </div>
-                        <Plus size={14} className="text-slate-500" />
-                      </button>
-                    ))}
-                </div>
-              )}
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Catalog edit modal — separate form from inventory edit since
-          catalog rows have different fields (volume_ml, description,
-          is_draft, is_archived) and no per-slot price/stock. */}
-      <ConfirmDialog action={confirmAction} onClose={() => setConfirmAction(null)} />
-
-      {editingCatalog && (
-        <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className="bg-white rounded-3xl p-6 w-full max-w-md shadow-2xl border-2 border-slate-300 max-h-[90vh] overflow-y-auto">
-            <div className="flex justify-between items-center mb-6">
-              <h3 className="font-black text-xl text-slate-900">
-                {editingCatalog.id === 'new' ? t('new_catalog_product') : t('edit_product_title')}
-              </h3>
-              <IconButton icon={X} label={t('close')} tone="plain" onClick={() => setEditingCatalog(null)} />
-            </div>
-
-            <div className="space-y-4">
-              <div className="flex gap-4 items-start">
-                {/* Two sources, so the tile opens a menu instead of jumping
-                    straight into the file dialog it used to. */}
-                <div className="relative shrink-0">
-                  <div
-                    onClick={() => setPhotoMenuOpen(v => !v)}
-                    className="w-24 h-24 bg-indigo-50 rounded-2xl flex flex-col items-center justify-center cursor-pointer border-2 border-dashed border-indigo-400 hover:bg-indigo-100 hover:border-indigo-600 transition-all overflow-hidden relative"
-                  >
-                    {uploadingImage ? (
-                      <Loader2 className="animate-spin text-primary" />
-                    ) : editingCatalog.image_url ? (
-                      <img src={editingCatalog.image_url} className="w-full h-full object-contain" alt="Preview" />
-                    ) : (
-                      <>
-                        <Upload className="text-primary mb-1" size={20} />
-                        <span className="text-[10px] font-bold text-primary">{t('photo')}</span>
-                      </>
-                    )}
-                  </div>
-
-                  {photoMenuOpen && (
-                    <>
-                      {/* Catches the click that dismisses the menu. Cheaper
-                          and more reliable than a document listener that has
-                          to ignore the opening click itself. */}
-                      <div className="fixed inset-0 z-20" onClick={() => setPhotoMenuOpen(false)} />
-                      <div className="absolute z-30 top-full left-0 mt-1 w-56 bg-white rounded-xl shadow-xl border-2 border-slate-200 overflow-hidden">
-                        <button
-                          type="button"
-                          onClick={openPhotoLibrary}
-                          className="w-full flex items-center gap-2 px-3 py-2.5 text-sm font-bold text-slate-900 hover:bg-indigo-50 text-left"
-                        >
-                          <Image size={16} className="text-primary shrink-0" />
-                          {t('photo_from_library')}
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => { setPhotoMenuOpen(false); catalogFileInputRef.current?.click(); }}
-                          className="w-full flex items-center gap-2 px-3 py-2.5 text-sm font-bold text-slate-900 hover:bg-indigo-50 text-left border-t border-slate-200"
-                        >
-                          <Upload size={16} className="text-primary shrink-0" />
-                          {t('photo_from_gallery')}
-                        </button>
-                      </div>
-                    </>
-                  )}
-
-                  <input
-                    type="file"
-                    className="hidden"
-                    accept={PHOTO_ACCEPT}
-                    ref={catalogFileInputRef}
-                    onChange={onCatalogFileChange}
-                  />
-                </div>
-                <div className="flex-1 space-y-2 flex flex-col">
-                  <input
-                    placeholder={t('name_coca_example')}
-                    className="w-full p-2.5 border-2 border-slate-300 focus:border-primary focus:outline-none rounded-xl font-bold text-slate-900 bg-white placeholder-slate-400"
-                    value={editingCatalog.name || ''}
-                    onChange={e => setEditingCatalog({ ...editingCatalog, name: e.target.value })}
-                  />
-                  <select
-                    className="w-full p-2.5 border-2 border-slate-300 focus:border-primary focus:outline-none rounded-xl text-sm font-bold bg-white text-slate-900"
-                    value={editingCatalog.category_id || ''}
-                    onChange={e => setEditingCatalog({ ...editingCatalog, category_id: e.target.value || null })}
-                  >
-                    <option value="">{t('no_category')}</option>
-                    {categories.map(c => (
-                      <option key={c.id} value={c.id}>{c.name_ru}</option>
-                    ))}
-                  </select>
-                </div>
-              </div>
-
-              <div className="flex gap-3">
-                <div className="flex-1">
-                  <label className="text-xs font-bold text-slate-700 ml-2 mb-1 block">{t('volume_ml')}</label>
-                  <input
-                    type="number"
-                    placeholder="500"
-                    className="w-full p-2.5 border-2 border-slate-300 focus:border-primary focus:outline-none rounded-xl font-bold text-slate-900 bg-white placeholder-slate-400"
-                    value={editingCatalog.volume_ml ?? ''}
-                    onChange={e => setEditingCatalog({ ...editingCatalog, volume_ml: e.target.value })}
-                  />
-                </div>
-                <div className="flex-1">
-                  <label className="text-xs font-bold text-slate-700 ml-2 mb-1 block">{t('emoji_fallback')}</label>
-                  <input
-                    placeholder="🥤"
-                    maxLength={4}
-                    className="w-full p-2.5 border-2 border-slate-300 focus:border-primary focus:outline-none rounded-xl font-bold text-slate-900 bg-white"
-                    value={editingCatalog.emoji || ''}
-                    onChange={e => setEditingCatalog({ ...editingCatalog, emoji: e.target.value })}
-                  />
-                </div>
-              </div>
-
-              <div>
-                <label className="text-xs font-bold text-slate-700 ml-2 mb-1 block">{t('description_optional')}</label>
-                <textarea
-                  rows={2}
-                  className="w-full p-2.5 border-2 border-slate-300 focus:border-primary focus:outline-none rounded-xl text-sm text-slate-900 bg-white"
-                  value={editingCatalog.description || ''}
-                  onChange={e => setEditingCatalog({ ...editingCatalog, description: e.target.value })}
-                />
-              </div>
-
-              {editingCatalog.is_draft && editingCatalog.id !== 'new' && (
-                <div className="flex items-center gap-2 bg-amber-100 border-2 border-amber-400 rounded-xl px-3 py-2.5">
-                  <AlertTriangle size={16} className="text-amber-700" />
-                  <span className="text-xs font-bold text-amber-900">
-                    {t('draft_from_tablet')}
-                  </span>
-                </div>
-              )}
-
-              <div className="pt-4 border-t-2 border-slate-200 flex flex-col gap-2">
-                <Button
-                  variant="primary"
-                  block className="min-h-12"
-                  icon={Save}
-                  loading={loading}
-                  onClick={saveCatalogProduct}
-                  disabled={loading || uploadingImage}
-                >
-                  {t('save')}
-                </Button>
-                {editingCatalog.is_draft && editingCatalog.id !== 'new' && (
-                  <Button
-                    variant="success"
-                    block
-                    icon={CheckCircle2}
-                    onClick={() => { publishDraft(editingCatalog); setEditingCatalog(null); }}
-                  >
-                    {t('publish')}
-                  </Button>
-                )}
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Модалка подтверждения удаления */}
-      {productToDelete && (
-        <div className="fixed inset-0 z-[110] bg-black/50 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className="bg-white rounded-3xl p-8 w-full max-w-sm shadow-2xl text-center">
-            <div className="w-16 h-16 bg-red-100 text-red-600 rounded-full flex items-center justify-center mx-auto mb-4">
-              <Trash2 size={32} />
-            </div>
-            <h3 className="text-xl font-black mb-2 text-slate-900">{t('delete_product_title')}</h3>
-            <p className="text-sm text-slate-500 opacity-70 mb-6">{t('delete_product_confirm')}</p>
-            <div className="flex gap-3">
-              <Button
-                variant="secondary"
-                className="flex-1"
-                onClick={() => setProductToDelete(null)}
-              >
-                {t('cancel')}
-              </Button>
-              <Button
-                variant="danger"
-                className="flex-1"
-                onClick={confirmDelete}
-              >
-                {t('yes_delete')}
-              </Button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Add device — the operator types the Internal ID off the machine's page
-          in the SmartVend partner cabinet and nothing else; device-claim looks
-          the machine up in the SmartVend list and takes the secret and the name
-          from there. The secret never touches the browser. */}
-      {addingDevice && (
-        <div className="fixed inset-0 z-[110] bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className="bg-white rounded-3xl w-full max-w-md shadow-2xl border-2 border-slate-300 max-h-[90vh] overflow-y-auto">
-            <div className="flex justify-between items-center px-6 pt-6 pb-4 border-b-2 border-slate-200">
-              <div>
-                <h3 className="font-black text-xl text-slate-900">{t('add_device')}</h3>
-                <span className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">{t('add_device_hint')}</span>
-              </div>
-              <IconButton icon={X} label={t('close')} tone="plain" onClick={() => setAddingDevice(null)} />
-            </div>
-
-            <div className="p-6 space-y-4">
-              <div>
-                <label className="text-xs font-bold text-slate-500 ml-1">{t('device_internal_id')}</label>
-                <input
-                  value={addingDevice.machid}
-                  onChange={e => setAddingDevice({ ...addingDevice, machid: e.target.value.replace(/\D/g, '') })}
-                  inputMode="numeric"
-                  autoFocus
-                  placeholder="3001000"
-                  onKeyDown={e => { if (e.key === 'Enter' && !deviceSaving) claimDevice(); }}
-                  className="w-full mt-1 p-3 border-2 border-slate-300 focus:border-primary focus:outline-none rounded-xl font-bold bg-white text-slate-900 placeholder-slate-300"
-                />
-                <p className="text-[11px] text-slate-400 mt-1 ml-1">{t('device_id_hint')}</p>
-              </div>
-              <div>
-                <label className="text-xs font-bold text-slate-500 ml-1">{t('device_secret')}</label>
-                <input
-                  value={addingDevice.secret}
-                  onChange={e => setAddingDevice({ ...addingDevice, secret: e.target.value })}
-                  autoComplete="off"
-                  spellCheck={false}
-                  onKeyDown={e => { if (e.key === 'Enter' && !deviceSaving) claimDevice(); }}
-                  className="w-full mt-1 p-3 border-2 border-slate-300 focus:border-primary focus:outline-none rounded-xl font-mono text-sm bg-white text-slate-900"
-                />
-                <p className="text-[11px] text-slate-400 mt-1 ml-1">{t('device_secret_hint')}</p>
-              </div>
-              <div>
-                <label className="text-xs font-bold text-slate-500 ml-1">{t('device_kind')}</label>
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 mt-1">
-                  {[
-                    { value: 'vending', label: t('badge_vending'), hint: t('device_kind_vending_hint') },
-                    { value: 'micromarket_tablet', label: t('badge_micromarket_tablet'), hint: t('device_kind_tablet_hint') },
-                    { value: 'micromarket_static', label: t('badge_micromarket'), hint: t('device_kind_static_hint') },
-                    { value: 'micromarket_screen', label: t('badge_micromarket_screen'), hint: t('device_kind_screen_hint') },
-                  ].map(opt => (
-                    <button
-                      key={opt.value}
-                      onClick={() => setAddingDevice({ ...addingDevice, kind: opt.value })}
-                      className={`p-3 rounded-xl border-2 text-left transition-all ${addingDevice.kind === opt.value ? 'border-primary bg-primary/5' : 'border-slate-200 hover:border-slate-300'}`}
-                    >
-                      <div className="font-black text-sm text-slate-900">{opt.label}</div>
-                      <div className="text-[10px] font-bold text-slate-500 leading-tight mt-0.5">{opt.hint}</div>
-                    </button>
-                  ))}
-                </div>
-              </div>
-            </div>
-
-            <div className="flex gap-3 px-6 pb-6">
-              <Button
-                variant="secondary"
-                className="flex-1"
-                onClick={() => setAddingDevice(null)}
-              >
-                {t('cancel')}
-              </Button>
-              <Button
-                variant="primary"
-                className="flex-1"
-                loading={deviceSaving}
-                onClick={claimDevice}
-                disabled={deviceSaving}
-              >
-                {t('add')}
-              </Button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Unbind the tablet. Explicit confirmation because the machine keeps
-          working until its next heartbeat, and the operator standing at it
-          will see the app drop to the pairing screen without warning. */}
-      {releaseTarget && (
-        <div className="fixed inset-0 z-[110] bg-black/50 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className="bg-white rounded-3xl p-8 w-full max-w-sm shadow-2xl text-center">
-            <div className="w-16 h-16 bg-amber-100 text-amber-600 rounded-full flex items-center justify-center mx-auto mb-4">
-              <LinkOff size={30} />
-            </div>
-            <h3 className="text-xl font-black mb-2 text-slate-900">{t('release_tablet_title')}</h3>
-            <p className="text-sm text-slate-600 mb-2">
-              {releaseTarget.name || `${t('apparatus_no')}${releaseTarget.id}`}
-            </p>
-            <p className="text-xs text-slate-500 mb-6">{t('release_tablet_hint')}</p>
-            <div className="flex gap-3">
-              <Button
-                variant="secondary"
-                className="flex-1"
-                onClick={() => setReleaseTarget(null)}
-              >
-                {t('cancel')}
-              </Button>
-              <Button
-                variant="warning"
-                className="flex-1"
-                onClick={() => releaseTablet(releaseTarget)}
-              >
-                {t('release_tablet')}
-              </Button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Rename a machine. Owner path is a plain RLS-scoped UPDATE; the
-          superadmin's fleet list sets viaAdmin and goes through device-admin. */}
+      {qrModalMarket && <QrModal market={qrModalMarket} onClose={() => setQrModalMarket(null)} />}
       {renamingMarket && (
-        <div className="fixed inset-0 z-[110] bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className="bg-white rounded-3xl w-full max-w-sm shadow-2xl border-2 border-slate-300">
-            <div className="flex justify-between items-center px-6 pt-6 pb-4 border-b-2 border-slate-200">
-              <div>
-                <h3 className="font-black text-xl text-slate-900">{t('rename')}</h3>
-                <span className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">
-                  {t('apparatus_no')}{renamingMarket.id}
-                </span>
-              </div>
-              <IconButton icon={X} label={t('close')} tone="plain" onClick={() => setRenamingMarket(null)} />
-            </div>
-            <div className="p-6">
-              <label className="text-xs font-bold text-slate-500 ml-1">{t('device_name')}</label>
-              <input
-                value={renamingMarket.name}
-                onChange={e => setRenamingMarket({ ...renamingMarket, name: e.target.value })}
-                onKeyDown={e => { if (e.key === 'Enter') renameMarket(); }}
-                autoFocus
-                className="w-full mt-1 p-3 border-2 border-slate-300 focus:border-primary focus:outline-none rounded-xl font-bold bg-white text-slate-900"
-              />
-            </div>
-            <div className="flex gap-3 px-6 pb-6">
-              <Button
-                variant="secondary"
-                className="flex-1"
-                onClick={() => setRenamingMarket(null)}
-              >
-                {t('cancel')}
-              </Button>
-              <Button
-                variant="primary"
-                className="flex-1"
-                onClick={renameMarket}
-              >
-                {t('save')}
-              </Button>
-            </div>
-          </div>
-        </div>
+        <RenameModal value={renamingMarket} onChange={setRenamingMarket} onSave={renameMarket} onClose={() => setRenamingMarket(null)} />
       )}
-
-      {/* Transfer a machine to another account — superadmin only. */}
+      {addingDevice && (
+        <AddDeviceModal value={addingDevice} onChange={setAddingDevice} saving={deviceSaving} onSave={claimDevice} onClose={() => setAddingDevice(null)} />
+      )}
       {transferTarget && (
-        <div className="fixed inset-0 z-[110] bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className="bg-white rounded-3xl w-full max-w-md shadow-2xl border-2 border-slate-300 max-h-[85vh] flex flex-col">
-            <div className="flex justify-between items-center px-6 pt-6 pb-4 border-b-2 border-slate-200">
-              <div>
-                <h3 className="font-black text-xl text-slate-900">{t('transfer_device')}</h3>
-                <span className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">
-                  {transferTarget.name || `${t('apparatus_no')}${transferTarget.id}`}
-                </span>
-              </div>
-              <IconButton icon={X} label={t('close')} tone="plain" onClick={() => setTransferTarget(null)} />
-            </div>
-            <div className="px-6 py-4 text-[11px] font-bold text-slate-500">{t('transfer_pick_owner')}</div>
-            <div className="flex-1 overflow-y-auto px-6 pb-6 space-y-2">
-              {adminOwners.map(o => (
-                <button
-                  key={o.id}
-                  onClick={() => setTransferConfirm({
-                    market: transferTarget,
-                    from: adminOwners.find(x => x.id === transferTarget.owner_id) || null,
-                    to: o,
-                  })}
-                  disabled={o.id === transferTarget.owner_id}
-                  className={`w-full p-3 rounded-xl border-2 text-left transition-all ${o.id === transferTarget.owner_id ? 'border-primary bg-primary/5 cursor-default' : 'border-slate-200 hover:border-primary hover:bg-slate-50'}`}
-                >
-                  <div className="font-bold text-sm text-slate-900 truncate">{o.email}</div>
-                  {o.id === transferTarget.owner_id && (
-                    <div className="text-[10px] font-black uppercase tracking-wider text-primary mt-0.5">
-                      {t('current_owner')}
-                    </div>
-                  )}
-                </button>
-              ))}
-            </div>
-          </div>
-        </div>
+        <TransferModal market={transferTarget} owners={adminOwners} busy={transferring} onConfirm={transferDevice} onClose={() => setTransferTarget(null)} />
       )}
-
-      {/* Set a new password. No reset mail: the project has no SMTP, and the
-          account was handed over with a password in the first place. */}
       {pwdTarget && (
-        <div className="fixed inset-0 z-[110] bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className="bg-white rounded-3xl w-full max-w-sm shadow-2xl border-2 border-slate-300">
-            <div className="flex justify-between items-center px-6 pt-6 pb-4 border-b-2 border-slate-200">
-              <div className="min-w-0">
-                <h3 className="font-black text-xl text-slate-900">{t('change_password')}</h3>
-                <span className="text-[10px] font-bold text-slate-500 uppercase tracking-widest truncate block">
-                  {pwdTarget.email}
-                </span>
-              </div>
-              <IconButton icon={X} label={t('close')} tone="plain" onClick={() => setPwdTarget(null)} />
-            </div>
-            <div className="p-6">
-              <label className="text-xs font-bold text-slate-500 ml-1">{t('change_password_for')} {pwdTarget.email}</label>
-              <input
-                type="text"
-                value={pwdTarget.password}
-                onChange={e => setPwdTarget({ ...pwdTarget, password: e.target.value })}
-                onKeyDown={e => { if (e.key === 'Enter') changePassword(); }}
-                autoFocus
-                autoComplete="new-password"
-                className="w-full mt-1 p-3 border-2 border-slate-300 focus:border-primary focus:outline-none rounded-xl font-mono text-sm bg-white text-slate-900"
-              />
-              <p className="text-[11px] text-slate-400 mt-1 ml-1">{t('user_password_hint')}</p>
-            </div>
-            <div className="flex gap-3 px-6 pb-6">
-              <Button
-                variant="secondary"
-                className="flex-1"
-                onClick={() => setPwdTarget(null)}
-              >
-                {t('cancel')}
-              </Button>
-              <Button
-                variant="primary"
-                className="flex-1"
-                loading={userSaving}
-                onClick={changePassword}
-                disabled={userSaving}
-              >
-                {t('save')}
-              </Button>
-            </div>
-          </div>
-        </div>
+        <PasswordModal value={pwdTarget} onChange={setPwdTarget} saving={userSaving} onSave={changePassword} onClose={() => setPwdTarget(null)} />
       )}
-
-      {/* Delete an account. The function refuses while it still owns machines. */}
-      {userDeleteTarget && (
-        <div className="fixed inset-0 z-[110] bg-black/50 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className="bg-white rounded-3xl p-8 w-full max-w-sm shadow-2xl text-center">
-            <div className="w-16 h-16 bg-red-100 text-red-600 rounded-full flex items-center justify-center mx-auto mb-4">
-              <AlertTriangle size={32} />
-            </div>
-            <h3 className="text-xl font-black mb-2 text-slate-900">{t('delete_user_title')}</h3>
-            <p className="text-sm text-slate-600 mb-2 break-all">{userDeleteTarget.email}</p>
-            <p className="text-xs text-slate-500 mb-6">{t('delete_user_hint')}</p>
-            <div className="flex gap-3">
-              <Button
-                variant="secondary"
-                className="flex-1"
-                onClick={() => setUserDeleteTarget(null)}
-                disabled={userSaving}
-              >
-                {t('cancel')}
-              </Button>
-              <Button
-                variant="danger"
-                className="flex-1"
-                loading={userSaving}
-                onClick={deleteUser}
-                disabled={userSaving}
-              >
-                {t('yes_delete')}
-              </Button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Transfer confirmation — spells out both accounts, because after this
-          the previous owner loses the machine from their admin panel. */}
-      {transferConfirm && (
-        <div className="fixed inset-0 z-[120] bg-black/50 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className="bg-white rounded-3xl p-7 w-full max-w-sm shadow-2xl">
-            <h3 className="text-xl font-black mb-1 text-slate-900 text-center">{t('transfer_confirm_title')}</h3>
-            <p className="text-xs font-bold text-slate-500 uppercase tracking-widest text-center mb-5">
-              {transferConfirm.market.name || `${t('apparatus_no')}${transferConfirm.market.id}`}
-              {' · '}{t('apparatus_no')}{transferConfirm.market.id}
-            </p>
-
-            <div className="space-y-2 mb-5">
-              <div className="p-3 rounded-xl bg-slate-100 border border-slate-200">
-                <div className="text-[10px] font-black uppercase tracking-wider text-slate-500">{t('transfer_from')}</div>
-                <div className="font-bold text-sm text-slate-900 truncate">
-                  {transferConfirm.from?.email || t('no_owner')}
-                </div>
-              </div>
-              <div className="flex justify-center text-slate-400"><ChevronDown size={18} /></div>
-              <div className="p-3 rounded-xl bg-primary/5 border-2 border-primary">
-                <div className="text-[10px] font-black uppercase tracking-wider text-primary">{t('transfer_to')}</div>
-                <div className="font-bold text-sm text-slate-900 truncate">{transferConfirm.to.email}</div>
-              </div>
-            </div>
-
-            <p className="text-[11px] text-slate-500 text-center mb-5">{t('transfer_confirm_hint')}</p>
-
-            <div className="flex gap-3">
-              <Button
-                variant="secondary"
-                className="flex-1"
-                onClick={() => setTransferConfirm(null)}
-                disabled={transferring}
-              >
-                {t('cancel')}
-              </Button>
-              <Button
-                variant="primary"
-                className="flex-1"
-                loading={transferring}
-                onClick={transferDevice}
-                disabled={transferring}
-              >
-                {t('confirm_btn')}
-              </Button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Delete confirmation. The counts come back from device-admin's first
-          (unconfirmed) call — sales cascade, so say so out loud. */}
-      {deleteTarget && (
-        <div className="fixed inset-0 z-[110] bg-black/50 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className="bg-white rounded-3xl p-8 w-full max-w-sm shadow-2xl text-center">
-            <div className="w-16 h-16 bg-red-100 text-red-600 rounded-full flex items-center justify-center mx-auto mb-4">
-              <AlertTriangle size={32} />
-            </div>
-            <h3 className="text-xl font-black mb-2 text-slate-900">{t('delete_device_title')}</h3>
-            <p className="text-sm text-slate-600 mb-2">
-              {deleteTarget.name || `${t('apparatus_no')}${deleteTarget.machid}`}
-            </p>
-            {(deleteTarget.sales > 0 ||
-              deleteTarget.inventory > 0 ||
-              deleteTarget.orders > 0) && (
-              <p className="text-xs font-bold text-red-600 bg-red-50 border border-red-200 rounded-xl p-3 mb-4">
-                {t('delete_device_cascade', {
-                  sales: deleteTarget.sales ?? 0,
-                  inventory: deleteTarget.inventory ?? 0,
-                  orders: deleteTarget.orders ?? 0,
-                })}
-              </p>
-            )}
-            <p className="text-xs text-slate-500 mb-6">{t('delete_device_irreversible')}</p>
-            <div className="flex gap-3">
-              <Button
-                variant="secondary"
-                className="flex-1"
-                onClick={() => setDeleteTarget(null)}
-              >
-                {t('cancel')}
-              </Button>
-              <Button
-                variant="danger"
-                className="flex-1"
-                onClick={() => deleteDevice(deleteTarget.machid, true)}
-              >
-                {t('yes_delete')}
-              </Button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Create owner account — superadmin only. The password is set here and
-          handed to the owner directly; there is no signup/invite mail flow. */}
       {newUser && (
-        <div className="fixed inset-0 z-[110] bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className="bg-white rounded-3xl w-full max-w-md shadow-2xl border-2 border-slate-300">
-            <div className="flex justify-between items-center px-6 pt-6 pb-4 border-b-2 border-slate-200">
-              <div>
-                <h3 className="font-black text-xl text-slate-900">{t('new_user')}</h3>
-                <span className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">{t('new_user_hint')}</span>
-              </div>
-              <IconButton icon={X} label={t('close')} tone="plain" onClick={() => setNewUser(null)} />
-            </div>
-
-            <div className="p-6 space-y-4">
-              <div>
-                <label className="text-xs font-bold text-slate-500 ml-1">Email</label>
-                <input
-                  type="email"
-                  value={newUser.email}
-                  onChange={e => setNewUser({ ...newUser, email: e.target.value })}
-                  autoFocus
-                  autoComplete="off"
-                  className="w-full mt-1 p-3 border-2 border-slate-300 focus:border-primary focus:outline-none rounded-xl font-bold bg-white text-slate-900"
-                />
-              </div>
-              <div>
-                <label className="text-xs font-bold text-slate-500 ml-1">{t('password')}</label>
-                <input
-                  type="text"
-                  value={newUser.password}
-                  onChange={e => setNewUser({ ...newUser, password: e.target.value })}
-                  autoComplete="new-password"
-                  className="w-full mt-1 p-3 border-2 border-slate-300 focus:border-primary focus:outline-none rounded-xl font-mono text-sm bg-white text-slate-900"
-                />
-                <p className="text-[11px] text-slate-400 mt-1 ml-1">{t('user_password_hint')}</p>
-              </div>
-              <div>
-                <label className="text-xs font-bold text-slate-500 ml-1">{t('user_full_name')}</label>
-                <input
-                  value={newUser.full_name}
-                  onChange={e => setNewUser({ ...newUser, full_name: e.target.value })}
-                  className="w-full mt-1 p-3 border-2 border-slate-300 focus:border-primary focus:outline-none rounded-xl font-bold bg-white text-slate-900"
-                />
-              </div>
-            </div>
-
-            <div className="flex gap-3 px-6 pb-6">
-              <Button
-                variant="secondary"
-                className="flex-1"
-                onClick={() => setNewUser(null)}
-              >
-                {t('cancel')}
-              </Button>
-              <Button
-                variant="primary"
-                className="flex-1"
-                loading={userSaving}
-                onClick={createUser}
-                disabled={userSaving}
-              >
-                {t('create')}
-              </Button>
-            </div>
-          </div>
-        </div>
-      )}
-    </div>
-  );
-}
-
-// ---- Administration tab (superadmin only) ----
-// The account list is the whole tab: expanding a profile reveals the machines
-// assigned to it, with rename / transfer / delete on each. Machines that have
-// no owner would have nowhere to appear in an owner-keyed list, so they get
-// their own group at the bottom — otherwise they'd be unreachable from the UI.
-//
-// Accounts come from admin-create-user, machines from device-admin; both need
-// the service_role key, so neither can happen in the browser. The fleet list
-// can't come from a plain query either — RLS shows the superadmin only its own
-// machines. The tab is hidden for non-superadmins; the functions refuse them
-// regardless.
-function UsersTab({
-  users,
-  loading,
-  onCreate,
-  onAddDevice,
-  onChangePassword,
-  onDeleteUser,
-  currentUserId,
-  onRefresh,
-  devices,
-  devicesLoading,
-  onTransfer,
-  onDelete,
-  onChangeKind,
-  onRename,
-}) {
-  const { t, i18n } = useTranslation();
-  const [expandedId, setExpandedId] = useState(null);
-  const [view, setView] = useState('devices');
-
-  const byOwner = new Map();
-  for (const m of devices ?? []) {
-    const key = m.owner_id || '__none__';
-    if (!byOwner.has(key)) byOwner.set(key, []);
-    byOwner.get(key).push(m);
-  }
-  const orphans = byOwner.get('__none__') ?? [];
-
-  // One machine row, shared by the per-account lists and the orphan group.
-  const deviceRow = (m) => (
-    <div
-      key={m.id}
-      className="flex items-center gap-3 p-3 rounded-xl bg-white border border-slate-200"
-    >
-      <div className="w-9 h-9 rounded-lg bg-indigo-600 text-white flex items-center justify-center shrink-0">
-        <Package size={16} />
-      </div>
-      <div className="flex-1 min-w-0">
-        <div className="font-bold text-sm text-slate-900 truncate">{m.name || `${t('apparatus_no')}${m.id}`}</div>
-        <div className="text-[11px] font-bold text-slate-500">{t('apparatus_no')}{m.id}</div>
-        {/* Same crowding as the owner list, worse: three action buttons here.
-            Status and type move under the name on a phone. */}
-        <div className="flex sm:hidden items-center gap-2 mt-1.5 flex-wrap">
-          <DeviceStatusDot status={m.heartbeat} kind={m.kind} />
-          <KindSelect kind={m.kind} t={t} onChange={(k) => onChangeKind(m.id, k)} />
-          <PayChannelBadge status={m.heartbeat} />
-        </div>
-      </div>
-      <div className="hidden sm:flex items-center gap-3 shrink-0">
-        <DeviceStatusDot status={m.heartbeat} kind={m.kind} />
-        <KindSelect kind={m.kind} t={t} onChange={(k) => onChangeKind(m.id, k)} />
-        <PayChannelBadge status={m.heartbeat} />
-      </div>
-      <div className="flex gap-1.5 shrink-0">
-        <IconButton icon={Pencil} label={t('rename')} onClick={() => onRename({ id: m.id, name: m.name || '' })} />
-        <IconButton icon={ChevronRight} label={t('transfer_device')} onClick={() => onTransfer(m)} />
-        <IconButton icon={Trash2} label={t('delete')} tone="danger" disabled={devicesLoading} onClick={() => onDelete(m.id)} />
-      </div>
-    </div>
-  );
-
-  return (
-    <div>
-      <div className="flex flex-col sm:flex-row sm:justify-between sm:items-center gap-3 mb-6">
-        <div>
-          <h2 className="text-2xl font-black text-slate-900 mb-1">{t('users_section')}</h2>
-          <p className="text-[11px] font-bold text-slate-500 uppercase tracking-widest">{t('users_subtitle')}</p>
-        </div>
-        <div className="flex gap-2 flex-wrap w-full sm:w-auto sm:justify-end">
-          <IconButton icon={History} label={t('refresh')} tone="default" loading={loading} onClick={onRefresh} disabled={loading} />
-          <Button
-            variant="primary"
-            className="flex-1 sm:flex-none"
-            icon={Plus}
-            onClick={onCreate}
-          >
-            {t('new_user')}
-          </Button>
-          {/* Enrolling a machine is a platform-admin act, so it lives here
-              next to account creation rather than on the owner-facing tab. */}
-          <Button
-            variant="dark"
-            className="flex-1 sm:flex-none"
-            icon={Plus}
-            onClick={onAddDevice}
-          >
-            {t('add_device')}
-          </Button>
-        </div>
-      </div>
-
-      <div className="flex gap-1 p-1 bg-slate-100 rounded-xl w-fit mb-5">
-        {[['devices', t('adm_view_devices')], ['users', t('adm_view_users')]].map(([k, label]) => (
-          <button
-            key={k}
-            onClick={() => setView(k)}
-            className={`px-4 py-1.5 rounded-lg text-xs font-bold transition-all ${view === k ? 'bg-white text-slate-900 shadow' : 'text-slate-500 hover:text-slate-800'}`}
-          >
-            {label}
-          </button>
-        ))}
-      </div>
-
-      {view === 'devices' ? (
-        <DevicesTable
-          devices={devices}
-          deviceRow={deviceRow}
-          onChangeKind={onChangeKind}
-        />
-      ) : users == null ? (
-        <div className="flex justify-center p-10"><Loader2 className="animate-spin text-primary" size={28} /></div>
-      ) : users.length === 0 ? (
-        <p className="text-sm text-slate-400 italic p-4">{t('no_users')}</p>
-      ) : (
-        <div className="space-y-2">
-          {users.map(u => {
-            const owned = byOwner.get(u.id) ?? [];
-            const open = expandedId === u.id;
-            return (
-              <div key={u.id} className="rounded-2xl bg-slate-50 border-2 border-slate-200 overflow-hidden">
-                <div className="flex items-center gap-3 p-4">
-                  <button
-                    onClick={() => setExpandedId(open ? null : u.id)}
-                    className="flex items-center gap-3 flex-1 min-w-0 text-left"
-                  >
-                    <div className={`w-11 h-11 rounded-xl text-white flex items-center justify-center shrink-0 font-black ${u.role === 'superadmin' ? 'bg-amber-500' : 'bg-slate-500'}`}>
-                      {(u.email || '?').charAt(0).toUpperCase()}
-                    </div>
-                    <div className="flex-1 min-w-0">
-                      <div className="font-bold text-slate-900 truncate">{u.email}</div>
-                      <div className="text-[11px] font-bold text-slate-500 truncate">
-                        {u.full_name ? `${u.full_name} · ` : ''}
-                        {t('user_since')} {u.created_at ? new Date(u.created_at).toLocaleDateString(i18n.language) : '—'}
-                      </div>
-                    </div>
-                  </button>
-                  {u.role === 'superadmin' && (
-                    <span className="text-[9px] font-black uppercase tracking-wider px-2 py-1 rounded-lg bg-amber-100 text-amber-700 shrink-0">
-                      {t('role_superadmin')}
-                    </span>
-                  )}
-                  <button
-                    onClick={() => setExpandedId(open ? null : u.id)}
-                    className="flex items-center gap-1 text-[9px] font-black uppercase tracking-wider px-2 py-1 rounded-lg bg-indigo-100 text-indigo-700 shrink-0 hover:bg-indigo-200 transition-all"
-                  >
-                    {u.machines} {t('devices_short')}
-                    <ChevronDown size={12} className={`transition-transform ${open ? 'rotate-180' : ''}`} />
-                  </button>
-                  <div className="flex gap-1.5 shrink-0">
-                    <IconButton icon={KeyRound} label={t('change_password')} tone="default" onClick={() => onChangePassword(u)} />
-                    {/* Deleting your own account would lock you out of the panel —
-                        the function refuses it too. */}
-                    <IconButton icon={Trash2} label={t('delete')} tone="danger" onClick={() => onDeleteUser(u)} disabled={u.id === currentUserId} />
-                  </div>
-                </div>
-
-                {open && (
-                  <div className="px-4 pb-4 pt-1 border-t border-slate-200 bg-slate-100/60">
-                    {devices == null ? (
-                      <div className="flex justify-center p-6"><Loader2 className="animate-spin text-primary" size={22} /></div>
-                    ) : owned.length === 0 ? (
-                      <p className="text-xs text-slate-400 italic py-3">{t('user_no_devices')}</p>
-                    ) : (
-                      <div className="space-y-2 pt-3">{owned.map(deviceRow)}</div>
-                    )}
-                  </div>
-                )}
-              </div>
-            );
-          })}
-        </div>
+        <NewUserModal value={newUser} onChange={setNewUser} saving={userSaving} onSave={createUser} onClose={() => setNewUser(null)} />
       )}
 
-      {/* Machines with no owner have no profile to hide under — surface them
-          separately so they can still be assigned or removed. */}
-      {view === 'users' && orphans.length > 0 && (
-        <div className="mt-8 pt-6 border-t-2 border-slate-200">
-          <h3 className="text-sm font-black text-rose-600 mb-1">{t('devices_no_owner')}</h3>
-          <p className="text-[11px] font-bold text-slate-500 uppercase tracking-widest mb-4">{t('devices_no_owner_hint')}</p>
-          <div className="space-y-2">{orphans.map(deviceRow)}</div>
-        </div>
-      )}
-    </div>
-  );
-}
-
-// Whole fleet in one table for the superadmin: owner, both lamps, versions,
-// last contact. Board state is by last report (up to ~15 min late), not live. Rows reuse the per-account row (actions) via deviceRow.
-function DevicesTable({ devices, deviceRow, onChangeKind }) {
-  const { t, i18n } = useTranslation();
-  const [q, setQ] = useState('');
-  const [kindF, setKindF] = useState('all');
-  const [stateF, setStateF] = useState('all');
-  const [expanded, setExpanded] = useState(null);
-
-  if (devices == null) {
-    return <div className="flex justify-center p-10"><Loader2 className="animate-spin text-primary" size={28} /></div>;
-  }
-
-  // Overall state: any live signal (board presence, or tablet heartbeat) = online.
-  const rows = devices.map((m) => {
-    // No Presence channels here (one per board would load Realtime for
-    // nothing): the board reports every 15 minutes, so 20 minutes of silence
-    // means offline. The owner's own panel stays live.
-    const rtState = undefined;
-    const rtLamp = m.rt
-      ? !!m.rt.last_seen_at && Date.now() - new Date(m.rt.last_seen_at).getTime() < 20 * 60 * 1000
-      : undefined;
-    const hb = m.heartbeat;
-    const tabletKind = m.kind === 'micromarket_tablet' || m.kind === 'vending' || m.kind === 'micromarket_screen';
-    const tabletOn = tabletKind && !!hb?.online;
-    const online = rtLamp === true || (m.kind !== 'micromarket_static' && tabletOn);
-    const paired = !!m.rt;
-    const needsBoard = m.kind === 'micromarket_static' || m.kind === 'micromarket_tablet';
-    const last = [hb?.last_seen_at, m.rt?.last_seen_at].filter(Boolean).sort().pop() ?? null;
-    return { m, rtState, rtLamp, online, paired, needsBoard, last };
-  });
-
-  const needle = q.trim().toLowerCase();
-  const shown = rows.filter(({ m, online, paired, needsBoard }) => {
-    if (kindF !== 'all' && m.kind !== kindF) return false;
-    if (stateF === 'online' && !online) return false;
-    if (stateF === 'offline' && online) return false;
-    if (stateF === 'unpaired' && !(needsBoard && !paired)) return false;
-    if (!needle) return true;
-    return [m.id, m.name, m.owner_email, m.rt?.device_id].some((v) => String(v ?? '').toLowerCase().includes(needle));
-  });
-
-  const total = rows.length;
-  const onlineN = rows.filter((r) => r.online).length;
-  const unpairedN = rows.filter((r) => r.needsBoard && !r.paired).length;
-  const fmt = (v) => (v ? new Date(v).toLocaleString(i18n.language) : '—');
-  const field = 'px-3 py-2 rounded-lg border border-slate-300 text-sm bg-white';
-
-  return (
-    <div>
-      <div className="flex gap-2 flex-wrap text-[11px] font-black uppercase tracking-wider mb-4">
-        <span className="px-2.5 py-1 rounded-lg bg-slate-100 text-slate-700">{t('adm_total')}: {total}</span>
-        <span className="px-2.5 py-1 rounded-lg bg-emerald-100 text-emerald-700">{t('status_online')}: {onlineN}</span>
-        <span className="px-2.5 py-1 rounded-lg bg-slate-200 text-slate-600">{t('status_offline')}: {total - onlineN}</span>
-        {unpairedN > 0 && (
-          <span className="px-2.5 py-1 rounded-lg bg-amber-100 text-amber-700">{t('adm_unpaired')}: {unpairedN}</span>
-        )}
-      </div>
-
-      <div className="flex gap-2 flex-wrap mb-4">
-        <input value={q} onChange={(e) => setQ(e.target.value)} placeholder={t('adm_search')} className={`${field} flex-1 min-w-[180px]`} />
-        <select value={kindF} onChange={(e) => setKindF(e.target.value)} className={field}>
-          <option value="all">{t('adm_all_kinds')}</option>
-          {['vending', 'micromarket_static', 'micromarket_tablet', 'micromarket_screen'].map((k) => (
-            <option key={k} value={k}>{kindLabel(k, t)}</option>
-          ))}
-        </select>
-        <select value={stateF} onChange={(e) => setStateF(e.target.value)} className={field}>
-          <option value="all">{t('adm_all_states')}</option>
-          <option value="online">{t('status_online')}</option>
-          <option value="offline">{t('status_offline')}</option>
-          <option value="unpaired">{t('adm_unpaired')}</option>
-        </select>
-      </div>
-
-      {shown.length === 0 ? (
-        <p className="text-sm text-slate-400 italic p-4">{t('adm_nothing')}</p>
-      ) : (
-        <div className="overflow-x-auto rounded-2xl border border-slate-200">
-          <table className="w-full text-sm min-w-[880px]">
-            <thead className="bg-slate-50 text-[10px] font-black uppercase tracking-wider text-slate-500 text-left">
-              <tr>
-                <th className="px-3 py-2.5">ID</th>
-                <th className="px-3 py-2.5">{t('adm_col_name')}</th>
-                <th className="px-3 py-2.5">{t('adm_col_owner')}</th>
-                <th className="px-3 py-2.5">{t('adm_col_kind')}</th>
-                <th className="px-3 py-2.5">{t('adm_col_status')}</th>
-                <th className="px-3 py-2.5">{t('adm_col_versions')}</th>
-                <th className="px-3 py-2.5">{t('adm_col_last')}</th>
-                <th className="px-3 py-2.5">{t('adm_col_open')}</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-slate-100">
-              {shown.map(({ m, rtState, rtLamp, paired, needsBoard, last }) => (
-                <Fragment key={m.id}>
-                  <tr
-                    onClick={() => setExpanded(expanded === m.id ? null : m.id)}
-                    className="hover:bg-slate-50 cursor-pointer align-top"
-                  >
-                    <td className="px-3 py-2.5 font-bold text-slate-700 whitespace-nowrap">{m.id}</td>
-                    <td className="px-3 py-2.5 font-bold text-slate-900">{m.name || '—'}</td>
-                    <td className="px-3 py-2.5 text-slate-600">
-                      {m.owner_email || <span className="text-rose-600 font-bold">{t('devices_no_owner')}</span>}
-                    </td>
-                    <td className="px-3 py-2.5 whitespace-nowrap" onClick={(e) => e.stopPropagation()}>
-                      <KindSelect kind={m.kind} t={t} onChange={(k) => onChangeKind(m.id, k)} />
-                    </td>
-                    <td className="px-3 py-2.5">
-                      <div className="flex flex-col gap-1.5">
-                        <DeviceStatusDot
-                          status={m.heartbeat}
-                          kind={m.kind}
-                          withLabel
-                          rt={rtLamp}
-                          rtState={rtState}
-                          rtRow={m.rt}
-                        />
-                        {needsBoard && !paired && (
-                          <span className="text-[10px] font-black uppercase tracking-wider text-amber-600">{t('adm_unpaired')}</span>
-                        )}
-                      </div>
-                    </td>
-                    <td className="px-3 py-2.5 text-xs text-slate-600 whitespace-nowrap">
-                      {m.heartbeat?.app_version && <div>{t('lamp_tablet')}: {m.heartbeat.app_version}</div>}
-                      {m.rt?.board_ver && <div>{t('lamp_board')}: {m.rt.board_ver}</div>}
-                      {m.rt?.device_id && <div className="font-mono text-[10px] text-slate-400">{m.rt.device_id}</div>}
-                      {!m.heartbeat?.app_version && !m.rt?.board_ver && '—'}
-                    </td>
-                    <td className="px-3 py-2.5 text-xs text-slate-600 whitespace-nowrap">{fmt(last)}</td>
-                    <td className="px-3 py-2.5 text-xs text-slate-600">{m.open_seconds ? `${m.open_seconds} ${t('adm_sec')}` : '—'}</td>
-                  </tr>
-                  {expanded === m.id && (
-                    <tr className="bg-slate-100/60">
-                      <td colSpan={8} className="px-3 py-3">
-                        {deviceRow(m)}
-                        <div className="text-[11px] text-slate-500 mt-2">
-                          {t('adm_paired_at')}: {fmt(m.rt?.paired_at)}
-                          {m.heartbeat?.ter_number ? ` · ter ${m.heartbeat.ter_number}` : ''}
-                        </div>
-                      </td>
-                    </tr>
-                  )}
-                </Fragment>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      )}
-    </div>
-  );
-}
-
-// ---- Catalog tab (products table) ----
-// Shows the owner's SKU catalog. Each row in `products` is a reusable
-// SKU that inventory rows reference via `product_id`. Filters cover
-// the three editorial states: active, drafts (auto-created from the
-// tablet), and archived.
-function CatalogTab({
-  products,
-  categories,
-  filter,
-  setFilter,
-  loading,
-  onCreate,
-  onEdit,
-  onArchive,
-  onPublish,
-  onDelete,
-}) {
-  const { t } = useTranslation();
-
-  const visible = products.filter(p => {
-    if (filter === 'drafts') return p.is_draft && !p.is_archived;
-    if (filter === 'archived') return p.is_archived;
-    return !p.is_draft && !p.is_archived;
-  });
-
-  const counts = {
-    active: products.filter(p => !p.is_draft && !p.is_archived).length,
-    drafts: products.filter(p => p.is_draft && !p.is_archived).length,
-    archived: products.filter(p => p.is_archived).length,
-  };
-
-  return (
-    <>
-      <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 mb-8">
-        <div>
-          <h2 className="text-2xl font-black text-slate-900">{t('catalog_products_title')}</h2>
-          <p className="text-[11px] font-bold text-slate-500 uppercase tracking-widest">
-            {t('catalog_products_subtitle')}
-          </p>
-        </div>
-        <div className="flex gap-2 flex-wrap">
-          <Button
-            variant="primary"
-            icon={Plus}
-            onClick={onCreate}
-          >
-            {t('add_product')}
-          </Button>
-        </div>
-      </div>
-
-      <div className="flex gap-2 mb-8 border-b-2 border-slate-200 pb-3 overflow-x-auto no-scrollbar">
-        {[
-          { id: 'active', label: t('filter_active'), count: counts.active },
-          { id: 'drafts', label: t('filter_drafts'), count: counts.drafts },
-          { id: 'archived', label: t('filter_archived'), count: counts.archived },
-        ].map(tab => (
-          <button
-            key={tab.id}
-            onClick={() => setFilter(tab.id)}
-            className={`px-5 py-2 rounded-xl text-xs font-bold whitespace-nowrap transition-all ${
-              filter === tab.id
-                ? 'bg-slate-900 text-white shadow-md'
-                : 'bg-white text-slate-600 border border-slate-300 hover:border-slate-400 hover:bg-slate-50'
-            }`}
-          >
-            {tab.label}
-            <span className={`ml-1.5 ${filter === tab.id ? 'text-slate-300' : 'text-slate-400'}`}>
-              {tab.count}
-            </span>
-          </button>
-        ))}
-      </div>
-
-      {loading ? (
-        <div className="flex justify-center p-20">
-          <Loader2 className="animate-spin text-primary" size={32} />
-        </div>
-      ) : visible.length === 0 ? (
-        <div className="text-center py-20 bg-slate-50 border-2 border-dashed border-slate-300 rounded-2xl">
-          <Image className="mx-auto mb-3 text-slate-300" size={48} />
-          <p className="font-black text-slate-500 text-sm uppercase tracking-widest">
-            {filter === 'drafts' ? t('no_drafts') : filter === 'archived' ? t('archive_empty') : t('catalog_empty')}
-          </p>
-        </div>
-      ) : (
-        <div className="space-y-2.5">
-          {visible.map(p => (
-            <div
-              key={p.id}
-              className={`group border-2 p-3 rounded-2xl flex items-center gap-4 transition-all ${
-                p.is_archived
-                  ? 'bg-slate-100 border-slate-300'
-                  : p.is_draft
-                    ? 'bg-amber-50 border-amber-300 hover:border-amber-500 hover:shadow-md'
-                    : 'bg-slate-50 border-slate-200 hover:border-primary hover:bg-white hover:shadow-md'
-              }`}
-            >
-              <div className="w-14 h-14 bg-white rounded-xl flex items-center justify-center overflow-hidden shrink-0 border-2 border-slate-200">
-                {p.image_url ? (
-                  <img src={p.image_url} alt={p.name} loading="lazy" className="w-full h-full object-contain p-1" />
-                ) : p.emoji ? (
-                  <span className="text-2xl">{p.emoji}</span>
-                ) : (
-                  <Image className="text-slate-300" size={20} />
-                )}
-              </div>
-
-              <div className="flex-1 min-w-0">
-                <div className="flex items-center gap-2 flex-wrap">
-                  <h4 className="font-bold text-sm text-slate-900 truncate pr-1">{p.name}</h4>
-                  {p.is_draft && (
-                    <span className="text-[9px] uppercase font-black bg-amber-600 text-white px-1.5 py-0.5 rounded">
-                      {t('badge_draft')}
-                    </span>
-                  )}
-                  {p.is_archived && (
-                    <span className="text-[9px] uppercase font-black bg-slate-600 text-white px-1.5 py-0.5 rounded">
-                      {t('badge_archived')}
-                    </span>
-                  )}
-                </div>
-                <div className="flex items-center gap-2 mt-1">
-                  <span className="text-[9px] uppercase font-black text-slate-600 tracking-wider px-1.5 py-0.5 bg-white border border-slate-300 rounded">
-                    {categories.find(c => c.id === p.category_id)?.name_ru || t('no_category')}
-                  </span>
-                  {p.volume_ml != null && (
-                    <span className="text-[10px] font-bold text-slate-700 bg-white border border-slate-300 px-1.5 py-0.5 rounded">{p.volume_ml} {t('unit_ml')}</span>
-                  )}
-                </div>
-              </div>
-
-              <div className="flex gap-1">
-                {p.is_draft && (
-                  <IconButton icon={CheckCircle2} label={t('publish')} tone="success" onClick={() => onPublish(p)} />
-                )}
-                <IconButton icon={Pencil} label={t('edit')} onClick={() => onEdit(p)} />
-                <IconButton
-                  icon={p.is_archived ? CheckCircle2 : XCircle}
-                  label={p.is_archived ? t('restore') : t('to_archive')}
-                  onClick={() => onArchive(p)}
-                />
-                <IconButton icon={Trash2} label={t('delete_forever')} tone="danger" onClick={() => onDelete(p)} />
-              </div>
-            </div>
-          ))}
-        </div>
-      )}
-    </>
-  );
-}
-
-// ---- Inventory list (driven by per-machine layout) ----
-// Single list view: walks the layout shelf-by-shelf and renders one
-// row per slot. Empty positions are still shown (italic "Слот пуст")
-// so the operator immediately sees which spirals need re-stocking.
-// Rows that point to a motor not present in the current layout get a
-// "Не привязано" section at the bottom.
-// Flat product list for open-shelf micromarkets (static-QR and screen) — no
-// motors, no cabinet layout. Add is handled by the header button; rows support
-// edit + delete. `showCells` turns on the cell-number badge: only a screen
-// machine has numbers, a static-QR one has nothing to show there.
-function StaticInventoryList({ products, categories, stockLabel, priceLabel, currency, onEdit, onDelete, showCells = false }) {
-  const { t } = useTranslation();
-  if (!products || products.length === 0) {
-    return (
-      <div className="text-center py-16 bg-slate-50 rounded-3xl border-2 border-dashed border-slate-200">
-        <Package size={36} className="mx-auto mb-3 text-slate-300" />
-        <p className="font-black text-slate-400 text-sm uppercase tracking-widest">{t('no_products')}</p>
-        <p className="text-xs text-slate-400 mt-1">{t('no_products_hint')}</p>
-      </div>
-    );
-  }
-  return (
-    <div className="space-y-2">
-      {products.map(p => {
-        const lowStock = (p.stock ?? 0) < 5;
-        const cat = categories.find(c => c.id === p.category_id)?.name_ru;
-        const cell = p.motor_id == null ? null : Number(p.motor_id);
-        return (
-          <div
-            key={p.id}
-            onClick={() => onEdit(p)}
-            className="flex items-center gap-3 p-2.5 sm:p-3 rounded-2xl border-2 border-slate-200 bg-slate-50 hover:border-primary hover:bg-white hover:shadow-md cursor-pointer transition-all"
-          >
-            {/* Колонка номера — только у машины с экраном: у static-QR номер ни
-                на что не влияет, и её список должен выглядеть ровно как раньше.
-                Пунктирный «—» неизбежен, пока каталог набивают; красным его не
-                метим, иначе наполовину заполненный список читался бы как
-                аварийный. Объяснение живёт в подсказке модалки. */}
-            {showCells && (
-              <div className={`rounded-xl flex items-center justify-center shrink-0 px-2 py-1.5 min-w-[44px] border-2 font-black text-base tabular-nums ${
-                cell == null
-                  ? 'bg-white text-slate-300 border-dashed border-slate-300'
-                  : 'bg-indigo-600 text-white border-indigo-700'
-              }`}>
-                {cell ?? '—'}
-              </div>
-            )}
-            <div className="w-12 h-12 sm:w-14 sm:h-14 rounded-xl flex items-center justify-center overflow-hidden shrink-0 border-2 border-slate-200 bg-white">
-              {p.image_url ? (
-                <img src={p.image_url} alt={p.name} loading="lazy" className="w-full h-full object-contain p-1" />
-              ) : p.emoji ? (
-                <span className="text-2xl">{p.emoji}</span>
-              ) : (
-                <Image className="text-slate-300" size={20} />
-              )}
-            </div>
-            <div className="flex-1 min-w-0">
-              <h4 className="font-bold text-sm text-slate-900 truncate">{p.name || '—'}</h4>
-              <div className="flex items-center gap-1.5 mt-1">
-                <span className="text-[9px] uppercase font-black text-slate-500 tracking-wider truncate">{cat || t('no_category')}</span>
-              </div>
-            </div>
-            {/* Остаток — колонкой слева от цены, как в списке вендинга
-                (InventoryRow). Раньше он жил бейджем под названием рядом с
-                категорией: два числа одной строки, на которые оператор
-                смотрит вместе, стояли в разных её концах. */}
-            <div className="text-right px-1 sm:px-3 shrink-0">
-              <span className="hidden sm:block text-[9px] font-black text-slate-500 uppercase tracking-tighter">{stockLabel}</span>
-              <span className={`inline-block text-sm font-black px-1.5 py-0.5 rounded tabular-nums ${lowStock ? 'bg-red-100 text-red-700' : 'bg-emerald-100 text-emerald-700'}`}>
-                ×{p.stock ?? 0}
-              </span>
-            </div>
-            <div className="text-right px-2 sm:px-4 shrink-0">
-              <span className="hidden sm:block text-[9px] font-black text-slate-500 uppercase tracking-tighter">{priceLabel}</span>
-              <p className="text-base font-black text-primary tabular-nums">{p.price} {currency}</p>
-            </div>
-            <div className="flex items-center gap-1 shrink-0">
-              <IconButton icon={Pencil} label={t('edit')} onClick={(e) => { e.stopPropagation(); onEdit(p); }} />
-              <IconButton icon={Trash2} label={t('delete')} tone="danger" onClick={(e) => { e.stopPropagation(); onDelete(p); }} />
-            </div>
-          </div>
-        );
-      })}
-    </div>
-  );
-}
-
-function InventoryByLayout({ products, layout, categories, stockLabel, priceLabel, currency, onEdit, onDelete }) {
-  const { t } = useTranslation();
-  const productByMotor = new Map();
-  for (const p of products) {
-    if (p.motor_id != null) productByMotor.set(Number(p.motor_id), p);
-  }
-  const mappedMotorIds = new Set();
-  for (const sh of layout.shelves) {
-    for (const sl of sh.slots) {
-      for (const m of sl.motorIds) mappedMotorIds.add(m);
-    }
-  }
-  const unassigned = products.filter(p =>
-    p.motor_id == null || !mappedMotorIds.has(Number(p.motor_id))
-  );
-
-  return (
-    <div className="space-y-6">
-      {layout.shelves.map((shelf, idx) => (
-        <div key={`${idx}-${shelf.label}`}>
-          <div className="flex items-center gap-2 mb-3 px-1">
-            <span className="bg-slate-900 text-white text-[10px] font-black px-2 py-0.5 rounded tabular-nums">
-              {t('shelf')} {idx + 1}
-            </span>
-            <span className="text-[11px] font-bold text-slate-600">{shelf.label}</span>
-            <span className="text-[10px] font-bold text-slate-400 ml-auto">
-              {shelf.slots.length} {shelf.slots.length === 1 ? t('slot_one') : t('slot_many')}
-            </span>
-          </div>
-          <div className="space-y-2">
-            {shelf.slots.map((sl, j) => {
-              const primary = sl.motorIds[0];
-              const p = productByMotor.get(primary) || null;
-              return (
-                <InventoryRow
-                  key={`${idx}-${j}-${primary}`}
-                  slot={sl}
-                  product={p}
-                  category={p ? categories.find(c => c.id === p.category_id)?.name_ru : null}
-                  stockLabel={stockLabel}
-                  priceLabel={priceLabel}
-                  currency={currency}
-                  onEdit={p ? () => onEdit(p) : null}
-                  onDelete={p ? () => onDelete(p) : null}
-                />
-              );
-            })}
-          </div>
-        </div>
-      ))}
-
-      {unassigned.length > 0 && (
-        <div className="p-4 bg-amber-50 border-2 border-amber-300 rounded-2xl">
-          <div className="flex items-center gap-2 mb-3">
-            <AlertTriangle size={16} className="text-amber-700" />
-            <span className="text-xs font-black uppercase tracking-wider text-amber-900">
-              {t('not_linked_to_layout')} ({unassigned.length})
-            </span>
-          </div>
-          <div className="space-y-2">
-            {unassigned.map(p => (
-              <div
-                key={p.id}
-                onClick={() => onEdit(p)}
-                className="w-full flex items-center gap-3 p-2.5 rounded-xl bg-white border-2 border-amber-200 hover:border-amber-500 hover:shadow-md transition-all text-left cursor-pointer"
-              >
-                <div className="w-10 h-10 bg-slate-50 rounded-lg flex items-center justify-center overflow-hidden shrink-0 border border-slate-200">
-                  {p.image_url ? (
-                    <img src={p.image_url} alt={p.name} loading="lazy" className="w-full h-full object-contain p-1" />
-                  ) : p.emoji ? (
-                    <span className="text-xl">{p.emoji}</span>
-                  ) : (
-                    <Image size={14} className="text-slate-300" />
-                  )}
-                </div>
-                <div className="flex-1 min-w-0">
-                  <div className="font-bold text-sm truncate text-slate-900">{p.name || '—'}</div>
-                  <div className="text-[11px] text-amber-800">
-                    {p.motor_id == null
-                      ? t('no_motor_id')
-                      : `M${p.motor_id} ${t('motor_not_in_layout')}`}
-                  </div>
-                </div>
-                <div className="flex items-center gap-1 shrink-0">
-                  <IconButton icon={Pencil} label={t('edit')} onClick={(e) => { e.stopPropagation(); onEdit(p); }} />
-                  <IconButton icon={Trash2} label={t('delete_short')} tone="danger" onClick={(e) => { e.stopPropagation(); onDelete(p); }} />
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
-    </div>
-  );
-}
-
-function InventoryRow({ slot, product, category, stockLabel, priceLabel, currency, onEdit, onDelete }) {
-  const { t } = useTranslation();
-  // Slot identification: label ("001") + the linked motor index
-  // (e.g. "M99" or "M99+M95" for twin spirals).
-  const motorsLabel = (slot.motorIds ?? []).map(m => `M${m}`).join('+');
-  const isTwin = (slot.motorIds?.length ?? 0) > 1;
-  const empty = product == null;
-  const lowStock = !empty && (product.stock ?? 0) < 5;
-
-  return (
-    <div
-      onClick={empty ? undefined : onEdit}
-      className={`group border-2 rounded-2xl transition-all ${
-        empty
-          ? 'border-dashed border-slate-300 bg-slate-50'
-          : 'border-slate-200 bg-slate-50 hover:border-primary hover:bg-white hover:shadow-md cursor-pointer active:scale-[0.99]'
-      } p-2.5 sm:p-3`}
-    >
-      <div className="flex items-center gap-2.5 sm:gap-4">
-        {/* Slot badge — narrower on mobile (no motor pin to save space) */}
-        <div className="bg-indigo-600 text-white rounded-xl flex flex-col items-center justify-center shrink-0 border-2 border-indigo-700 px-2 py-1.5 min-w-[48px] sm:min-w-[64px]">
-          <span className="font-black text-base sm:text-lg leading-none tabular-nums">{slot.label}</span>
-          <span className="hidden sm:block text-[9px] font-black opacity-70 leading-none mt-0.5 tabular-nums">{motorsLabel}</span>
-          {isTwin && (
-            <span className="text-[7px] font-black bg-amber-500 text-white px-1 rounded mt-0.5 leading-none">TWIN</span>
-          )}
-        </div>
-
-        {/* Thumbnail */}
-        <div className="w-12 h-12 sm:w-14 sm:h-14 rounded-xl flex items-center justify-center overflow-hidden shrink-0 border-2 border-slate-200 bg-white">
-          {empty ? (
-            <Image className="text-slate-200" size={20} />
-          ) : product.image_url ? (
-            <img src={product.image_url} alt={product.name} loading="lazy" className="w-full h-full object-contain p-1" />
-          ) : product.emoji ? (
-            <span className="text-2xl">{product.emoji}</span>
-          ) : (
-            <Image className="text-slate-300" size={20} />
-          )}
-        </div>
-
-        {/* Name + category + (mobile-only) stock × price line */}
-        <div className="flex-1 min-w-0">
-          {empty ? (
-            <div className="italic text-slate-400 font-bold text-sm">{t('slot_empty')}</div>
-          ) : (
-            <>
-              <h4 className="font-bold text-sm text-slate-900 truncate">{product.name}</h4>
-              {/* Mobile: stock + price inline; desktop: just category */}
-              <div className="flex items-center gap-1.5 mt-1 sm:hidden">
-                <span className={`text-[10px] font-black px-1.5 py-0.5 rounded tabular-nums ${lowStock ? 'bg-red-100 text-red-700' : 'bg-emerald-100 text-emerald-700'}`}>
-                  ×{product.stock ?? 0}
-                </span>
-                <span className="text-sm font-black text-primary tabular-nums">{product.price} {currency}</span>
-                <span className="text-[9px] uppercase font-black text-slate-500 tracking-wider truncate">
-                  {category || t('no_category')}
-                </span>
-              </div>
-              <div className="hidden sm:flex items-center gap-2 mt-1">
-                <span className="text-[9px] uppercase font-black text-slate-600 tracking-wider px-1.5 py-0.5 bg-white border border-slate-300 rounded">
-                  {category || t('no_category')}
-                </span>
-              </div>
-            </>
-          )}
-        </div>
-
-        {/* Desktop-only stock + price columns */}
-        <div className="hidden sm:flex flex-col items-end px-6 border-l-2 border-slate-200">
-          <span className="text-[9px] font-black text-slate-500 uppercase tracking-tighter">{stockLabel}</span>
-          {empty ? (
-            <span className="font-black text-base text-slate-300">—</span>
-          ) : (
-            <span className={`font-black text-base tabular-nums ${lowStock ? 'text-red-600' : 'text-slate-900'}`}>{product.stock}</span>
-          )}
-        </div>
-        <div className="hidden sm:block text-right px-4 border-l-2 border-slate-200 min-w-[80px]">
-          <span className="text-[9px] font-black text-slate-500 uppercase tracking-tighter block">{priceLabel}</span>
-          {empty ? (
-            <p className="text-base font-black text-slate-300">—</p>
-          ) : (
-            <p className="text-base font-black text-primary tabular-nums">{product.price} {currency}</p>
-          )}
-        </div>
-
-        {/* Right-edge controls. Whole row is tap-to-edit on mobile so
-            the pencil is just a visual cue. Delete lives in the modal
-            (deleteProduct call on Trash icon there). */}
-        <div className="flex items-center gap-1 shrink-0">
-          {empty ? (
-            <span className="hidden sm:block text-[10px] font-bold text-slate-400 italic max-w-[80px] text-right leading-tight">{t('tablet_only')}</span>
-          ) : (
-            <>
-              <IconButton icon={Pencil} label={t('edit')} onClick={(e) => { e.stopPropagation(); onEdit(); }} />
-              <IconButton icon={Trash2} label={t('delete')} tone="danger" onClick={(e) => { e.stopPropagation(); onDelete(); }} />
-            </>
-          )}
-        </div>
-      </div>
-    </div>
-  );
-}
-
-/**
- * Picker over the shared photo bank.
- *
- * Choosing a picture here writes the shared object's URL onto the product —
- * nothing is copied, so every owner who picks the same photo ends up with the
- * identical `image_url`. That is what lets the tablet's disk cache fetch each
- * picture once for the whole fleet instead of once per operator.
- *
- * The bank is ~3000 entries, so nothing here ever renders all of it: search
- * filters the (name-only) index in memory, and tiles are added a page at a
- * time as the grid is scrolled. Thumbnails are the 200px variant — a full
- * page of them is ~220 KB against ~1.5 MB of the 600px files.
- */
-function PhotoLibraryModal({ open, loading, index, onPick, onClose }) {
-  const { t } = useTranslation();
-  const [query, setQuery] = useState('');
-  const [shown, setShown] = useState(LIBRARY_PAGE);
-
-  // A new search is a new list; keep the old scroll depth and the operator
-  // sees an arbitrary slice of it.
-  useEffect(() => { setShown(LIBRARY_PAGE); }, [query]);
-  useEffect(() => { if (open) { setQuery(''); setShown(LIBRARY_PAGE); } }, [open]);
-
-  if (!open) return null;
-
-  const q = query.trim().toLowerCase();
-  const matches = !index ? [] : (q ? index.filter(e => e.n.toLowerCase().includes(q)) : index);
-  const visible = matches.slice(0, shown);
-
-  const onScroll = (e) => {
-    const el = e.currentTarget;
-    if (el.scrollHeight - el.scrollTop - el.clientHeight < 400) {
-      setShown(v => (v >= matches.length ? v : v + LIBRARY_PAGE));
-    }
-  };
-
-  return (
-    <div className="fixed inset-0 z-[100] bg-black/60 flex items-center justify-center p-4">
-      <div className="bg-white rounded-2xl w-full max-w-4xl h-[85vh] flex flex-col overflow-hidden">
-        <div className="flex items-center justify-between px-5 py-4 border-b-2 border-slate-200">
-          <h3 className="font-black text-lg text-slate-900">{t('library_title')}</h3>
-          <IconButton icon={X} label={t('close')} tone="plain" onClick={onClose} />
-        </div>
-
-        <div className="px-5 py-3 border-b border-slate-200">
-          <input
-            autoFocus
-            value={query}
-            onChange={e => setQuery(e.target.value)}
-            placeholder={t('library_search')}
-            className="w-full p-2.5 border-2 border-slate-300 focus:border-primary focus:outline-none rounded-xl font-bold text-slate-900 bg-white placeholder-slate-400"
-          />
-          {index && (
-            <p className="text-[11px] font-bold text-slate-500 mt-2">
-              {t('library_found', { count: matches.length })}
-            </p>
-          )}
-        </div>
-
-        <div className="flex-1 overflow-y-auto px-5 py-4" onScroll={onScroll}>
-          {loading && (
-            <div className="flex items-center justify-center gap-2 py-16 text-slate-500 font-bold">
-              <Loader2 className="animate-spin" size={18} /> {t('library_loading')}
-            </div>
-          )}
-
-          {!loading && index && matches.length === 0 && (
-            <p className="text-center text-sm font-bold text-slate-400 py-16">{t('library_empty')}</p>
-          )}
-
-          <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-6 gap-3">
-            {visible.map(entry => (
-              <button
-                key={entry.f + entry.n}
-                type="button"
-                onClick={() => onPick(entry)}
-                title={entry.n}
-                className="group flex flex-col gap-1 text-left focus:outline-none"
-              >
-                <div className="aspect-square bg-slate-50 rounded-xl border-2 border-slate-200 group-hover:border-primary group-focus:border-primary overflow-hidden transition-colors">
-                  <img
-                    src={`${LIBRARY_BASE}/t/${entry.f}.webp`}
-                    alt={entry.n}
-                    loading="lazy"
-                    className="w-full h-full object-contain p-1"
-                  />
-                </div>
-                <span className="text-[10px] font-bold text-slate-600 leading-tight line-clamp-2">
-                  {entry.n}
-                </span>
-              </button>
-            ))}
-          </div>
-        </div>
-      </div>
-    </div>
+      <ConfirmDialog action={confirmAction} onClose={() => setConfirmAction(null)} />
+      <Toast toast={toast} onClose={() => setToast(null)} />
+    </Shell>
   );
 }
