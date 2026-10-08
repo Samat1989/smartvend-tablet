@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { HelpCircle, LogOut, Menu, Package, X } from 'lucide-react';
+import { HelpCircle, LogOut, Menu, X } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
 export const LANGS = [
@@ -8,11 +8,19 @@ export const LANGS = [
   { code: 'en', label: 'Eng' },
 ];
 
+// The MicroVend emblem (apps/tablet/design/micromart_emblem.png, the same
+// mark the tablet shows). `size` is its height; the mark is 241×148, so it
+// runs about 1.6 times wider. Decorative: the name is always written next to it.
 export function Logo({ size = 40 }) {
   return (
-    <div className="rounded-[10px] bg-brand flex items-center justify-center text-white shrink-0" style={{ width: size, height: size }}>
-      <Package size={Math.round(size * 0.55)} />
-    </div>
+    <img
+      src="/brand/microvend-emblem.png"
+      alt=""
+      aria-hidden="true"
+      className="shrink-0 select-none"
+      style={{ height: Math.round(size * 0.8), width: 'auto' }}
+      draggable={false}
+    />
   );
 }
 
