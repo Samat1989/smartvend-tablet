@@ -5,6 +5,7 @@ import LanguageDetector from 'i18next-browser-languagedetector';
 const resources = {
   ru: {
     translation: {
+      "to_revenue": "в выручку: {{sum}}",
       // ── Panel redesign (MicroVend) ──
       "loading_short": "Загрузка…",
       "inventory_load_error": "Не удалось загрузить остатки",
@@ -19,7 +20,7 @@ const resources = {
       "csv_machine": "Аппарат",
       "csv_items": "Состав",
       "csv_amount": "Сумма",
-      "csv_refund": "К возврату",
+      "csv_refund": "Рекомендовано к возврату",
       "csv_currency": "Валюта",
       "csv_status": "Статус",
       "csv_error": "Не удалось выгрузить CSV",
@@ -109,7 +110,7 @@ const resources = {
       "n_offline_other": "{{count}} без связи",
       "kpi_need_refill": "Нужно пополнить",
       "kpi_revenue_today": "Выручка сегодня",
-      "kpi_refund_today": "К возврату сегодня",
+      "kpi_refund_today": "К возврату за сегодня",
       "machines_search": "Название или номер аппарата",
       "no_machines_hint": "Аппараты добавляет администратор платформы. Напишите ему номер аппарата.",
       "machine": "Аппарат",
@@ -133,7 +134,7 @@ const resources = {
       "export_csv": "Экспорт CSV",
       "period_from": "С даты",
       "period_to": "По дату",
-      "refund_due_hint": "товар не выдан",
+      "refund_due_hint": "возврат — через платёжную систему",
       "sales_totals_partial": "Итоги посчитаны по первым {{n}} продажам периода — выберите период короче.",
       "chart_by_hour": "По часам, {{currency}}",
       "chart_by_day": "По дням, {{currency}}",
@@ -284,7 +285,7 @@ const resources = {
       "dispense_ok": "Выдано",
       "dispense_failed": "Не выдано",
       "dispense_unknown_hint": "Проверьте лоток — выдача не подтверждена",
-      "refund_due": "К возврату",
+      "refund_due": "Рекомендовано к возврату",
       "check_bin": "Проверить лоток",
       "sale_in_progress": "Выдача не завершена",
       "result_overload": "Перегрузка мотора",
@@ -568,6 +569,7 @@ const resources = {
   },
   kk: {
     translation: {
+      "to_revenue": "түсімге: {{sum}}",
       // ── Panel redesign (MicroVend) ──
       "loading_short": "Жүктелуде…",
       "inventory_load_error": "Қалдықтарды жүктеу мүмкін болмады",
@@ -582,7 +584,7 @@ const resources = {
       "csv_machine": "Аппарат",
       "csv_items": "Құрамы",
       "csv_amount": "Сомасы",
-      "csv_refund": "Қайтаруға",
+      "csv_refund": "Қайтару ұсынылады",
       "csv_currency": "Валюта",
       "csv_status": "Күйі",
       "csv_error": "CSV жүктеп алу мүмкін болмады",
@@ -672,7 +674,7 @@ const resources = {
       "export_csv": "CSV экспорты",
       "period_from": "Басы",
       "period_to": "Соңы",
-      "refund_due_hint": "тауар берілмеді",
+      "refund_due_hint": "қайтару — төлем жүйесі арқылы",
       "sales_totals_partial": "Қорытынды кезеңнің алғашқы {{n}} сатылымы бойынша есептелді — қысқарақ кезең таңдаңыз.",
       "chart_by_hour": "Сағат бойынша, {{currency}}",
       "chart_by_day": "Күн бойынша, {{currency}}",
@@ -823,7 +825,7 @@ const resources = {
       "dispense_ok": "Берілді",
       "dispense_failed": "Берілмеді",
       "dispense_unknown_hint": "Науаны тексеріңіз — беру расталмады",
-      "refund_due": "Қайтаруға",
+      "refund_due": "Қайтару ұсынылады",
       "check_bin": "Науаны тексеру",
       "sale_in_progress": "Беру аяқталмаған",
       "result_overload": "Мотор шамадан тыс",
@@ -1107,6 +1109,7 @@ const resources = {
   },
   en: {
     translation: {
+      "to_revenue": "revenue: {{sum}}",
       // ── Panel redesign (MicroVend) ──
       "loading_short": "Loading…",
       "inventory_load_error": "Could not load the stock",
@@ -1121,7 +1124,7 @@ const resources = {
       "csv_machine": "Machine",
       "csv_items": "Items",
       "csv_amount": "Amount",
-      "csv_refund": "Refund due",
+      "csv_refund": "Suggested refund",
       "csv_currency": "Currency",
       "csv_status": "Status",
       "csv_error": "Could not export CSV",
@@ -1211,7 +1214,7 @@ const resources = {
       "export_csv": "Export CSV",
       "period_from": "From",
       "period_to": "To",
-      "refund_due_hint": "not dispensed",
+      "refund_due_hint": "refund via the payment system",
       "sales_totals_partial": "Totals cover the first {{n}} sales of the period — pick a shorter period.",
       "chart_by_hour": "By hour, {{currency}}",
       "chart_by_day": "By day, {{currency}}",
@@ -1362,7 +1365,7 @@ const resources = {
       "dispense_ok": "Dispensed",
       "dispense_failed": "Failed",
       "dispense_unknown_hint": "Check the bin — dispense not confirmed",
-      "refund_due": "Refund due",
+      "refund_due": "Suggested refund",
       "check_bin": "Check the bin",
       "sale_in_progress": "Dispense not completed",
       "result_overload": "Motor overload",

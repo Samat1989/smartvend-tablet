@@ -41,7 +41,7 @@ export default function MachineDetail({
         for (const s of rows) {
           const o = saleOutcome(s);
           if (o.state === 'progress') continue;
-          net += (s.amount || 0) - o.refund;
+          net += o.revenue;
           for (const it of s.sales_items || []) if (it.dispensed !== false) units += it.quantity || 1;
         }
         setSold({ net, units });

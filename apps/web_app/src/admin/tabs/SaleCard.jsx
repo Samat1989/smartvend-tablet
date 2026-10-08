@@ -119,9 +119,14 @@ export default function SaleCard({ sale, market, layout, currency, open, onToggl
               </div>
             )}
             <div className="text-right">
-              <div className={`text-lg font-extrabold tabular-nums whitespace-nowrap ${outcome.state === 'failed' ? 'text-slate-400 line-through' : 'text-ink'}`}>
-                {money(sale.amount)} <span className="text-sm">{currency}</span>
+              {/* What the buyer paid. When part of it is not revenue (goods
+                  not dispensed), the line under it says how much is. */}
+              <div className={`text-lg font-extrabold tabular-nums whitespace-nowrap ${outcome.revenue === 0 && outcome.paid > 0 ? 'text-slate-400 line-through' : 'text-ink'}`}>
+                {money(outcome.state === 'progress' ? sale.amount : outcome.paid)} <span className="text-sm">{currency}</span>
               </div>
+              {outcome.revenue < outcome.paid && outcome.revenue > 0 && (
+                <div className="text-[13px] font-semibold text-emerald-800 tabular-nums whitespace-nowrap">{t('to_revenue', { sum: `${money(outcome.revenue)} ${currency}` })}</div>
+              )}
               <div className="text-[13px] text-slate-600 tabular-nums whitespace-nowrap">
                 {formatSaleDate(sale.created_at, i18n.language)}
               </div>

@@ -55,7 +55,7 @@ export default function MachinesTab({ markets, loaded, rtOnline, onOpen, onRenam
           if (o.state === 'progress') continue;
           const k = String(s.micromarket_id);
           const e = tm.get(k) ?? { net: 0, refund: 0 };
-          e.net += (s.amount || 0) - o.refund;
+          e.net += o.revenue;
           e.refund += o.refund;
           tm.set(k, e);
         }

@@ -40,26 +40,41 @@ export function resultLabel(t, item) {
   return t('dispense_failed');
 }
 
-// What a sale means for the money. `refund` is what the owner owes back:
-// items that did not come out, or the whole sale when the door of a Realtime
-// board stayed shut (paid, nothing taken). Restoring the stock marks such a
-// sale as handled. A sale still in progress counts nowhere yet.
+// What a sale means for the money. Nothing is refunded automatically: the
+// owner returns money by hand through the payment system, and the panel only
+// recommends it. Money for goods that did not come out is never revenue.
+//
+//   revenue — what counts as earned
+//   refund  — recommended to return to the buyer
+//   paid    — what the buyer was charged (revenue + refund)
+//
+// Two cases, because the two writers record `amount` differently:
+//  * vending lines with dispensed=false: the tablet already writes `amount`
+//    net of them (in the data, amount = items − failed items on every such
+//    sale), so revenue is `amount` as is and the failed lines are the refund.
+//    The old panel subtracted them a second time.
+//  * a Realtime board whose door stayed shut: `amount` is the full payment and
+//    nothing was taken, so all of it is the refund and none is revenue.
+//    Restoring the stock marks it handled: no longer recommended, still not
+//    revenue.
+// A sale still in progress counts nowhere yet.
 export function saleOutcome(sale) {
-  if (sale.status === 'in_progress') return { state: 'progress', refund: 0 };
+  const amount = sale.amount || 0;
+  if (sale.status === 'in_progress') return { state: 'progress', refund: 0, revenue: 0, paid: 0 };
   const items = sale.sales_items || [];
   const failed = items.filter((i) => i.dispensed === false);
   const doorBad = sale.door_status === 'failed' || sale.door_status === 'no_ack';
   if (doorBad) {
     return sale.stock_restored_at
-      ? { state: 'restored', refund: 0 }
-      : { state: 'failed', refund: sale.amount || 0 };
+      ? { state: 'restored', refund: 0, revenue: 0, paid: amount }
+      : { state: 'failed', refund: amount, revenue: 0, paid: amount };
   }
-  if (sale.door_status === 'pending') return { state: 'pending', refund: 0 };
+  if (sale.door_status === 'pending') return { state: 'pending', refund: 0, revenue: amount, paid: amount };
   if (failed.length) {
     const refund = failed.reduce((s, i) => s + (i.price || 0) * (i.quantity || 1), 0);
-    return { state: failed.length === items.length ? 'failed' : 'partial', refund };
+    return { state: failed.length === items.length ? 'failed' : 'partial', refund, revenue: amount, paid: amount + refund };
   }
-  return { state: 'ok', refund: 0 };
+  return { state: 'ok', refund: 0, revenue: amount, paid: amount };
 }
 
 // Локаль для даты продажи. i18n.language здесь — 'ru' | 'kk' | 'en'.
@@ -257,14 +272,15 @@ export function computeStats(rows, currencyFor) {
     orders += 1;
     if (o.refund > 0) refundCount += 1;
     const cur = currencyFor(s.micromarket_id);
-    const c = byCurrency.get(cur) ?? { currency: cur, gross: 0, refund: 0, okOrders: 0 };
-    c.gross += s.amount || 0;
+    const c = byCurrency.get(cur) ?? { currency: cur, gross: 0, net: 0, refund: 0, okOrders: 0 };
+    c.gross += o.paid;
+    c.net += o.revenue;
     c.refund += o.refund;
     if (o.state === 'ok' || o.state === 'partial' || o.state === 'pending') c.okOrders += 1;
     byCurrency.set(cur, c);
   }
   const totals = [...byCurrency.values()]
-    .map((c) => ({ ...c, net: c.gross - c.refund, avg: c.okOrders ? Math.round((c.gross - c.refund) / c.okOrders) : null }))
+    .map((c) => ({ ...c, avg: c.okOrders ? Math.round(c.net / c.okOrders) : null }))
     .sort((a, b) => b.net - a.net);
   return { totals, orders, refundCount };
 }
@@ -306,7 +322,7 @@ export function buildChart({ rows, timeFilter, range, lang, currency, currencyFo
     const d = new Date(s.created_at);
     const i = index.get(timeFilter === 'day' ? d.getHours() : d.toDateString());
     if (i == null) continue;
-    buckets[i].value += (s.amount || 0) - o.refund;
+    buckets[i].value += o.revenue;
     buckets[i].count += 1;
   }
   return buckets;
@@ -320,7 +336,7 @@ export function revenueByMachine(rows, currency, currencyFor) {
     const o = saleOutcome(s);
     if (o.state === 'progress') continue;
     const k = String(s.micromarket_id);
-    m.set(k, (m.get(k) ?? 0) + (s.amount || 0) - o.refund);
+    m.set(k, (m.get(k) ?? 0) + o.revenue);
   }
   return [...m.entries()].map(([id, value]) => ({ id, value })).sort((a, b) => b.value - a.value);
 }
