@@ -1,5 +1,5 @@
 import { Fragment, useEffect, useState } from 'react';
-import { ArrowLeftRight, ChevronDown, Cpu, KeyRound, Pencil, Plus, RefreshCw, Trash2, UserX, Wifi, WifiOff } from 'lucide-react';
+import { ArrowLeftRight, ChevronDown, Cpu, KeyRound, Plus, RefreshCw, Trash2, UserX, Wifi, WifiOff } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { Button, IconButton } from '../ui/Button';
 import { Card, KpiCard, PageHeader, Pagination, Pill } from '../ui/Card';
@@ -59,7 +59,7 @@ function ago(iso, t, lang) {
 export default function AdminTab({
   users, usersLoading, devices, devicesLoading, currentUserId,
   onRefresh, onCreateUser, onAddDevice, onChangePassword, onDeleteUser,
-  onTransfer, onDeleteDevice, onChangeKind, onRename,
+  onTransfer, onDeleteDevice, onChangeKind,
 }) {
   const { t } = useTranslation();
   const [view, setView] = useState('devices');
@@ -104,17 +104,18 @@ export default function AdminTab({
       )}
 
       {view === 'devices'
-        ? <DevicesTable rows={rows} loading={devices == null} onTransfer={onTransfer} onDelete={onDeleteDevice} onChangeKind={onChangeKind} onRename={onRename} />
+        ? <DevicesTable rows={rows} loading={devices == null} onTransfer={onTransfer} onDelete={onDeleteDevice} onChangeKind={onChangeKind} />
         : <UsersTable users={users} devices={devices} currentUserId={currentUserId} onChangePassword={onChangePassword} onDeleteUser={onDeleteUser} onTransfer={onTransfer} />}
     </div>
   );
 }
 
-function DeviceActions({ m, onRename, onTransfer, onDelete, wide = false }) {
+// Renaming lives with the owner (their machine list); the superadmin's row
+// keeps only what changes hands or ends a machine.
+function DeviceActions({ m, onTransfer, onDelete, wide = false }) {
   const { t } = useTranslation();
   return (
     <div className="flex items-center gap-1.5">
-      <IconButton icon={Pencil} label={t('rename')} onClick={() => onRename(m)} />
       <Button variant="soft" size="sm" icon={ArrowLeftRight} onClick={() => onTransfer(m)} className={wide ? 'flex-1' : ''}>
         {t('transfer_short')}
       </Button>
@@ -123,7 +124,7 @@ function DeviceActions({ m, onRename, onTransfer, onDelete, wide = false }) {
   );
 }
 
-function DevicesTable({ rows, loading, onTransfer, onDelete, onChangeKind, onRename }) {
+function DevicesTable({ rows, loading, onTransfer, onDelete, onChangeKind }) {
   const { t, i18n } = useTranslation();
   const [q, setQ] = useState('');
   const [kindF, setKindF] = useState('all');
@@ -221,7 +222,7 @@ function DevicesTable({ rows, loading, onTransfer, onDelete, onChangeKind, onRen
                         </div>
                       </td>
                       <td className="px-3 py-3 text-slate-700 whitespace-nowrap" title={fmt(last)}>{ago(last, t, i18n.language)}</td>
-                      <td className="px-3 py-3"><div className="flex justify-end"><DeviceActions m={m} onRename={onRename} onTransfer={onTransfer} onDelete={onDelete} /></div></td>
+                      <td className="px-3 py-3"><div className="flex justify-end"><DeviceActions m={m} onTransfer={onTransfer} onDelete={onDelete} /></div></td>
                     </tr>
                     {expanded === m.id && (
                       <tr className="bg-slate-50 border-b border-slate-200">
@@ -258,7 +259,7 @@ function DevicesTable({ rows, loading, onTransfer, onDelete, onChangeKind, onRen
                   <KindSelect kind={m.kind} onChange={(k) => onChangeKind(m.id, k)} />
                   {needsBoard && !paired && <Pill tone="amber">{t('adm_unpaired')}</Pill>}
                 </div>
-                <DeviceActions m={m} wide onRename={onRename} onTransfer={onTransfer} onDelete={onDelete} />
+                <DeviceActions m={m} wide onTransfer={onTransfer} onDelete={onDelete} />
               </li>
             ))}
           </ul>

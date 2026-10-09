@@ -37,12 +37,20 @@ export function Toast({ toast, onClose }) {
 // a few of them the browser offers "prevent this page from creating more
 // dialogs", and once the operator ticks it confirm() returns false instantly —
 // the delete button then does nothing at all, silently, for the session.
+//
+// `typeToConfirm`: the yes button stays off until that exact text is typed —
+// for the last step of something that cannot be undone.
 export function ConfirmDialog({ action, onClose }) {
   const { t } = useTranslation();
   const [busy, setBusy] = useState(false);
+  // Tied to the action it was typed for, so the next dialog starts empty.
+  const [typed, setTyped] = useState({ action: null, value: '' });
   if (!action) return null;
   const tone = action.tone ?? 'danger';
+  const typedValue = typed.action === action ? typed.value : '';
+  const locked = action.typeToConfirm != null && typedValue.trim() !== String(action.typeToConfirm);
   async function yes() {
+    if (locked) return;
     setBusy(true);
     try { await action.onYes(); } finally { setBusy(false); onClose(); }
   }
@@ -57,7 +65,7 @@ export function ConfirmDialog({ action, onClose }) {
       footer={(
         <>
           <Button variant="secondary" onClick={onClose} disabled={busy}>{t('cancel')}</Button>
-          <Button type="submit" variant={tone === 'danger' ? 'danger' : tone === 'warning' ? 'warning' : 'primary'} loading={busy}>
+          <Button type="submit" variant={tone === 'danger' ? 'danger' : tone === 'warning' ? 'warning' : 'primary'} loading={busy} disabled={locked}>
             {action.yesLabel ?? t('delete_forever')}
           </Button>
         </>
@@ -67,6 +75,18 @@ export function ConfirmDialog({ action, onClose }) {
       <p className="text-sm text-slate-700 leading-relaxed">{action.message}</p>
       {action.warning && (
         <p className="mt-3 text-sm font-semibold text-rose-800 bg-rose-50 border border-rose-200 rounded-[8px] p-3">{action.warning}</p>
+      )}
+      {action.typeToConfirm != null && (
+        <label className="mt-4 flex flex-col gap-1.5">
+          <span className="text-[13px] font-bold text-slate-700">{action.typeLabel}</span>
+          <input
+            value={typedValue}
+            onChange={(e) => setTyped({ action, value: e.target.value })}
+            inputMode="numeric"
+            autoComplete="off"
+            className="min-h-11 px-3 rounded-[10px] border-2 border-rose-300 bg-white text-base font-bold text-ink focus:outline-none focus:border-rose-600"
+          />
+        </label>
       )}
     </Modal>
   );

@@ -20,7 +20,7 @@ import {
   InventoryEditModal, NewUserModal, PasswordModal, RenameModal, TransferModal,
 } from './admin/modals/Forms';
 import { deleteRow, isNetworkFailure, patchRow } from './admin/lib/net';
-import { CELL_MAX, CELL_MIN, currencyOf, machineName, nextFreeCellNumber, parseLayout } from './admin/lib/machines';
+import { CELL_MAX, CELL_MIN, currencyOf, kindLabel, machineName, nextFreeCellNumber, parseLayout } from './admin/lib/machines';
 import { LIBRARY_BASE, getCroppedImg, prepareForCrop } from './admin/lib/photo';
 
 // Machine-readable codes from supabase/functions/device-claim/index.ts →
@@ -50,7 +50,7 @@ export default function Admin() {
   const [selectedMarketId, setSelectedMarketId] = useState(null);
   const [qrModalMarket, setQrModalMarket] = useState(null);
   const [serviceOpening, setServiceOpening] = useState(null); // machid whose door is being opened for service
-  const [renamingMarket, setRenamingMarket] = useState(null); // {id,name,viaAdmin?}
+  const [renamingMarket, setRenamingMarket] = useState(null); // {id,name}
   const [pairMarket, setPairMarket] = useState(null);         // machine whose settings dialog is open
 
   // Drilling into a machine used to be pure React state, so on a phone the
@@ -389,6 +389,8 @@ export default function Admin() {
 
   function unpairBoard(market) {
     setConfirmAction({
+      title: t('pair_board_unpair'),
+      subject: `${machineName(market, t)} · ${t('apparatus_no')}${market.id}`,
       message: t('pair_board_unpair_confirm'),
       yesLabel: t('pair_board_unpair'),
       tone: 'danger',
@@ -417,6 +419,7 @@ export default function Admin() {
         try {
           const { error } = await supabase.rpc('admin_release_machine', { p_machid: m.id });
           if (error) throw error;
+          setPairMarket(null);
           await fetchMarkets();
           showToast(t('tablet_released'));
         } catch (err) {
@@ -426,25 +429,19 @@ export default function Admin() {
     });
   }
 
-  // An owner renaming its own machine goes straight to the table: the "Owner
-  // manages micromarkets" policy already limits authenticated UPDATEs to
-  // owner_id = auth.uid(). From the superadmin's fleet list (viaAdmin) the same
-  // UPDATE would match zero rows for someone else's machine, so that path goes
-  // through device-admin.
+  // Renaming is the owner's, from its own machine list, straight to the
+  // table: the "Owner manages micromarkets" policy already limits
+  // authenticated UPDATEs to owner_id = auth.uid().
   async function renameMarket() {
     const name = (renamingMarket?.name || '').trim();
     if (!name) return showToast(t('device_name_required'), 'error');
     try {
-      if (renamingMarket.viaAdmin) {
-        await invokeAdminFn('device-admin', { body: { action: 'rename', machid: renamingMarket.id, name } });
-      } else {
-        // Обход заблокированного PATCH — см. patchRow(). Полная строка сюда
-        // намеренно не передаётся: список машин читается частичным select, и
-        // отправить его целиком значило бы записать обратно свой layout_json,
-        // который правит планшет. А без owner_id вставка-призрак не пройдёт RLS.
-        const error = await patchRow('micromarkets', renamingMarket.id, { name });
-        if (error) throw error;
-      }
+      // Обход заблокированного PATCH — см. patchRow(). Полная строка сюда
+      // намеренно не передаётся: список машин читается частичным select, и
+      // отправить его целиком значило бы записать обратно свой layout_json,
+      // который правит планшет. А без owner_id вставка-призрак не пройдёт RLS.
+      const error = await patchRow('micromarkets', renamingMarket.id, { name });
+      if (error) throw error;
       setRenamingMarket(null);
       await fetchMarkets();
       if (isSuperadmin && adminDevices) fetchAdminDevices();
@@ -955,6 +952,21 @@ export default function Admin() {
     });
   }
 
+  // The owner is picked in TransferModal; this asks once more, naming both.
+  function confirmTransfer(to) {
+    const market = transferTarget;
+    if (!market || !to) return;
+    const from = adminOwners.find((o) => o.id === market.owner_id)?.email ?? t('no_owner');
+    setConfirmAction({
+      title: t('transfer_confirm_title'),
+      subject: `${machineName(market, t)} · ${t('apparatus_no')}${market.id}`,
+      message: t('transfer_confirm_msg', { from, to: to.email }),
+      tone: 'primary',
+      yesLabel: t('transfer_short'),
+      onYes: () => transferDevice(to),
+    });
+  }
+
   async function transferDevice(to) {
     const market = transferTarget;
     if (!market || !to) return;
@@ -975,7 +987,21 @@ export default function Admin() {
 
   // Change the machine type without enrolling it anew — that used to cost the
   // whole sales history.
-  async function changeDeviceKind(machid, kind) {
+  // Asked first: the type decides how the machine takes orders and payment.
+  function changeDeviceKind(machid, kind) {
+    const m = (adminDevices ?? []).find((d) => d.id === machid) ?? { id: machid };
+    if (m.kind === kind) return;
+    setConfirmAction({
+      title: t('device_kind_change_title'),
+      subject: `${machineName(m, t)} · ${t('apparatus_no')}${machid}`,
+      message: t('device_kind_change_msg', { from: kindLabel(m.kind, t), to: kindLabel(kind, t) }),
+      tone: 'warning',
+      yesLabel: t('device_kind_change_yes'),
+      onYes: () => applyDeviceKind(machid, kind),
+    });
+  }
+
+  async function applyDeviceKind(machid, kind) {
     try {
       const data = await invokeAdminFn('device-admin', { body: { action: 'kind', machid, kind } });
       await Promise.all([fetchAdminDevices(), fetchMarkets()]);
@@ -994,39 +1020,39 @@ export default function Admin() {
     }
   }
 
-  // Delete is destructive: inventory and sales cascade. Ask first; the server
-  // then refuses a machine with sales until `confirm`, and reports the counts,
-  // which the second dialog spells out.
+  // Delete is destructive: inventory and sales cascade. Always two warnings,
+  // and the second wants the machine's number typed in, so a stray click on
+  // the bin cannot wipe a machine. Both are passed by then, so the server is
+  // told `confirm` straight away.
   function deleteDevice(machid) {
     const m = (adminDevices ?? []).find((d) => d.id === machid) ?? { id: machid };
-    const reallyDelete = async (confirm) => {
+    const subject = `${machineName(m, t)} · ${t('apparatus_no')}${machid}`;
+    const reallyDelete = async () => {
       try {
-        await invokeAdminFn('device-admin', { body: { action: 'delete', machid, confirm } });
+        await invokeAdminFn('device-admin', { body: { action: 'delete', machid, confirm: true } });
         await Promise.all([fetchAdminDevices(), fetchMarkets()]);
         showToast(t('device_deleted'));
       } catch (err) {
-        if (err.code === 'confirm_required') {
-          const d = err.details || {};
-          setTimeout(() => setConfirmAction({
-            title: t('delete_device_title'),
-            subject: d.name || machineName(m, t),
-            message: t('delete_device_irreversible'),
-            warning: t('delete_device_cascade', { sales: d.sales ?? 0, inventory: d.inventory ?? 0, orders: d.orders ?? 0 }),
-            yesLabel: t('yes_delete'),
-            onYes: () => reallyDelete(true),
-          }), 0);
-          return;
-        }
         if (err.code === 'has_pending_orders') { showToast(t('device_del_pending'), 'error'); return; }
         showToast(`${t('device_delete_error')}: ${err.message}`, 'error');
       }
     };
     setConfirmAction({
       title: t('delete_device_title'),
-      subject: machineName(m, t),
+      subject,
       message: t('delete_device_irreversible'),
-      yesLabel: t('yes_delete'),
-      onYes: () => reallyDelete(false),
+      warning: t('delete_device_cascade_all'),
+      yesLabel: t('continue'),
+      // ConfirmDialog closes after onYes; the second step opens right after.
+      onYes: () => { setTimeout(() => setConfirmAction({
+        title: t('delete_device_sure'),
+        subject,
+        message: t('delete_device_type_hint', { id: machid }),
+        typeToConfirm: String(machid),
+        typeLabel: t('delete_device_type_label'),
+        yesLabel: t('delete_forever'),
+        onYes: reallyDelete,
+      }), 0); },
     });
   }
 
@@ -1101,7 +1127,6 @@ export default function Admin() {
           onTransfer={(m) => setTransferTarget(m)}
           onDeleteDevice={deleteDevice}
           onChangeKind={changeDeviceKind}
-          onRename={(m) => setRenamingMarket({ id: m.id, name: m.name || '', viaAdmin: true })}
         />
       ) : activeTab === 'catalog' ? (
         <CatalogTab
@@ -1131,7 +1156,6 @@ export default function Admin() {
             onOpen={openMarket}
             onRename={(m) => setRenamingMarket({ id: m.id, name: m.name || '' })}
             onSettings={(m) => setPairMarket(m)}
-            onRelease={releaseTablet}
           />
         ) : (
           <MachineDetail
@@ -1233,6 +1257,7 @@ export default function Admin() {
           rtState={rtOnline[pairMarket.id]}
           onClose={() => setPairMarket(null)}
           onUnpair={() => unpairBoard(pairMarket)}
+          onRelease={() => releaseTablet(pairMarket)}
           onRefresh={fetchMarkets}
           onCheckUpdate={isSuperadmin ? () => checkBoardUpdate(pairMarket) : undefined}
         />
@@ -1245,7 +1270,7 @@ export default function Admin() {
         <AddDeviceModal value={addingDevice} onChange={setAddingDevice} saving={deviceSaving} onSave={claimDevice} onClose={() => setAddingDevice(null)} />
       )}
       {transferTarget && (
-        <TransferModal market={transferTarget} owners={adminOwners} busy={transferring} onConfirm={transferDevice} onClose={() => setTransferTarget(null)} />
+        <TransferModal market={transferTarget} owners={adminOwners} busy={transferring} onConfirm={confirmTransfer} onClose={() => setTransferTarget(null)} />
       )}
       {pwdTarget && (
         <PasswordModal value={pwdTarget} onChange={setPwdTarget} saving={userSaving} onSave={changePassword} onClose={() => setPwdTarget(null)} />

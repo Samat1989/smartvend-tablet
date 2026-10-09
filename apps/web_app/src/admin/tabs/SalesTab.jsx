@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Download, Receipt, RefreshCw, RotateCcw, ShoppingBag, TrendingUp, Wallet } from 'lucide-react';
+import { CalendarDays, Download, Receipt, RefreshCw, RotateCcw, ShoppingBag, TrendingUp, Wallet } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { supabase } from '../../supabaseClient';
 import { Button, IconButton } from '../ui/Button';
@@ -7,6 +7,7 @@ import { KpiCard, PageHeader } from '../ui/Card';
 import { Segmented } from '../ui/Chips';
 import { Banner, EmptyState, SkeletonRows } from '../ui/Feedback';
 import { inputCls } from '../ui/Field';
+import DateRangeModal, { parseDay } from '../ui/DateRangeModal';
 import { catName, currencyOf, machineName, money, parseLayout } from '../lib/machines';
 import {
   SALES_PAGE_SIZE, buildChart, computeStats, dateLocale, delta, downloadText, fetchSalesAggregate,
@@ -35,6 +36,7 @@ export default function SalesTab({ markets, categories, showToast, onConfirm }) 
   const [periodFrom, setPeriodFrom] = useState('');
   const [periodTo, setPeriodTo] = useState('');
   const [market, setMarket] = useState('all');
+  const [pickerOpen, setPickerOpen] = useState(false);
 
   const [list, setList] = useState([]);
   const [count, setCount] = useState(null);
@@ -151,6 +153,18 @@ export default function SalesTab({ markets, categories, showToast, onConfirm }) 
     : stats.totals.map((c) => `${money(c[key])} ${c.currency}`).join(' · ');
   const vsNote = timeFilter === 'day' ? t('vs_yesterday') : t('vs_previous');
 
+  const shortDay = (s) => parseDay(s).toLocaleDateString(dateLocale(lang), { day: 'numeric', month: 'short' });
+  const pickedLabel = periodFrom && periodTo
+    ? (periodFrom === periodTo ? shortDay(periodFrom) : `${shortDay(periodFrom)} — ${shortDay(periodTo)}`)
+    : t('choose_dates');
+
+  // "Period" opens the calendar instead of switching at once: the filter turns
+  // to the chosen dates only on Apply, and Cancel leaves the old one in place.
+  const onPeriodChange = (v) => {
+    if (v === 'period') setPickerOpen(true);
+    else setTimeFilter(v);
+  };
+
   const periodLabel = (() => {
     if (!range) return t('sales_recent_hint');
     const f = (d) => d.toLocaleDateString(dateLocale(lang), { day: 'numeric', month: 'long' });
@@ -193,7 +207,7 @@ export default function SalesTab({ markets, categories, showToast, onConfirm }) 
         <Segmented
           label={t('period')}
           value={timeFilter}
-          onChange={setTimeFilter}
+          onChange={onPeriodChange}
           className="w-full sm:w-auto"
           options={[
             { value: 'recent', label: t('recent') },
@@ -204,15 +218,24 @@ export default function SalesTab({ markets, categories, showToast, onConfirm }) 
           ]}
         />
         {timeFilter === 'period' && (
-          <div className="flex items-center gap-2 w-full sm:w-auto">
-            <label className="sr-only" htmlFor="sales-from">{t('period_from')}</label>
-            <input id="sales-from" type="date" value={periodFrom} onChange={(e) => setPeriodFrom(e.target.value)} className={`${inputCls} sm:!w-44`} />
-            <span className="text-slate-500" aria-hidden="true">—</span>
-            <label className="sr-only" htmlFor="sales-to">{t('period_to')}</label>
-            <input id="sales-to" type="date" value={periodTo} onChange={(e) => setPeriodTo(e.target.value)} className={`${inputCls} sm:!w-44`} />
-          </div>
+          <Button variant="secondary" icon={CalendarDays} onClick={() => setPickerOpen(true)} className="min-h-11 w-full sm:w-auto">
+            {pickedLabel}
+          </Button>
         )}
       </div>
+      {pickerOpen && (
+        <DateRangeModal
+          from={periodFrom}
+          to={periodTo}
+          onClose={() => setPickerOpen(false)}
+          onApply={(f, to) => {
+            setPeriodFrom(f);
+            setPeriodTo(to);
+            setTimeFilter('period');
+            setPickerOpen(false);
+          }}
+        />
+      )}
 
       <div className={`grid grid-cols-2 xl:grid-cols-4 gap-3 sm:gap-4 ${aggLoading ? 'opacity-60' : ''}`} aria-busy={aggLoading}>
         <KpiCard

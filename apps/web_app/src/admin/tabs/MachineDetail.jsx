@@ -110,7 +110,7 @@ export default function MachineDetail({
                 {t('service_open')}
               </Button>
             )}
-            {(isStatic || kind === 'micromarket_tablet') && (
+            {(isStatic || kind === 'micromarket_tablet' || kind === 'vending') && (
               <Button icon={Settings} onClick={onSettings} className={`flex-1 sm:flex-none ${market?.rt ? '!text-emerald-800 !border-emerald-300' : ''}`}>
                 {t('machine_settings_short')}
               </Button>

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { AlertTriangle, ChevronRight, Package, Pencil, RotateCcw, Settings, Unlink as LinkOff, Wallet, Wifi } from 'lucide-react';
+import { AlertTriangle, ChevronRight, Package, Pencil, RotateCcw, Settings, Wallet, Wifi } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { supabase } from '../../supabaseClient';
 import { IconButton } from '../ui/Button';
@@ -11,7 +11,9 @@ import { DeviceStatusDot, KindBadge, PayChannelBadge, machineOnline } from '../s
 import { LOW_STOCK, currencyOf, machineName, money } from '../lib/machines';
 import { fetchSalesAggregate, periodRange, saleOutcome } from '../lib/sales';
 
-const needsBoard = (m) => m.kind === 'micromarket_static' || m.kind === 'micromarket_tablet';
+// The gear: lock-board settings, or for a vending machine its tablet and the
+// unpairing, which used to be a bare unlink icon right in the row.
+const hasSettings = (m) => m.kind === 'micromarket_static' || m.kind === 'micromarket_tablet' || m.kind === 'vending';
 
 /**
  * The owner's machines: headline numbers for today, then every machine with
@@ -21,7 +23,7 @@ const needsBoard = (m) => m.kind === 'micromarket_static' || m.kind === 'microma
  * the owner's inventory rows, today's sales), so the list can say "3 cells
  * running low" without opening each machine.
  */
-export default function MachinesTab({ markets, loaded, rtOnline, onOpen, onRename, onSettings, onRelease, showToast }) {
+export default function MachinesTab({ markets, loaded, rtOnline, onOpen, onRename, onSettings, showToast }) {
   const { t } = useTranslation();
   const [q, setQ] = useState('');
   const [filter, setFilter] = useState('all');
@@ -112,11 +114,8 @@ export default function MachinesTab({ markets, loaded, rtOnline, onOpen, onRenam
   const actions = (m) => (
     <>
       <IconButton icon={Pencil} label={t('rename')} onClick={() => onRename(m)} />
-      {needsBoard(m) && (
+      {hasSettings(m) && (
         <IconButton icon={Settings} label={t('machine_settings')} tone={m.rt ? 'success' : 'default'} onClick={() => onSettings(m)} />
-      )}
-      {m.kind === 'vending' && (
-        <IconButton icon={LinkOff} label={t('release_tablet')} onClick={() => onRelease(m)} />
       )}
     </>
   );
@@ -203,7 +202,7 @@ export default function MachinesTab({ markets, loaded, rtOnline, onOpen, onRenam
                               onClick={() => onOpen(m.id)}
                               className="inline-flex items-center gap-1 min-h-9 pl-3 pr-2 rounded-[10px] bg-brand text-white text-[13px] font-bold hover:bg-brand-dark focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-blue-300"
                             >
-                              {t('open')} <ChevronRight size={16} />
+                              {t('stock_and_goods')} <ChevronRight size={16} />
                             </button>
                           </div>
                         </td>

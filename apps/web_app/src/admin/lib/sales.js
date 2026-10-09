@@ -184,9 +184,12 @@ export function periodRange(timeFilter, periodFrom, periodTo) {
     return { since: d, until: null };
   }
   if (timeFilter === 'period') {
-    const since = periodFrom ? new Date(periodFrom) : null;
+    // 'YYYY-MM-DD' read as a local day: new Date('2026-10-01') is UTC
+    // midnight, which in Almaty cut the first five hours off the period.
+    const day = (s) => { const [y, m, d] = s.split('-').map(Number); return new Date(y, m - 1, d); };
+    const since = periodFrom ? day(periodFrom) : null;
     let until = null;
-    if (periodTo) { until = new Date(periodTo); until.setHours(23, 59, 59, 999); }
+    if (periodTo) { until = day(periodTo); until.setHours(23, 59, 59, 999); }
     return { since, until };
   }
   return null;
