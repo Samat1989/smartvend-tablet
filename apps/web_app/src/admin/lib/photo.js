@@ -85,6 +85,12 @@ export async function prepareForCrop(file, t) {
   }
 }
 
+async function encodeWebp(imageData) {
+  const { default: encode } = await import('@jsquash/webp/encode');
+  const buf = await encode(imageData, { quality: 85 });
+  return new Blob([buf], { type: 'image/webp' });
+}
+
 // Crop to a 600×600 WebP on white.
 export function getCroppedImg(imageSrc, pixelCrop, t) {
   return new Promise((resolve, reject) => {
@@ -115,7 +121,17 @@ export function getCroppedImg(imageSrc, pixelCrop, t) {
 
       canvas.toBlob((blob) => {
         if (!blob) return reject(new Error('Canvas empty'));
-        resolve(blob);
+        if (blob.type === 'image/webp') return resolve(blob);
+        // Safari cannot encode WebP from a canvas and silently hands back a
+        // PNG instead, which the webp-only bucket refuses ("mime type
+        // image/png is not supported") — every upload from an iPhone failed.
+        // Encode it here with libwebp (wasm), loaded only when needed.
+        encodeWebp(ctx.getImageData(0, 0, targetSize, targetSize))
+          .then(resolve)
+          .catch((err) => {
+            console.error('WebP encode failed:', err);
+            reject(new Error(t('photo_format_unsupported'), { cause: err }));
+          });
       }, 'image/webp', 0.85);
     };
     // Was `img.onerror = reject`, which rejects with an Event — and the

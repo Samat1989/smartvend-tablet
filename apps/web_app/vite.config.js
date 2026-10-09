@@ -8,6 +8,9 @@ export default defineConfig({
     react(),
     tailwindcss(),
   ],
+  // The WebP encoder finds its .wasm next to itself (new URL(..., import.meta.url));
+  // pre-bundling moves the JS and leaves the wasm behind, so keep it out.
+  optimizeDeps: { exclude: ['@jsquash/webp'] },
   server: {
     host: '0.0.0.0', // Разрешить подключения со всех IP (телефона)
     port: 5173,      // Основной порт
