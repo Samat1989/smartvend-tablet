@@ -3,10 +3,10 @@
 
 export const MACHINE_KINDS = ['vending', 'micromarket_tablet', 'micromarket_static', 'micromarket_screen'];
 
-// Остаток, с которого позиция считается «заканчивается». Был зашит числом
-// в двух списках остатков; теперь им же считаются сводки по аппаратам.
-export const LOW_STOCK = 5;
-export const isLowStock = (stock) => (stock ?? 0) < LOW_STOCK;
+// Остаток, при котором позиция считается «заканчивается» (включительно).
+// Им же считаются сводки по аппаратам.
+export const LOW_STOCK = 2;
+export const isLowStock = (stock) => (stock ?? 0) <= LOW_STOCK;
 
 // Три типа машин, а проверка была одна: "static или вендинг". С появлением
 // micromarket_tablet тернарник начал врать — планшетный микромаркет

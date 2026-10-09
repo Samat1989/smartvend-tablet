@@ -8,7 +8,7 @@ import { ChipGroup } from '../ui/Chips';
 import { EmptyState, SkeletonRows } from '../ui/Feedback';
 import { SearchInput, matches } from '../ui/Field';
 import { DeviceStatusDot, KindBadge, PayChannelBadge, machineOnline } from '../status/Status';
-import { LOW_STOCK, currencyOf, machineName, money } from '../lib/machines';
+import { LOW_STOCK, currencyOf, isLowStock, machineName, money } from '../lib/machines';
 import { fetchSalesAggregate, periodRange, saleOutcome } from '../lib/sales';
 
 // The gear: lock-board settings, or for a vending machine its tablet and the
@@ -47,7 +47,7 @@ export default function MachinesTab({ markets, loaded, rtOnline, onOpen, onRenam
           const k = String(r.micromarket_id);
           const e = lm.get(k) ?? { low: 0, empty: 0 };
           if ((r.stock ?? 0) <= 0) e.empty += 1;
-          else if (r.stock < LOW_STOCK) e.low += 1;
+          else if (isLowStock(r.stock)) e.low += 1;
           lm.set(k, e);
         }
         setLow(lm);
