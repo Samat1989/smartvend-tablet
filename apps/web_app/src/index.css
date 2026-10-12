@@ -43,11 +43,8 @@
   --radius-lg: 2rem;
   --radius-xl: 3rem;
   
-  /* Shadows */
-  --shadow-kinetic: 0 8px 24px rgba(47, 46, 50, 0.06);
-
-  /* Admin panel (MicroVend). Separate from `primary`, which the storefront
-     still uses for its graphite look. */
+  /* MicroVend: the panel and the storefront (/micromarket). `primary` and
+     the surface-* tokens above are left for the help pages. */
   --color-brand: #2563eb;
   --color-brand-dark: #1d4ed8;
   --color-brand-soft: #dbeafe;
@@ -68,20 +65,6 @@
   letter-spacing: normal;
 }
 .admin-ui h1 { letter-spacing: -0.02em; }
-
-@utility product-card-shadow {
-  box-shadow: 0 8px 24px rgba(47, 46, 50, 0.06);
-}
-
-@utility glassmorphism {
-  background-color: rgba(250, 245, 251, 0.8);
-  backdrop-filter: blur(20px);
-  -webkit-backdrop-filter: blur(20px);
-}
-
-@utility signature-gradient {
-  background: linear-gradient(135deg, #9c3f00 0%, #ff7a2f 100%);
-}
 
 @layer base {
   * {

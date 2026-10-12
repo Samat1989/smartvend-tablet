@@ -7,32 +7,105 @@ import {
   Minus, 
   ChevronRight, 
   X, 
-  Languages, 
   Trash2, 
   CheckCircle2,
   Loader2,
-  MapPin,
   QrCode,
   RefreshCw,
-  Flame,
-  Zap,
-  Leaf,
-  Package
+  Package,
+  AlertTriangle,
+  WifiOff
 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import './i18n';
 import { supabase } from './supabaseClient';
+import { Logo, LANGS } from './admin/layout/Shell';
+import { Button, IconButton } from './admin/ui/Button';
+import { ChipGroup } from './admin/ui/Chips';
+
+// The storefront wears the panel's look (MicroVend): the dark brand bar on
+// top, blue `brand` for every action, Inter throughout (`admin-ui`). Kaspi
+// keeps its own red on the pay button — that one is the payment's brand.
+const SIDEBAR_HEX = '#0f1b2d';
+
+function BrandMark({ dark = false, subtitle }) {
+  return (
+    <div className="flex items-center gap-3 min-w-0">
+      <Logo size={36} />
+      <div className="flex flex-col min-w-0">
+        <span className={`text-[18px] font-extrabold leading-tight ${dark ? 'text-white' : 'text-ink'}`}>MicroVend</span>
+        {subtitle && <span className="text-[12px] font-semibold text-slate-400 truncate">{subtitle}</span>}
+      </div>
+    </div>
+  );
+}
+
+// Ru → Kk → En on one tap; the label is the language now on screen.
+function LangButton() {
+  const { i18n } = useTranslation();
+  const cur = Math.max(0, LANGS.findIndex((l) => (i18n.resolvedLanguage || i18n.language || 'ru').startsWith(l.code)));
+  const next = LANGS[(cur + 1) % LANGS.length];
+  return (
+    <button
+      type="button"
+      onClick={() => i18n.changeLanguage(next.code)}
+      className="shrink-0 min-h-10 px-3 rounded-[10px] border border-sidebar-line bg-sidebar-raised text-[13px] font-bold text-slate-200 hover:text-white hover:bg-sidebar-active transition-colors focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-blue-400"
+    >
+      {LANGS[cur].label}
+    </button>
+  );
+}
+
+// −/+ stepper, shared by the product card and the cart rows.
+function Stepper({ count, onMinus, onPlus, plusDisabled }) {
+  const btn = 'w-9 h-9 rounded-[10px] flex items-center justify-center transition-all active:scale-90 focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-blue-300 disabled:opacity-30 disabled:active:scale-100';
+  return (
+    <div className="flex items-center justify-between gap-1 bg-slate-100 rounded-[12px] p-1" onClick={(e) => e.stopPropagation()}>
+      <button type="button" onClick={onMinus} aria-label="−" className={`${btn} bg-white border border-slate-200 text-slate-700`}>
+        <Minus size={15} strokeWidth={2.75} />
+      </button>
+      <span className="min-w-6 text-center font-extrabold text-ink text-[15px]">{count}</span>
+      <button type="button" onClick={onPlus} disabled={plusDisabled} aria-label="+" className={`${btn} bg-brand text-white`}>
+        <Plus size={15} strokeWidth={2.75} />
+      </button>
+    </div>
+  );
+}
+
+// Inline warning box (errors, offline machine) in the panel's rose/amber tones.
+function Alert({ tone = 'danger', icon: Icon = AlertTriangle, title, children }) {
+  const tones = {
+    danger: 'bg-rose-50 border-rose-200 text-rose-800',
+    warning: 'bg-amber-50 border-amber-200 text-amber-900',
+  };
+  return (
+    <div role="alert" className={`mb-4 flex gap-3 p-3.5 rounded-[12px] border text-sm ${tones[tone]}`}>
+      <Icon size={18} className="shrink-0 mt-0.5" />
+      <div className="min-w-0">
+        {title && <p className="font-bold">{title}</p>}
+        {children}
+      </div>
+    </div>
+  );
+}
 
 // Centered full-page message — the storefront's only layout for "there is no
 // catalog to draw", shared by the no-QR, bad-QR and load-failed screens.
 function FullScreenNotice({ icon: Icon, children }) {
   return (
-    <div className="min-h-screen bg-background text-on-surface flex flex-col items-center justify-center px-6 text-center">
-      <div className="w-20 h-20 rounded-full bg-primary/10 flex items-center justify-center mb-6">
-        <Icon className="text-primary" size={36} />
+    <div className="admin-ui min-h-dvh bg-canvas text-ink flex flex-col">
+      <header className="bg-sidebar px-4 sm:px-6 h-16 flex items-center justify-between gap-3">
+        <BrandMark dark />
+        <LangButton />
+      </header>
+      <div className="flex-1 flex items-center justify-center px-4 py-10">
+        <div className="w-full max-w-sm bg-white border border-slate-200 rounded-[12px] shadow-card px-6 py-8 flex flex-col items-center text-center">
+          <div className="w-16 h-16 rounded-full bg-brand-soft flex items-center justify-center mb-5">
+            <Icon className="text-brand" size={30} />
+          </div>
+          {children}
+        </div>
       </div>
-      <h1 className="text-primary font-lexend font-black text-2xl mb-3">MicroVend</h1>
-      {children}
     </div>
   );
 }
@@ -45,7 +118,6 @@ function App() {
   const [isCartOpen, setIsCartOpen] = useState(false);
   const [search, setSearch] = useState('');
   const [selectedCategory, setSelectedCategory] = useState('All');
-  const [language, setLanguage] = useState('RU');
   const [marketInfo, setMarketInfo] = useState(null);
   const [paymentStatus, setPaymentStatus] = useState('idle');
   const [errorMessage, setErrorMessage] = useState('');
@@ -70,11 +142,26 @@ function App() {
   const [categories, setCategories] = useState([]);
 
   const getCategoryName = (cat) => {
-    const lang = language.toLowerCase();
-    if (lang === 'kz') return cat.name_kz || cat.name_ru;
+    const lang = (i18n.resolvedLanguage || i18n.language || 'ru').slice(0, 2);
+    if (lang === 'kk') return cat.name_kz || cat.name_ru;
     if (lang === 'en') return cat.name_en || cat.name_ru;
     return cat.name_ru;
   };
+
+  // Phone status bar in the brand bar's colour, and the page ground in the
+  // panel's canvas (overscroll, scrollbar gutter) while the storefront is
+  // open; both come back on leave.
+  useEffect(() => {
+    const meta = document.querySelector('meta[name="theme-color"]');
+    const prevMeta = meta?.getAttribute('content');
+    const prevBg = document.body.style.backgroundColor;
+    meta?.setAttribute('content', SIDEBAR_HEX);
+    document.body.style.backgroundColor = 'var(--color-canvas)';
+    return () => {
+      if (meta && prevMeta) meta.setAttribute('content', prevMeta);
+      document.body.style.backgroundColor = prevBg;
+    };
+  }, []);
 
   useEffect(() => {
     // The storefront opens a machine only via the QR token (?t=...). The token
@@ -88,9 +175,6 @@ function App() {
 
     if (urlToken) fetchStorefront(urlToken);
     fetchCategories();
-
-    const lng = i18n.language.toUpperCase().substring(0, 2);
-    setLanguage(lng === 'KK' ? 'KZ' : lng === 'EN' ? 'EN' : 'RU');
 
     const saved = localStorage.getItem('micromart_pending_payment');
     if (saved) {
@@ -207,12 +291,6 @@ function App() {
     }
   }
 
-  const toggleLanguage = () => {
-    const languages = ['ru', 'kk', 'en'];
-    const currentIndex = languages.findIndex(l => i18n.language.startsWith(l));
-    i18n.changeLanguage(languages[(currentIndex + 1) % languages.length]);
-  };
-
   const addToCart = (product) => {
     setCart(prev => {
       const existing = prev[product.id];
@@ -285,7 +363,7 @@ function App() {
       stopPolling();
       localStorage.removeItem('micromart_pending_payment');
       setPaymentStatus('error');
-      setErrorMessage("Timeout");
+      setErrorMessage(t('payment_timeout'));
     }, 5 * 60 * 1000);
   };
 
@@ -293,7 +371,7 @@ function App() {
     if (Object.keys(cart).length === 0) return;
     if (!marketToken) {
       setPaymentStatus('error');
-      setErrorMessage('Не выбран аппарат — откройте витрину по QR-коду');
+      setErrorMessage(t('sf_no_machine'));
       return;
     }
     setPaymentStatus('processing');
@@ -344,15 +422,14 @@ function App() {
     return matchesSearch && matchesCategory && i.stock > 0;
   });
 
-  const chefsPick = items.find(i => i.stock > 0);
-
   // No QR token in the URL → the storefront was opened without a QR.
   // Don't show any machine's catalog; prompt the customer to scan the code.
   if (!marketToken) {
     return (
-      <FullScreenNotice icon={ShoppingBag}>
-        <p className="text-on-surface-variant font-lexend max-w-xs">
-          {t('scan_qr_prompt', { defaultValue: 'Отсканируйте QR-код на аппарате, чтобы открыть витрину.' })}
+      <FullScreenNotice icon={QrCode}>
+        <h2 className="text-[19px] font-extrabold text-ink mb-2">MicroVend</h2>
+        <p className="text-slate-600 text-[15px] leading-relaxed">
+          {t('scan_qr_prompt')}
         </p>
       </FullScreenNotice>
     );
@@ -369,18 +446,15 @@ function App() {
     }[storefrontError];
     return (
       <FullScreenNotice icon={notice.icon}>
-        <h2 className="font-lexend font-black text-xl text-on-surface mb-2">{t(notice.title)}</h2>
-        <p className="text-on-surface-variant font-lexend max-w-xs mb-8">{t(notice.desc)}</p>
-        <button
-          onClick={() => fetchStorefront(marketToken)}
-          className="signature-gradient text-white font-lexend font-bold px-8 py-4 rounded-xl shadow-lg active:scale-95 transition-all"
-        >
+        <h2 className="text-[19px] font-extrabold text-ink mb-2">{t(notice.title)}</h2>
+        <p className="text-slate-600 text-[15px] leading-relaxed mb-6">{t(notice.desc)}</p>
+        <Button variant="primary" size="lg" block icon={RefreshCw} onClick={() => fetchStorefront(marketToken)}>
           {t('sf_retry')}
-        </button>
+        </Button>
         {/* The machid is what an owner needs to find the machine in the panel,
             and on a legacy sticker the URL is the only place it survives. */}
         {storefrontError === 'legacy' && (
-          <p className="mt-6 text-[10px] font-lexend font-bold uppercase tracking-widest opacity-40">
+          <p className="mt-5 text-[12px] font-semibold text-slate-500">
             {t('apparatus_no', { defaultValue: 'Аппарат №' })}{marketToken}
           </p>
         )}
@@ -389,78 +463,56 @@ function App() {
   }
 
   return (
-    <div className="min-h-screen bg-background text-on-surface">
-      {/* TopAppBar */}
-      <header className="fixed top-0 left-0 right-0 z-50 glassmorphism border-b border-surface-container-high/50 h-16 md:h-20 flex items-center justify-between px-5">
-        <div className="flex items-center gap-3">
-          <div className="w-10 h-10 rounded-full overflow-hidden bg-primary/10 flex items-center justify-center">
-            <ShoppingBag className="text-primary" size={20} />
-          </div>
-          <div className="flex flex-col">
-            <h1 className="text-primary font-lexend font-black text-xl md:text-2xl tracking-tight leading-tight">MicroVend</h1>
-            <span className="text-[10px] font-lexend font-bold opacity-50 uppercase tracking-wider">
-              {t('apparatus_no', { defaultValue: 'Аппарат №' })}{currentMarketId || '...'}
-            </span>
-          </div>
-        </div>
-        <div className="flex items-center gap-4">
-          <button onClick={toggleLanguage} className="flex items-center gap-1 hover:opacity-70 transition-all">
-            <Languages className="text-primary" size={20} />
-            <span className="font-lexend font-bold text-xs text-primary uppercase">{language}</span>
-          </button>
-          <MapPin className="text-primary" size={20} />
+    <div className="admin-ui min-h-dvh bg-canvas text-ink">
+      {/* Brand bar — the panel's sidebar colour and emblem */}
+      <header className="fixed top-0 left-0 right-0 z-50 bg-sidebar border-b border-sidebar-line">
+        <div className="max-w-6xl mx-auto h-16 px-4 sm:px-6 flex items-center justify-between gap-3">
+          <BrandMark
+            dark
+            subtitle={`${t('apparatus_no', { defaultValue: 'Аппарат №' })}${currentMarketId || '…'}${marketInfo?.name ? ` · ${marketInfo.name}` : ''}`}
+          />
+          <LangButton />
         </div>
       </header>
 
-      <main className="max-w-6xl mx-auto px-5 pt-24 md:pt-32 pb-32">
-        {/* Hero Section */}
-        <div className="mb-12">
-          <div className="relative group max-w-md">
-            <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-on-surface-variant/50" size={20} />
-            <input 
-              className="w-full bg-surface-container-low border-none rounded-xl border-b-2 border-transparent focus:ring-0 focus:border-primary py-4 pl-12 pr-4 font-lexend text-on-surface transition-all shadow-sm"
-              placeholder={t('search_placeholder')}
-              value={search}
-              onChange={e => setSearch(e.target.value)}
-            />
-          </div>
+      <main className="max-w-6xl mx-auto px-4 sm:px-6 pt-20 sm:pt-24 pb-32">
+        {/* Search */}
+        <div className="relative max-w-md mb-4">
+          <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" size={18} />
+          <input
+            type="search"
+            className="w-full min-h-12 bg-white border border-slate-300 rounded-[10px] pl-11 pr-4 text-[15px] text-ink placeholder:text-slate-400 transition-colors focus:outline-none focus:border-brand focus:ring-3 focus:ring-blue-200"
+            placeholder={t('search_placeholder')}
+            value={search}
+            onChange={e => setSearch(e.target.value)}
+          />
         </div>
 
         {/* Categories */}
-        <div className="flex gap-3 overflow-x-auto no-scrollbar mb-10 pb-2">
-          <button
-            onClick={() => setSelectedCategory('All')}
-            className={`px-6 py-2.5 rounded-full font-lexend font-bold text-sm whitespace-nowrap transition-all ${
-              selectedCategory === 'All' ? 'bg-primary text-on-primary scale-105' : 'bg-surface-container-high text-on-surface-variant hover:bg-surface-container-highest'
-            }`}
-          >
-            {t('all_items')}
-          </button>
-          {categories.map(cat => (
-            <button
-              key={cat.id}
-              onClick={() => setSelectedCategory(cat.id)}
-              className={`px-6 py-2.5 rounded-full font-lexend font-bold text-sm whitespace-nowrap transition-all ${
-                selectedCategory === cat.id ? 'bg-primary text-on-primary scale-105' : 'bg-surface-container-high text-on-surface-variant hover:bg-surface-container-highest'
-              }`}
-            >
-              {getCategoryName(cat)}
-            </button>
-          ))}
-        </div>
+        <ChipGroup
+          scroll
+          className="mb-6"
+          label={t('all_items')}
+          value={selectedCategory}
+          onChange={setSelectedCategory}
+          options={[
+            { value: 'All', label: t('all_items') },
+            ...categories.map(cat => ({ value: cat.id, label: getCategoryName(cat) })),
+          ]}
+        />
 
         {/* Nothing to show: name the reason instead of leaving a blank page. */}
         {!loading && filteredItems.length === 0 && (
-          <div className="flex flex-col items-center justify-center text-center py-20 px-6">
-            <div className="w-16 h-16 rounded-full bg-surface-container-high flex items-center justify-center mb-5">
-              <Package className="text-on-surface-variant opacity-50" size={28} />
+          <div className="bg-white border border-slate-200 rounded-[12px] shadow-card flex flex-col items-center justify-center text-center py-14 px-6">
+            <div className="w-14 h-14 rounded-full bg-slate-100 flex items-center justify-center mb-4">
+              <Package className="text-slate-400" size={26} />
             </div>
-            <h3 className="font-lexend font-black text-lg text-on-surface mb-2">
+            <h3 className="font-extrabold text-[17px] text-ink mb-1.5">
               {items.length === 0 ? t('sf_empty_title')
                 : inStockItems.length === 0 ? t('sf_sold_out_title')
                 : t('nothing_found')}
             </h3>
-            <p className="text-on-surface-variant font-lexend text-sm max-w-xs opacity-70">
+            <p className="text-slate-600 text-sm max-w-xs">
               {items.length === 0 ? t('sf_empty_desc')
                 : inStockItems.length === 0 ? t('sf_sold_out_desc')
                 : t('nothing_found_desc')}
@@ -468,62 +520,59 @@ function App() {
           </div>
         )}
 
+        {loading && items.length === 0 && (
+          <div className="flex justify-center py-20 text-slate-400">
+            <Loader2 className="animate-spin" size={28} />
+          </div>
+        )}
+
         {/* Product Grid */}
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-6">
+        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3 sm:gap-4">
           {filteredItems.map(item => {
             const inCart = cart[item.id];
             const count = inCart?.count || 0;
             const isOutOfStock = (item.stock - count) <= 0;
+            const cat = item.category_id && categories.find(c => c.id === item.category_id);
 
             return (
-              <motion.div 
-                key={item.id} 
+              <motion.div
+                key={item.id}
                 layout
                 whileTap={{ scale: 0.98 }}
                 onClick={() => !isOutOfStock && addToCart(item)}
-                className={`bg-surface-container-lowest rounded-2xl p-4 product-card-shadow flex flex-col relative group cursor-pointer transition-all select-none ${isOutOfStock && count === 0 ? 'opacity-50 grayscale' : ''}`}
+                className={`bg-white border rounded-[12px] shadow-card p-3 flex flex-col cursor-pointer select-none transition-colors ${count > 0 ? 'border-brand ring-1 ring-brand' : 'border-slate-200 hover:border-slate-300'} ${isOutOfStock && count === 0 ? 'opacity-50 grayscale' : ''}`}
               >
-                <div className="aspect-square mb-4 rounded-xl overflow-hidden bg-surface-container-low flex items-center justify-center relative shadow-sm">
-                  <img className="w-3/4 h-3/4 object-contain group-hover:scale-110 transition-transform duration-500" src={item.image_url} alt={item.name} />
+                <div className="aspect-square mb-3 rounded-[10px] overflow-hidden bg-slate-50 flex items-center justify-center">
+                  <img className="w-4/5 h-4/5 object-contain" src={item.image_url} alt={item.name} loading="lazy" />
                 </div>
-                
-                <div className="flex-1">
-                  {item.category_id && categories.length > 0 && (
-                    <span className="text-[9px] font-lexend font-bold text-primary tracking-widest uppercase mb-1 block opacity-60">
-                      {getCategoryName(categories.find(c => c.id === item.category_id) || { name_ru: '' })}
+
+                <div className="flex-1 flex flex-col">
+                  {cat && (
+                    <span className="text-[11px] font-bold text-brand-dark uppercase tracking-[0.08em] mb-0.5 truncate">
+                      {getCategoryName(cat)}
                     </span>
                   )}
-                  <h4 className="font-lexend font-bold text-on-surface text-base mb-1 truncate">{item.name}</h4>
-                  
-                  <div className="flex flex-wrap items-center justify-between gap-1 mb-2">
-                    <p className="font-lexend font-bold text-primary text-lg leading-none">
-                      {item.price.toFixed(0)} <span className="text-xs opacity-50">₸</span>
+                  <h4 className="font-semibold text-ink text-[15px] leading-snug line-clamp-2 mb-2">{item.name}</h4>
+
+                  <div className="mt-auto flex items-center justify-between gap-2 mb-2.5">
+                    <p className="font-extrabold text-ink text-[18px] leading-none whitespace-nowrap">
+                      {item.price.toFixed(0)} <span className="text-[13px] font-bold text-slate-500">₸</span>
                     </p>
-                    <span className="flex items-center gap-1 font-lexend font-bold text-[9px] bg-surface-container-high text-on-surface-variant px-1.5 py-0.5 rounded-md whitespace-nowrap">
-                      <Package size={10} strokeWidth={2.5} /> {item.stock - count}
+                    <span className="inline-flex items-center gap-1 text-[12px] font-semibold bg-slate-100 text-slate-600 px-2 py-0.5 rounded-full whitespace-nowrap">
+                      <Package size={12} /> {item.stock - count}
                     </span>
                   </div>
-                  
+
                   {count > 0 ? (
-                    <div className="flex items-center justify-between bg-surface-container-low rounded-full p-1" onClick={(e) => e.stopPropagation()}>
-                      <button 
-                        onClick={() => removeFromCart(item.id)}
-                        className="w-8 h-8 rounded-full flex items-center justify-center bg-white text-on-surface shadow-sm active:scale-90 transition-all"
-                      >
-                        <Minus size={14} strokeWidth={3} />
-                      </button>
-                      <span className="font-lexend font-black text-primary text-sm">{count}</span>
-                      <button 
-                        onClick={() => !isOutOfStock && addToCart(item)}
-                        disabled={isOutOfStock}
-                        className={`w-8 h-8 rounded-full flex items-center justify-center bg-primary text-white shadow-sm active:scale-90 transition-all disabled:opacity-30`}
-                      >
-                        <Plus size={14} strokeWidth={3} />
-                      </button>
-                    </div>
+                    <Stepper
+                      count={count}
+                      onMinus={() => removeFromCart(item.id)}
+                      onPlus={() => !isOutOfStock && addToCart(item)}
+                      plusDisabled={isOutOfStock}
+                    />
                   ) : (
-                    <div className="flex items-center justify-center w-8 h-8 rounded-full bg-primary text-white shadow-sm active:scale-90 transition-all ml-auto">
-                      <Plus size={14} strokeWidth={3} />
+                    <div className="min-h-11 rounded-[10px] bg-brand-soft text-brand-dark font-bold text-sm flex items-center justify-center gap-1.5">
+                      <Plus size={16} strokeWidth={2.75} />
                     </div>
                   )}
                 </div>
@@ -536,68 +585,78 @@ function App() {
       {/* Floating Cart Bar */}
       <AnimatePresence>
         {cartItemCount > 0 && paymentStatus !== 'success' && (
-          <nav className="fixed bottom-4 left-0 right-0 z-50 flex justify-center px-5 pb-safe">
-            <motion.div 
+          <nav className="fixed bottom-4 left-0 right-0 z-50 flex justify-center px-4 pb-safe">
+            <motion.div
               initial={{ y: 100 }} animate={{ y: 0 }} exit={{ y: 100 }}
               className="w-full max-w-md flex gap-2"
             >
-              <button onClick={() => window.scrollTo({ top: 0, behavior: 'smooth' })} className="bg-surface-container-lowest/90 backdrop-blur-md rounded-full w-14 h-14 flex items-center justify-center text-on-surface shadow-xl border border-white/20">
+              <button
+                type="button"
+                aria-label={t('search_placeholder')}
+                onClick={() => window.scrollTo({ top: 0, behavior: 'smooth' })}
+                className="bg-white border border-slate-200 rounded-[12px] w-14 h-14 flex items-center justify-center text-slate-700 shadow-lg"
+              >
                 <Search size={22} />
               </button>
-              <button onClick={() => setIsCartOpen(true)} className="flex-1 signature-gradient text-white rounded-full px-8 flex items-center justify-between shadow-xl shadow-primary/20 active:scale-95 transition-all">
-                <div className="flex items-center gap-2">
-                  <ShoppingBag size={18} />
-                  <span className="font-lexend font-bold text-sm tracking-wide">{cartItemCount} {t('items')}</span>
-                </div>
-                <div className="flex items-center gap-2">
-                  <span className="font-lexend font-extrabold text-lg">{cartTotal} ₸</span>
+              <button
+                type="button"
+                onClick={() => setIsCartOpen(true)}
+                className="flex-1 h-14 bg-brand hover:bg-brand-dark text-white rounded-[12px] px-5 flex items-center justify-between shadow-lg shadow-brand/30 active:scale-[0.98] transition-all"
+              >
+                <span className="flex items-center gap-2">
+                  <ShoppingBag size={19} />
+                  <span className="font-bold text-[15px]">{cartItemCount} {t('items')}</span>
+                </span>
+                <span className="flex items-center gap-1.5">
+                  <span className="font-extrabold text-[18px]">{cartTotal} ₸</span>
                   <ChevronRight size={18} />
-                </div>
+                </span>
               </button>
             </motion.div>
           </nav>
         )}
       </AnimatePresence>
 
-      {/* Cart Modal */}
+      {/* Cart sheet */}
       <AnimatePresence>
         {isCartOpen && (
           <>
-            <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={() => setIsCartOpen(false)} className="fixed inset-0 bg-on-surface/40 backdrop-blur-sm z-[100]" />
-            <motion.div 
+            <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={() => setIsCartOpen(false)} className="fixed inset-0 bg-slate-900/50 z-[100]" />
+            <motion.div
+              role="dialog"
+              aria-modal="true"
+              aria-label={t('cart')}
               initial={{ y: "100%" }} animate={{ y: 0 }} exit={{ y: "100%" }} transition={{ type: "spring", damping: 25, stiffness: 200 }}
-              className="fixed bottom-0 left-0 right-0 z-[110] bg-surface-bright rounded-t-3xl max-h-[90vh] flex flex-col overflow-hidden shadow-2xl"
+              className="admin-ui fixed bottom-0 left-0 right-0 z-[110] mx-auto max-w-xl bg-canvas rounded-t-[16px] max-h-[90dvh] flex flex-col overflow-hidden shadow-2xl"
             >
-              <div className="p-8 overflow-y-auto no-scrollbar flex-1 pb-safe">
-                <div className="flex justify-between items-center mb-8">
-                  <h2 className="font-lexend font-black text-3xl text-on-surface uppercase tracking-tight">{t('cart')}</h2>
+              <div className="flex justify-center pt-2.5"><span className="w-10 h-1.5 rounded-full bg-slate-300" /></div>
+              <div className="px-4 sm:px-6 pt-3 pb-4 overflow-y-auto no-scrollbar flex-1">
+                <div className="flex justify-between items-center gap-3 mb-4">
+                  <h2 className="font-extrabold text-[22px] text-ink">{t('cart')}</h2>
                   <div className="flex items-center gap-2">
-                    <button 
-                      onClick={() => setCart({})}
-                      className="flex items-center gap-1 px-3 py-2 rounded-full bg-surface-container-low text-on-surface-variant text-xs font-lexend font-bold hover:bg-surface-container-high transition-all"
-                    >
-                      <Trash2 size={13} />
-                      <span>{t('clear_cart')}</span>
-                    </button>
-                    <button onClick={() => setIsCartOpen(false)} className="w-10 h-10 rounded-full bg-surface-container-low flex items-center justify-center"><X size={20} /></button>
+                    <Button variant="ghost" size="sm" icon={Trash2} onClick={() => setCart({})}>
+                      {t('clear_cart')}
+                    </Button>
+                    <IconButton icon={X} label={t('close', { defaultValue: 'Закрыть' })} onClick={() => setIsCartOpen(false)} />
                   </div>
                 </div>
 
-                <div className="space-y-4">
+                <div className="space-y-2.5">
                   {Object.values(cart).map(item => (
-                    <div key={item.id} className="bg-white p-4 rounded-2xl flex items-center gap-4 product-card-shadow">
-                      <div className="w-20 h-20 bg-surface-container-low rounded-xl flex items-center justify-center p-2">
+                    <div key={item.id} className="bg-white border border-slate-200 rounded-[12px] shadow-card p-3 flex items-center gap-3">
+                      <div className="w-16 h-16 shrink-0 bg-slate-50 rounded-[10px] flex items-center justify-center p-1.5">
                         <img className="w-full h-full object-contain" src={item.image_url} alt={item.name} />
                       </div>
-                      <div className="flex-1">
-                        <h4 className="font-lexend font-bold text-on-surface">{item.name}</h4>
-                        <div className="flex items-center justify-between mt-2">
-                          <div className="flex items-center bg-surface-container-low rounded-full p-1">
-                            <button onClick={() => removeFromCart(item.id)} className="w-7 h-7 flex items-center justify-center"><Minus size={12} /></button>
-                            <span className="px-3 font-lexend font-bold text-xs">{item.count}</span>
-                            <button onClick={() => addToCart(item)} disabled={(items.find(i => i.id === item.id)?.stock ?? 0) <= item.count} className="w-7 h-7 flex items-center justify-center disabled:opacity-30"><Plus size={12} /></button>
-                          </div>
-                          <span className="font-lexend font-black text-primary">{item.price * item.count} ₸</span>
+                      <div className="flex-1 min-w-0">
+                        <h4 className="font-semibold text-ink text-[15px] truncate">{item.name}</h4>
+                        <div className="flex items-center justify-between gap-2 mt-1.5">
+                          <Stepper
+                            count={item.count}
+                            onMinus={() => removeFromCart(item.id)}
+                            onPlus={() => addToCart(item)}
+                            plusDisabled={(items.find(i => i.id === item.id)?.stock ?? 0) <= item.count}
+                          />
+                          <span className="font-extrabold text-ink whitespace-nowrap">{item.price * item.count} ₸</span>
                         </div>
                       </div>
                     </div>
@@ -605,56 +664,56 @@ function App() {
                 </div>
 
                 {paymentStatus === 'awaiting_payment' && paymentData && (
-                  <div className="mt-8 p-6 bg-white rounded-2xl flex flex-col items-center text-center product-card-shadow border border-primary/5">
+                  <div className="mt-4 p-5 bg-white border border-slate-200 rounded-[12px] shadow-card flex flex-col items-center text-center">
                     {/* The actual app-open must be a real user tap: mobile OSes
                         (esp. iOS) won't launch the Kaspi app from a programmatic
                         redirect after the create-payment round-trip — the user
                         gesture has expired. So this big button is the primary CTA. */}
-                    <a href={paymentData.paymentUrl} className="w-full signature-gradient py-5 rounded-xl text-white font-lexend font-black text-lg shadow-lg mb-3 active:scale-95 transition-all">
+                    <a href={paymentData.paymentUrl} className="w-full min-h-14 flex items-center justify-center bg-[#F14635] hover:bg-[#d93a2a] rounded-[10px] text-white font-extrabold text-[17px] shadow-md shadow-[#F14635]/25 mb-3 active:scale-[0.98] transition-all">
                       {t('pay_kaspi')}
                     </a>
-                    <p className="font-lexend text-on-surface-variant text-sm mb-5">
+                    <p className="text-slate-600 text-sm mb-4">
                       {t('tap_to_open_kaspi', { defaultValue: 'Нажмите кнопку, чтобы открыть приложение Kaspi и оплатить' })}
                     </p>
-                    <div className="flex items-center justify-center gap-2 text-on-surface-variant opacity-70 mb-4">
-                      <Loader2 className="animate-spin" size={16} />
-                      <span className="font-lexend text-sm">{doorOpening ? t('opening_door') : t('waiting_for_payment')}...</span>
+                    <div className="inline-flex items-center justify-center gap-2 text-brand-dark bg-brand-soft rounded-full px-3.5 py-1.5 mb-3">
+                      <Loader2 className="animate-spin" size={15} />
+                      <span className="text-sm font-semibold">{doorOpening ? t('opening_door') : t('waiting_for_payment')}…</span>
                     </div>
-                    <button onClick={() => { stopPolling(); setPaymentStatus('idle'); localStorage.removeItem('micromart_pending_payment'); }} className="text-on-surface-variant font-bold text-sm uppercase opacity-50">{t('cancel_payment')}</button>
+                    <Button variant="ghost" size="sm" onClick={() => { stopPolling(); setPaymentStatus('idle'); localStorage.removeItem('micromart_pending_payment'); }}>
+                      {t('cancel_payment')}
+                    </Button>
                   </div>
                 )}
               </div>
 
-              <div className="p-8 bg-surface-container-lowest border-t border-surface-container-high pb-safe">
+              <div className="px-4 sm:px-6 pt-4 bg-white border-t border-slate-200 pb-safe">
                 {paymentStatus === 'error' && errorMessage && (
-                  <p className="mb-4 p-3 rounded-xl bg-[#F14635]/10 text-[#B3261E] font-lexend text-sm">{errorMessage}</p>
+                  <Alert>{errorMessage}</Alert>
                 )}
                 {machineOffline && paymentStatus !== 'error' && (
-                  <div className="mb-4 p-3 rounded-xl bg-[#F14635]/10 text-[#B3261E] font-lexend text-sm">
-                    <p className="font-bold">{t('machine_offline_title')}</p>
-                    <p className="opacity-80">{t('machine_offline_desc')}</p>
-                    <button onClick={() => checkMachineOnline(marketToken)} className="mt-2 font-bold uppercase text-xs">{t('machine_offline_retry')}</button>
-                  </div>
+                  <Alert tone="warning" icon={WifiOff} title={t('machine_offline_title')}>
+                    <p className="opacity-90">{t('machine_offline_desc')}</p>
+                    <button type="button" onClick={() => checkMachineOnline(marketToken)} className="mt-1.5 font-bold underline underline-offset-2">
+                      {t('machine_offline_retry')}
+                    </button>
+                  </Alert>
                 )}
-                <div className="flex justify-between items-center gap-6">
-                  <div>
-                    <p className="text-[10px] font-lexend font-bold opacity-40 uppercase tracking-widest">{t('total')}</p>
-                    <p className="text-3xl font-lexend font-black text-on-surface">{cartTotal} <span className="text-sm opacity-20">₸</span></p>
+                <div className="flex justify-between items-center gap-4">
+                  <div className="shrink-0">
+                    <p className="text-[11px] font-bold text-slate-500 uppercase tracking-[0.12em]">{t('total')}</p>
+                    <p className="text-[26px] font-extrabold text-ink leading-tight">{cartTotal} <span className="text-[15px] text-slate-500">₸</span></p>
                   </div>
                   <button
+                    type="button"
                     onClick={handleCheckout}
                     disabled={paymentStatus === 'processing' || machineOffline}
-                    className="flex-1 h-16 bg-[#F14635] text-white rounded-xl font-lexend font-black text-sm md:text-lg shadow-xl shadow-[#F14635]/20 flex items-center justify-center gap-3 active:scale-95 transition-all disabled:opacity-50"
+                    className="flex-1 h-14 bg-[#F14635] hover:bg-[#d93a2a] text-white rounded-[10px] font-extrabold text-[15px] sm:text-[17px] shadow-md shadow-[#F14635]/25 flex items-center justify-center gap-2 active:scale-[0.98] transition-all disabled:opacity-50 disabled:active:scale-100"
                   >
                     {paymentStatus === 'processing' ? <Loader2 className="animate-spin" /> : (
-                      <div className="flex items-center gap-2">
+                      <>
                         <span>{t('pay_in_app')}</span>
-                        <img 
-                          src="/kaspi_logo_final.png" 
-                          className="w-12 h-12 object-contain" 
-                          alt="Kaspi"
-                        />
-                      </div>
+                        <img src="/kaspi_logo_final.png" className="w-10 h-10 object-contain" alt="Kaspi" />
+                      </>
                     )}
                   </button>
                 </div>
@@ -664,16 +723,25 @@ function App() {
         )}
       </AnimatePresence>
 
-      {/* Success Modal */}
+      {/* Success screen */}
       <AnimatePresence>
         {paymentStatus === 'success' && (
-          <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="fixed inset-0 z-[200] bg-background flex flex-col items-center justify-center p-10 text-center">
-            <div className="w-24 h-24 bg-primary/10 rounded-full flex items-center justify-center mb-8 text-primary shadow-kinetic">
-              <CheckCircle2 size={48} />
+          <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="admin-ui fixed inset-0 z-[200] bg-canvas flex flex-col">
+            <header className="bg-sidebar px-4 sm:px-6 h-16 flex items-center">
+              <BrandMark dark />
+            </header>
+            <div className="flex-1 flex items-center justify-center px-4 py-10">
+              <div className="w-full max-w-sm bg-white border border-slate-200 rounded-[12px] shadow-card px-6 py-8 flex flex-col items-center text-center">
+                <div className="w-20 h-20 bg-emerald-50 rounded-full flex items-center justify-center mb-5 text-emerald-600">
+                  <CheckCircle2 size={44} />
+                </div>
+                <h2 className="text-[24px] font-extrabold text-ink mb-2 leading-tight">{t('fuel_locked_in')}</h2>
+                <p className="text-slate-600 mb-7 leading-relaxed">{t('grab_and_go_desc')}</p>
+                <Button variant="primary" size="lg" block onClick={() => { setPaymentStatus('idle'); setIsCartOpen(false); }}>
+                  {t('reload_catalog')}
+                </Button>
+              </div>
             </div>
-            <h2 className="text-4xl font-lexend font-black text-on-surface mb-4 tracking-tight uppercase leading-none">{t('fuel_locked_in')}</h2>
-            <p className="text-on-surface-variant mb-10 opacity-70 leading-relaxed">{t('grab_and_go_desc')}</p>
-            <button onClick={() => { setPaymentStatus('idle'); setIsCartOpen(false); }} className="signature-gradient w-full max-w-sm py-5 rounded-xl text-white font-lexend font-black text-xl shadow-xl">{t('reload_catalog')}</button>
           </motion.div>
         )}
       </AnimatePresence>
