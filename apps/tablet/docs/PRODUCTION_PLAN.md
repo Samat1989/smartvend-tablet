@@ -38,7 +38,9 @@
 | Light-strip schedule (3 окна включения) | Только always-on/off | Добавить в `ClimateConfig.lightSlots: List<({int fromHour, int toHour})>`, проверять в `_applyLight()` |
 | Multi-cabinet (sub1/sub2/sub3) | Только slave=1 | Если когда-то понадобятся сдвоенные шкафы — `BoardClient.slaveAddr` уже параметризуется, нужно лишь добавить отдельные poll-циклы и UI для адресов 2/3 |
 | Door/lock sensor (DI inputs) | Нет | На M109E в POLL ответе есть биты состояния дверцы; парсить и блокировать выдачу при открытой дверце сейф-лотка |
-| Reverse-direction motors (type 0A/0B) | Только 02/03 (forward) | Добавить пункты в `motor_type` UI редактора, для зеркальных аппаратов |
+| Reverse-direction motors (type 0A/0B) | Только 02/03 (forward) | Добавить 0A/0B к выбору «Тип мотора» во вкладке «Плата», для зеркальных аппаратов |
+| Тип мотора на полку (`OperatingMode.motor_type` по слоям) | С v1.1.44 — один тип (2/3-проводный) на весь аппарат, вкладка «Плата» | Если попадётся аппарат со смешанными моторами — хранить тип по полке и брать его в `BoardClient.motorRun` вместо общей настройки |
+| Расширенный таймаут мотора (байт 5 = `A0`) | Всегда `00` | Флаг в «Плата», если штатного таймаута не хватит медленным моторам |
 | Police camera / face-pay | Нет | Не нужно — это специфика заводского KZ-приложения |
 
 ### Что нужно сделать на самом устройстве (вне кода)
@@ -276,6 +278,43 @@
 - Цена в QR пересчитывается с учётом скидки
 
 **Оценка**: 1-2 дня.
+
+---
+
+## Направление 5: Гигиена Supabase (по линтеру Security Advisor, 2026-10-15)
+
+Дыр линтер не нашёл, но шумит. Разбор:
+
+- **anon может вызывать SECURITY DEFINER-функции (22 шт.)** — так задумано:
+  планшет и платы ESP ходят без логина, по `p_machid` + `p_secret` (или
+  `p_key`), и проверка ключа живёт внутри каждой функции (схема из `cfd99ef`).
+  `get_storefront` и `get_order_status` публичны намеренно — витрина static-QR.
+- **authenticated может вызывать SECURITY DEFINER-функции (14 шт.)** — проверено:
+  `admin_release_machine`, `create_pair_code`, `request_service_open`,
+  `set_open_seconds`, `unpair_device`, `touch_device_seen`,
+  `restore_sale_stock` сверяют `auth.uid()` с владельцем аппарата.
+
+### 5.1 Включить Leaked Password Protection
+
+Dashboard → Authentication → Settings → Password security. Запрещает
+пользователям панели пароли из утечек (HaveIBeenPwned). Кода не требует;
+может быть доступно только на платном тарифе.
+
+**Оценка**: 5 минут.
+
+### 5.2 Удалить неиспользуемые RPC
+
+Ни текущий планшет, ни панель, ни прошивки их не вызывают:
+- `update_inventory_wiring` (из планшета убрана в v1.1.24)
+- `bulk_update_price`
+- `create_draft_product`
+- старая перегрузка `set_machine_layout(p_machid, p_secret, p_layout)` без `p_hash`
+
+**Сначала** проверить по `device_status.app_version` (пишет `device_ping`), что все
+планшеты на v1.1.24 или новее — старые могут их ещё вызывать. Потом одна
+миграция с `drop function`.
+
+**Оценка**: 30 минут.
 
 ---
 
