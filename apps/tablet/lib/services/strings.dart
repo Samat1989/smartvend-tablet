@@ -1006,10 +1006,14 @@ class Strings extends ChangeNotifier {
       'en': 'Lock did not open',
     },
     'poll_microswitch': {
-      'ru': 'Микропереключатель не сработал',
-      'kk': 'Микроқосқыш іске қосылмады',
-      'ky': 'Микро которгуч иштеген жок',
-      'en': 'Micro-switch never pressed',
+      'ru': 'Микропереключатель не сработал за 1,5 с — проверьте 3-й '
+          'провод или тип мотора',
+      'kk': 'Микроқосқыш 1,5 с ішінде іске қосылмады — 3-сымды немесе '
+          'мотор түрін тексеріңіз',
+      'ky': 'Микро которгуч 1,5 с ичинде иштеген жок — 3-зымды же '
+          'мотордун тибин текшериңиз',
+      'en': 'Micro-switch not pressed within 1.5 s — check the 3rd wire '
+          'or the motor type',
     },
     // Categories
     'no_products': {

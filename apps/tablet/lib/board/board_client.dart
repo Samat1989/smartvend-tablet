@@ -1661,10 +1661,16 @@ class BoardClient extends ChangeNotifier {
         // Result code 4 = light-curtain self-test failed BEFORE motor started.
         // Hint to the operator that this is a hardware/wiring issue, not the
         // motor itself.
-        final extra = p.result == 4
-            ? ' (проверьте питание V1, провода SIG/GND, очистите проём, '
-                'или попробуйте режим завесы 2)'
-            : '';
+        // Result code 10 = 3-wire mode, but the home micro-switch never
+        // closed: either the 3rd wire is off, or the motor is really 2-wire.
+        final extra = switch (p.result) {
+          4 => ' (проверьте питание V1, провода SIG/GND, очистите проём, '
+              'или попробуйте режим завесы 2)',
+          10 => ' — микропереключатель 3-проводного мотора не сработал за '
+              '1,5 с (проверьте 3-й провод; если мотор 2-проводный — '
+              'выберите 2-проводный в «Плата»)',
+          _ => '',
+        };
         return DispenseResult(
           success: false,
           message: 'Ошибка мотора: ${p.resultText}$extra',
