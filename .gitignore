@@ -119,3 +119,7 @@ esp32_dump/
 # Regenerate locally when needed; see docs on QR provisioning.
 provisioning/
 supabase/.temp/
+
+# Local esp-rt build helpers (per-developer, not part of the firmware).
+firmware/esp-rt/build-pulse.sh
+firmware/esp-rt/build-relay.sh

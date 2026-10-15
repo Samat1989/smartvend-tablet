@@ -13,3 +13,6 @@ CONFIG_LWIP_SNTP_MAX_SERVERS=2
 # defragment, and let the DCE buffer grow for AT replies split across frames.
 CONFIG_ESP_MODEM_CMUX_DEFRAGMENT_PAYLOAD=n
 CONFIG_ESP_MODEM_USE_INFLATABLE_BUFFER_IF_NEEDED=y
+
+# Supabase chain ends in GlobalSign Root CA (dropped from IDF 6 bundle); trust GTS Root R4 inside it.
+CONFIG_MBEDTLS_CERTIFICATE_BUNDLE_CROSS_SIGNED_VERIFY=y

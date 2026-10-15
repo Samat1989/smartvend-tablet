@@ -41,7 +41,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
 #include "freertos/task.h"
-#include "mbedtls/md.h"
+#include "psa/crypto.h"
 #include "net.h"
 #include "ota.h"
 #include "sb_realtime.h"
@@ -104,9 +104,18 @@ static void lock_task(void *pv) {
 // ---------------- signature ----------------
 static bool sig_ok(const char *msg, const char *sig_hex) {
     unsigned char mac[32];
-    const mbedtls_md_info_t *md = mbedtls_md_info_from_type(MBEDTLS_MD_SHA256);
-    if (mbedtls_md_hmac(md, (const unsigned char *)g_cfg.rt_key, strlen(g_cfg.rt_key),
-                        (const unsigned char *)msg, strlen(msg), mac) != 0) return false;
+    size_t mac_len = 0;
+    psa_key_attributes_t attr = PSA_KEY_ATTRIBUTES_INIT;
+    psa_set_key_type(&attr, PSA_KEY_TYPE_HMAC);
+    psa_set_key_usage_flags(&attr, PSA_KEY_USAGE_SIGN_MESSAGE);
+    psa_set_key_algorithm(&attr, PSA_ALG_HMAC(PSA_ALG_SHA_256));
+    psa_key_id_t key;
+    if (psa_crypto_init() != PSA_SUCCESS) return false;
+    if (psa_import_key(&attr, (const uint8_t *)g_cfg.rt_key, strlen(g_cfg.rt_key), &key) != PSA_SUCCESS) return false;
+    psa_status_t st = psa_mac_compute(key, PSA_ALG_HMAC(PSA_ALG_SHA_256),
+                                      (const uint8_t *)msg, strlen(msg), mac, sizeof(mac), &mac_len);
+    psa_destroy_key(key);
+    if (st != PSA_SUCCESS || mac_len != sizeof(mac)) return false;
     if (strlen(sig_hex) != 64) return false;
     char hex[65];
     for (int i = 0; i < 32; i++) sprintf(hex + i * 2, "%02x", mac[i]);

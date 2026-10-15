@@ -32,7 +32,7 @@
 #include "esp_system.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
-#include "mbedtls/sha256.h"
+#include "psa/crypto.h"
 #include "net.h"
 #include "sb_realtime.h"
 #include "store.h"
@@ -216,8 +216,7 @@ static bool install(const target_t *t) {
     esp_ota_handle_t oh = 0;
     bool began = false;
     uint8_t *buf = malloc(2048);
-    mbedtls_sha256_context sha;
-    mbedtls_sha256_init(&sha);
+    psa_hash_operation_t sha = PSA_HASH_OPERATION_INIT;
     if (!buf) goto done;
     if (esp_http_client_open(cli, 0) != ESP_OK) { ESP_LOGE(TAG, "download: connect failed"); goto done; }
     int clen = esp_http_client_fetch_headers(cli);
@@ -228,7 +227,9 @@ static bool install(const target_t *t) {
     }
     if (esp_ota_begin(slot, t->size, &oh) != ESP_OK) { ESP_LOGE(TAG, "esp_ota_begin failed"); goto done; }
     began = true;
-    mbedtls_sha256_starts(&sha, 0);
+    if (psa_crypto_init() != PSA_SUCCESS || psa_hash_setup(&sha, PSA_ALG_SHA_256) != PSA_SUCCESS) {
+        ESP_LOGE(TAG, "sha256 init failed"); goto done;
+    }
     int got = 0, last_pct = -1;
     while (got < t->size) {
         int n = esp_http_client_read(cli, (char *)buf, 2048);
@@ -238,7 +239,7 @@ static bool install(const target_t *t) {
             break;
         }
         if (got + n > t->size) { ESP_LOGE(TAG, "download: longer than the manifest says"); goto done; }
-        mbedtls_sha256_update(&sha, buf, n);
+        if (psa_hash_update(&sha, buf, n) != PSA_SUCCESS) { ESP_LOGE(TAG, "sha256 update failed"); goto done; }
         if (esp_ota_write(oh, buf, n) != ESP_OK) { ESP_LOGE(TAG, "flash write failed"); goto done; }
         got += n;
         int pct = got * 100 / t->size;
@@ -246,7 +247,10 @@ static bool install(const target_t *t) {
     }
     if (got != t->size) { ESP_LOGE(TAG, "download: %d of %d B", got, t->size); goto done; }
     uint8_t dig[32];
-    mbedtls_sha256_finish(&sha, dig);
+    size_t dig_len = 0;
+    if (psa_hash_finish(&sha, dig, sizeof(dig), &dig_len) != PSA_SUCCESS || dig_len != sizeof(dig)) {
+        ESP_LOGE(TAG, "sha256 finish failed"); goto done;
+    }
     char hex[65];
     for (int i = 0; i < 32; i++) sprintf(hex + i * 2, "%02x", dig[i]);
     if (strcasecmp(hex, t->sha256) != 0) { ESP_LOGE(TAG, "SHA-256 mismatch — not installing"); goto done; }
@@ -264,7 +268,7 @@ static bool install(const target_t *t) {
     ok = true;
 done:
     if (began) esp_ota_abort(oh);
-    mbedtls_sha256_free(&sha);
+    psa_hash_abort(&sha);
     free(buf);
     esp_http_client_close(cli);
     esp_http_client_cleanup(cli);
