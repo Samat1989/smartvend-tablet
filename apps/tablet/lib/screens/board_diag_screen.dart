@@ -278,6 +278,9 @@ class _BoardDiagScreenState extends State<BoardDiagScreen> {
               standalone: board.isStandaloneLock,
               standaloneAllowed: !context.watch<DeviceStorage>().isOdengi,
               onStandaloneChanged: _setStandaloneLock,
+              motorType: board.m102MotorType,
+              onMotorTypeChanged: (v) =>
+                  context.read<BoardClient>().setM102MotorType(v),
             ),
             _ControlsCard(
               board: board,
@@ -325,7 +328,13 @@ class _ProtocolCard extends StatelessWidget {
     required this.standalone,
     required this.standaloneAllowed,
     required this.onStandaloneChanged,
+    required this.motorType,
+    required this.onMotorTypeChanged,
   });
+
+  /// M102/M109E: 2- or 3-wire motors, sent in every motor-run frame.
+  final int motorType;
+  final ValueChanged<int> onMotorTypeChanged;
 
   /// Микромаркет на автономной плате esp-relay: планшет замком не управляет.
   final bool standalone;
@@ -408,6 +417,40 @@ class _ProtocolCard extends StatelessWidget {
             _hint(s, selected),
             style: const TextStyle(color: Colors.white38, fontSize: 11),
           ),
+          if (selected == BoardProtocol.m102) ...[
+            const SizedBox(height: 14),
+            Text(
+              s.t('diag_motor_type'),
+              style: const TextStyle(
+                color: Colors.white70,
+                fontSize: 11,
+                fontWeight: FontWeight.bold,
+                letterSpacing: 1.2,
+              ),
+            ),
+            const SizedBox(height: 8),
+            Wrap(
+              spacing: 6,
+              runSpacing: 6,
+              children: [
+                for (final t in const [2, 3])
+                  ChoiceChip(
+                    label: Text(s.t('motor_type_$t')),
+                    selected: motorType == t,
+                    onSelected: (_) {
+                      if (motorType != t) onMotorTypeChanged(t);
+                    },
+                    labelStyle: const TextStyle(
+                      color: Colors.black,
+                      fontSize: 12,
+                      fontWeight: FontWeight.w600,
+                    ),
+                    backgroundColor: Colors.grey.shade300,
+                    selectedColor: Colors.amberAccent,
+                  ),
+              ],
+            ),
+          ],
           if (selected == BoardProtocol.micromarket) ...[
             const SizedBox(height: 14),
             Text(

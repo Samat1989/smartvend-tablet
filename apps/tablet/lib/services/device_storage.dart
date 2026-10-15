@@ -48,6 +48,9 @@ class DeviceStorage extends ChangeNotifier {
   // BarysVend only: swap ряд/колонка in outgoing dispense frames for
   // cross-wired cabinets (see BoardClient.lytSwapRowCol).
   static const _kLytSwapRowCol = 'lyt_swap_row_col';
+  // M102/M109E only: motor type sent in byte 1 of the 0x05 run frame —
+  // 2 = 2-wire (default), 3 = 3-wire. Same field MMD diag lets you pick.
+  static const _kM102MotorType = 'm102_motor_type';
 
   // Микромаркет: чем открывается замок.
   //
@@ -191,6 +194,13 @@ class DeviceStorage extends ChangeNotifier {
 
   Future<void> setLytSwapRowCol(bool v) async {
     await _prefs.setBool(_kLytSwapRowCol, v);
+    notifyListeners();
+  }
+
+  int get m102MotorType => _prefs.getInt(_kM102MotorType) ?? 2;
+
+  Future<void> setM102MotorType(int v) async {
+    await _prefs.setInt(_kM102MotorType, v);
     notifyListeners();
   }
 

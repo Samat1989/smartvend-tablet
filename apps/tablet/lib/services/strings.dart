@@ -1383,6 +1383,24 @@ class Strings extends ChangeNotifier {
       'ky': 'Кулпуну кармоо убакыты',
       'en': 'Lock hold time',
     },
+    'diag_motor_type': {
+      'ru': 'ТИП МОТОРА',
+      'kk': 'МОТОР ТҮРІ',
+      'ky': 'МОТОРДУН ТИБИ',
+      'en': 'MOTOR TYPE',
+    },
+    'motor_type_2': {
+      'ru': '2-проводный',
+      'kk': '2 сымды',
+      'ky': '2 зымдуу',
+      'en': '2-wire',
+    },
+    'motor_type_3': {
+      'ru': '3-проводный',
+      'kk': '3 сымды',
+      'ky': '3 зымдуу',
+      'en': '3-wire',
+    },
     'diag_swap_rowcol': {
       'ru': 'Ряд ↔ колонка местами',
       'kk': 'Қатар ↔ баған орнын ауыстыру',

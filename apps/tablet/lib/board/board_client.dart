@@ -317,6 +317,7 @@ class BoardClient extends ChangeNotifier {
     _protocol = BoardProtocol.fromStorageName(storage?.boardProtocolName);
     _baud = _protocol.defaultBaud;
     _lytSwapRowCol = storage?.lytSwapRowCol ?? false;
+    _m102MotorType = storage?.m102MotorType ?? 2;
     _standaloneLock = storage?.micromarketStandalone ?? false;
     _usbEventSub = UsbSerial.usbEventStream?.listen((event) async {
       // Автономный микромаркет: провода нет, и любое USB-событие тут чужое —
@@ -1271,6 +1272,21 @@ class BoardClient extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// M102/M109E motor type, byte 1 of the 0x05 run frame: 2 = 2-wire,
+  /// 3 = 3-wire. One setting for the whole machine, picked in the "Плата"
+  /// tab — the same field MMD diag exposes. Overrides the per-product
+  /// `type` callers pass to [motorRun]/[dispense].
+  int _m102MotorType = 2;
+  int get m102MotorType => _m102MotorType;
+
+  void setM102MotorType(int v) {
+    _m102MotorType = v;
+    // ignore: unawaited_futures — fire-and-forget prefs write
+    _storage?.setM102MotorType(v);
+    _info('Тип мотора → $v-проводный');
+    notifyListeners();
+  }
+
   /// Extract complete `AA … XOR DD` frames from [_lytRx]. Known frames
   /// (dispense result / coins) are matched first so a stray 0xDD inside
   /// them can't split one; anything else falls back to the shortest
@@ -1526,7 +1542,10 @@ class BoardClient extends ChangeNotifier {
   }
 
   Future<RunAck> motorRun(int idx, {int type = 2, int curtain = 0}) async {
-    final data = <int>[idx, type, curtain, 0, 0, 0, ...List.filled(10, 0)];
+    // The machine-wide setting from the "Плата" tab wins over [type].
+    final data = <int>[
+      idx, _m102MotorType, curtain, 0, 0, 0, ...List.filled(10, 0)
+    ];
     final r = await _sendAndReceive(0x05, data);
     if (r == null || r.length < 3) return RunAck.noResponse;
     switch (r[2]) {
@@ -1613,7 +1632,8 @@ class BoardClient extends ChangeNotifier {
       return DispenseResult(success: false, message: 'Неверный режим платы');
     }
 
-    _info('--- DISPENSE motor=$motorIdx type=$type curtain=$curtain ---');
+    _info('--- DISPENSE motor=$motorIdx type=$_m102MotorType '
+        'curtain=$curtain ---');
     final ack = await motorRun(motorIdx, type: type, curtain: curtain);
     switch (ack) {
       case RunAck.invalidIndex:
