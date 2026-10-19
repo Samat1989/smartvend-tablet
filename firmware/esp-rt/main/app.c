@@ -27,9 +27,11 @@
 // panel sees the board's state without asking. pong carries the same fields,
 // plus `boot` — why the board last started (power, netwd, panic, ...).
 //
-// Uplink watchdog: sb_realtime reports how long the server has been silent.
-// After NETWD_KICK_MS the modem is reset (Wi-Fi reconnected), again every
-// NETWD_KICK_MS; after NETWD_REBOOT_MS the board reboots once the lock is idle.
+// Uplink watchdog: sb_realtime drops the socket itself when heartbeats go
+// unanswered and reconnects on its own; sbrt_offline_ms() says how long the
+// board has been out of the channel. After NETWD_KICK_MS the modem is reset
+// (Wi-Fi reconnected), again every NETWD_KICK_EVERY_MS; after NETWD_REBOOT_MS
+// the board reboots once the lock is idle.
 // A reboot that did not bring the link back raises the next limit to 30, then
 // 60 minutes, so an operator outage does not reboot the board every 10 minutes;
 // the first join resets it.
@@ -250,21 +252,23 @@ static void boot_reason_init(void) {
     ESP_LOGI(TAG, "boot reason: %s (netwd reboots in a row: %lu)", s_boot, (unsigned long)s_netwd_reboots);
 }
 
-static void on_silence(uint32_t silence_ms, void *ctx) {
-    if (silence_ms < NETWD_KICK_MS) {
+// Called from worker_task once a second.
+static void netwd_check(void) {
+    uint32_t offline_ms = sbrt_offline_ms();
+    if (offline_ms < NETWD_KICK_MS) {
         s_kicked = false;
         return;
     }
-    if (silence_ms >= netwd_reboot_ms() && app_idle()) {
+    if (offline_ms >= netwd_reboot_ms() && app_idle()) {
         s_netwd_reboots++;
-        ESP_LOGE(TAG, "netwd: no answer from the server for %lu s — rebooting (#%lu)",
-                 (unsigned long)(silence_ms / 1000), (unsigned long)s_netwd_reboots);
+        ESP_LOGE(TAG, "netwd: out of the channel for %lu s — rebooting (#%lu)",
+                 (unsigned long)(offline_ms / 1000), (unsigned long)s_netwd_reboots);
         vTaskDelay(pdMS_TO_TICKS(500));
         esp_restart();
     }
-    if (!s_kicked || xTaskGetTickCount() - s_kicked_at >= pdMS_TO_TICKS(NETWD_KICK_MS)) {
-        ESP_LOGW(TAG, "netwd: no answer from the server for %lu s — resetting the uplink",
-                 (unsigned long)(silence_ms / 1000));
+    if (!s_kicked || xTaskGetTickCount() - s_kicked_at >= pdMS_TO_TICKS(NETWD_KICK_EVERY_MS)) {
+        ESP_LOGW(TAG, "netwd: out of the channel for %lu s — resetting the uplink",
+                 (unsigned long)(offline_ms / 1000));
         s_kicked = true;
         s_kicked_at = xTaskGetTickCount();
         net_kick();
@@ -327,6 +331,7 @@ static void worker_task(void *pv) {
             }
         }
         led_set_stage(sbrt_joined() ? LED_ONLINE : net_has_ip() ? LED_HAS_IP : LED_NO_LINK);
+        netwd_check();
     }
 }
 
@@ -368,7 +373,6 @@ void app_start(void) {
         .presence_meta = meta,
         .on_broadcast = on_broadcast,
         .on_joined = on_joined,
-        .on_silence = on_silence,
     };
     ESP_ERROR_CHECK(sbrt_start(&c));
     xTaskCreate(state_task, "state", 4096, NULL, 4, NULL);

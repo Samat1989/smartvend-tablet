@@ -14,12 +14,14 @@
 // 25 s. The other direction matters as much: a GSM link can die without a TCP
 // reset, and the socket then looks open forever. So every heartbeat is checked
 // HB_RETRY_MS after it went out; an unanswered one is followed at once by
-// another, and after HB_MISS_MAX unanswered in a row (~45 s of silence) we tear
-// the client down and start it again.
+// another, and after HB_MISS_MAX unanswered in a row (~45 s of silence) we stop
+// the client and start it again. From there it is the client's own path, the
+// same as for a loud break (FIN/RST, send error): DISCONNECTED, then a reconnect
+// every few seconds.
 //
 // A socket restart cannot help when the uplink itself is dead (a modem that
-// stays "online" without moving data). That is for the application to fix, so
-// on_silence reports how long the server has been silent, restarts or not.
+// stays "online" without moving data). That is for the application to fix:
+// sbrt_offline_ms() tells it how long the board has been out of the channel.
 
 #include "sb_realtime.h"
 
@@ -53,14 +55,20 @@ static char s_topic[96];        // "realtime:<topic>"
 static char s_join_ref[12];
 static unsigned s_ref;
 static volatile bool s_joined;
-static volatile TickType_t s_last_reply;     // any message in; reset by a socket restart
-static volatile TickType_t s_last_contact;   // any message in; never reset — what on_silence counts
+static volatile TickType_t s_last_reply;     // any message in (or a fresh connect)
+static volatile TickType_t s_offline_since;  // when s_joined last went false
 
 static char s_rx[RX_BUF_SZ];
 static int  s_rx_len;
 static bool s_rx_overflow;
 
 static char *dupstr(const char *s) { return s ? strdup(s) : strdup(""); }
+
+// Out of the channel: start counting how long, unless already counting.
+static void mark_left(void) {
+    if (s_joined) s_offline_since = xTaskGetTickCount();
+    s_joined = false;
+}
 
 // Sends one frame. `join_ref` may be NULL (heartbeat).
 static esp_err_t send_frame(const char *topic, const char *event, const char *payload_json,
@@ -99,7 +107,7 @@ static void send_join(void) {
              "{\"config\":{\"broadcast\":{\"self\":false,\"ack\":false},"
              "\"presence\":{\"key\":\"%s\"},\"private\":false},\"access_token\":\"%s\"}",
              s_cfg.presence_key, s_cfg.apikey);
-    s_joined = false;
+    mark_left();
     // Phoenix v1: the join's ref doubles as the join_ref of every later frame.
     if (send_frame(s_topic, "phx_join", payload, NULL, s_join_ref, sizeof(s_join_ref)) != ESP_OK) {
         ESP_LOGW(TAG, "join send failed");
@@ -124,7 +132,7 @@ static void handle_message(const char *json) {
     const cJSON *ref   = cJSON_GetObjectItem(root, "ref");
     const cJSON *pl    = cJSON_GetObjectItem(root, "payload");
     if (!cJSON_IsString(event)) goto done;
-    s_last_reply = s_last_contact = xTaskGetTickCount();
+    s_last_reply = xTaskGetTickCount();
 
     if (strcmp(event->valuestring, "phx_reply") == 0) {
         const cJSON *status = cJSON_GetObjectItem(pl, "status");
@@ -154,7 +162,7 @@ static void handle_message(const char *json) {
                strcmp(event->valuestring, "phx_close") == 0) {
         // Server dropped our channel (not the socket): join again.
         ESP_LOGW(TAG, "channel %s: %s — rejoining", s_topic, event->valuestring);
-        s_joined = false;
+        mark_left();
         send_join();
     } else if (strcmp(event->valuestring, "system") == 0) {
         // Informational ({"status":"ok","extension":"..."}); nothing to do.
@@ -175,7 +183,7 @@ static void ws_event(void *arg, esp_event_base_t base, int32_t id, void *data) {
     case WEBSOCKET_EVENT_DISCONNECTED:
     case WEBSOCKET_EVENT_CLOSED:
         if (s_joined) ESP_LOGW(TAG, "socket lost");
-        s_joined = false;
+        mark_left();
         break;
     case WEBSOCKET_EVENT_DATA:
         if (d->op_code != 0x1 && d->op_code != 0x0) break;   // text + continuation only
@@ -211,7 +219,7 @@ static bool answered_since(TickType_t sent) {
 
 static void restart_socket(const char *why) {
     ESP_LOGW(TAG, "%s — restarting socket", why);
-    s_joined = false;
+    mark_left();
     esp_websocket_client_stop(s_client);
     vTaskDelay(pdMS_TO_TICKS(1000));
     s_last_reply = xTaskGetTickCount();
@@ -234,16 +242,10 @@ static void heartbeat_task(void *pv) {
                 restart_socket("heartbeats unanswered");
             }
         } else {
-            // The client re-dials by itself every few seconds; restart it only
-            // if that has gone on for as long as a dead socket would.
+            // Not connected: the client re-dials by itself.
             misses = 0;
             vTaskDelay(pdMS_TO_TICKS(HB_RETRY_MS));
-            if (xTaskGetTickCount() - s_last_reply >
-                pdMS_TO_TICKS(HB_EVERY_MS + HB_MISS_MAX * HB_RETRY_MS)) {
-                restart_socket("cannot connect");
-            }
         }
-        if (s_cfg.on_silence) s_cfg.on_silence(sbrt_silence_ms(), s_cfg.ctx);
     }
 }
 
@@ -259,7 +261,7 @@ esp_err_t sbrt_start(const sbrt_config_t *cfg) {
     if (cfg->presence_meta && cfg->presence_meta[0]) strlcpy(s_meta, cfg->presence_meta, sizeof(s_meta));
     snprintf(s_topic, sizeof(s_topic), "realtime:%s", s_cfg.topic);
     s_tx_lock = xSemaphoreCreateMutex();
-    s_last_reply = s_last_contact = xTaskGetTickCount();
+    s_last_reply = s_offline_since = xTaskGetTickCount();
 
     char *uri = NULL;
     if (asprintf(&uri, "wss://%s/realtime/v1/websocket?apikey=%s&vsn=1.0.0",
@@ -297,8 +299,9 @@ esp_err_t sbrt_send(const char *event, const char *payload_json) {
 
 bool sbrt_joined(void) { return s_joined; }
 
-uint32_t sbrt_silence_ms(void) {
-    return (uint32_t)pdTICKS_TO_MS(xTaskGetTickCount() - s_last_contact);
+uint32_t sbrt_offline_ms(void) {
+    if (!s_client || s_joined) return 0;   // not started yet counts as nothing
+    return (uint32_t)pdTICKS_TO_MS(xTaskGetTickCount() - s_offline_since);
 }
 
 esp_err_t sbrt_track(const char *meta_json) {

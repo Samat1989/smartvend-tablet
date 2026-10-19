@@ -13,10 +13,6 @@
 
 typedef void (*sbrt_broadcast_cb_t)(const char *event, const char *payload_json, void *ctx);
 typedef void (*sbrt_joined_cb_t)(void *ctx);
-// Called from the heartbeat task every 10..25 s with how long nothing has come
-// in from the server (see sbrt_silence_ms). Runs off the socket's task, so it
-// may block briefly or restart the board.
-typedef void (*sbrt_silence_cb_t)(uint32_t silence_ms, void *ctx);
 
 typedef struct {
     const char *host;          // "<ref>.supabase.co"
@@ -26,7 +22,6 @@ typedef struct {
     const char *presence_meta; // initial JSON object tracked in Presence (see sbrt_track)
     sbrt_broadcast_cb_t on_broadcast;
     sbrt_joined_cb_t on_joined;  // after every successful (re)join
-    sbrt_silence_cb_t on_silence; // optional: uplink watchdog hook
     void *ctx;
 } sbrt_config_t;
 
@@ -41,10 +36,10 @@ esp_err_t sbrt_send(const char *event, const char *payload_json);
 // Channel joined (and Presence tracked) right now.
 bool sbrt_joined(void);
 
-// Milliseconds since the last message from the server (heartbeat reply, join
-// reply, broadcast — anything). Socket restarts do not reset it, so it measures
-// how long the board has really been cut off.
-uint32_t sbrt_silence_ms(void);
+// Milliseconds the board has been out of the channel (0 while joined): since
+// the socket dropped or was restarted for unanswered heartbeats, or since start
+// if it never joined. Reconnect attempts do not reset it; only a join does.
+uint32_t sbrt_offline_ms(void);
 
 // Replaces what the board publishes in Presence (JSON object, < 320 B) and
 // re-tracks right away when joined; otherwise it goes out with the next join.

@@ -89,8 +89,12 @@ void net_init(void) {
 // PPP data mode. The A7670E survives an ESP-only reset and may still sit in
 // data mode, so each attempt builds a fresh DCE and tries a +++ escape.
 static bool gsm_start(void) {
-    gpio_config_t pw = { .pin_bit_mask = 1ULL << GSM_POWER_GPIO, .mode = GPIO_MODE_OUTPUT };
-    gpio_config(&pw);
+    static bool pin_ready;   // configured once: a second gpio_config warns of a conflict
+    if (!pin_ready) {
+        gpio_config_t pw = { .pin_bit_mask = 1ULL << GSM_POWER_GPIO, .mode = GPIO_MODE_OUTPUT };
+        gpio_config(&pw);
+        pin_ready = true;
+    }
     gpio_set_level(GSM_POWER_GPIO, 0);
     vTaskDelay(pdMS_TO_TICKS(1000));
     gpio_set_level(GSM_POWER_GPIO, 1);
@@ -197,7 +201,12 @@ static void gsm_link_task(void *pv) {
             // Reset it from the inside first: the power line may only be a
             // PWRKEY, which does not turn off a modem that is already on.
             ESP_LOGW(TAG, "GSM kicked — resetting modem");
-            if (s_cmux && s_dce) esp_modem_at(s_dce, "AT+CRESET", NULL, 3000);
+            if (s_cmux && s_dce) {
+                esp_err_t err = esp_modem_at(s_dce, "AT+CRESET", NULL, 3000);
+                ESP_LOGW(TAG, "AT+CRESET: %s", esp_err_to_name(err));
+            } else {
+                ESP_LOGW(TAG, "no AT channel (data mode) — power cycle only");
+            }
             s_has_ip = false;
             led_set_stage(LED_NO_LINK);
         } else {
