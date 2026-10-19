@@ -3,8 +3,8 @@
 
 #include "sdkconfig.h"
 
-#define FW_VERSION_NAME   "1.1.4"
-#define FW_VERSION_CODE   10104
+#define FW_VERSION_NAME   "1.1.5"
+#define FW_VERSION_CODE   10105
 
 // --- Cloud ---
 #define SUPABASE_HOST     "cgvfhtvdtdjsyluhlcbq.supabase.co"
@@ -42,3 +42,11 @@
 #define GSM_DEFAULT_APN      "internet"
 
 #define DEFAULT_OPEN_SECONDS 20
+
+// --- Uplink watchdog (app.c) ---
+// Counted from the last message the Realtime server sent us. The socket itself
+// is restarted by sb_realtime after ~45 s; these are for a dead uplink.
+#define NETWD_KICK_MS        (3 * 60 * 1000)    // reset the modem / reconnect Wi-Fi, then every 3 min
+#define NETWD_REBOOT_MS      (10 * 60 * 1000)   // reboot the board (once the lock is idle)
+#define NETWD_REBOOT2_MS     (30 * 60 * 1000)   // ... after one watchdog reboot that did not help
+#define NETWD_REBOOT_MAX_MS  (60 * 60 * 1000)   // ... after two or more

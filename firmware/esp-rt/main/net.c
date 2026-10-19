@@ -23,6 +23,7 @@ static const char *TAG = "net";
 #define IP_BIT      BIT0   // some uplink has an IP
 #define FAIL_BIT    BIT1   // portal Wi-Fi test gave up
 #define GSM_LOST    BIT2   // PPP dropped — gsm_link_task re-dials
+#define GSM_KICK    BIT3   // net_kick(): link looks up but moves no data — reset the modem
 
 static EventGroupHandle_t s_eg;
 static volatile bool s_has_ip;
@@ -162,7 +163,7 @@ static void gsm_drop(void) {
 // Owns the modem: dial, and re-dial (with a power cycle) whenever PPP drops.
 static void gsm_link_task(void *pv) {
     while (true) {
-        xEventGroupClearBits(s_eg, IP_BIT | GSM_LOST);
+        xEventGroupClearBits(s_eg, IP_BIT | GSM_LOST | GSM_KICK);
         if (!gsm_start()) {
             gsm_drop();
             vTaskDelay(pdMS_TO_TICKS(10000));
@@ -175,9 +176,13 @@ static void gsm_link_task(void *pv) {
             continue;
         }
         esp_netif_set_default_netif(s_ppp);
-        // Online: wait for the link to drop, reading the signal once a minute
-        // on the CMUX command channel.
-        while (!(xEventGroupWaitBits(s_eg, GSM_LOST, pdTRUE, pdFALSE, pdMS_TO_TICKS(60000)) & GSM_LOST)) {
+        // A kick that came while dialing is stale: the modem was just reset.
+        xEventGroupClearBits(s_eg, GSM_KICK);
+        // Online: wait for the link to drop (or a kick), reading the signal
+        // once a minute on the CMUX command channel.
+        EventBits_t ev;
+        while (!((ev = xEventGroupWaitBits(s_eg, GSM_LOST | GSM_KICK, pdTRUE, pdFALSE,
+                                           pdMS_TO_TICKS(60000))) & (GSM_LOST | GSM_KICK))) {
             if (!s_cmux) continue;
             int rssi = 99, ber = 99;
             if (esp_modem_get_signal_quality(s_dce, &rssi, &ber) == ESP_OK) {
@@ -187,7 +192,17 @@ static void gsm_link_task(void *pv) {
                 ESP_LOGW(TAG, "GSM CSQ read failed");
             }
         }
-        ESP_LOGW(TAG, "GSM link down — restarting modem");
+        if (ev & GSM_KICK) {
+            // PPP never reported a loss, so the modem believes it is online.
+            // Reset it from the inside first: the power line may only be a
+            // PWRKEY, which does not turn off a modem that is already on.
+            ESP_LOGW(TAG, "GSM kicked — resetting modem");
+            if (s_cmux && s_dce) esp_modem_at(s_dce, "AT+CRESET", NULL, 3000);
+            s_has_ip = false;
+            led_set_stage(LED_NO_LINK);
+        } else {
+            ESP_LOGW(TAG, "GSM link down — restarting modem");
+        }
         gsm_drop();
         vTaskDelay(pdMS_TO_TICKS(2000));
     }
@@ -205,6 +220,15 @@ void net_start(void) {
     } else {
         ESP_LOGI(TAG, "uplink GSM (APN %s)", GSM_DEFAULT_APN);
         xTaskCreate(gsm_link_task, "gsm_link", 6144, NULL, 5, NULL);
+    }
+}
+
+void net_kick(void) {
+    if (strcmp(g_cfg.netmode, "wifi") == 0) {
+        ESP_LOGW(TAG, "Wi-Fi kicked — reconnecting");
+        esp_wifi_disconnect();   // STA_DISCONNECTED handler connects again
+    } else {
+        xEventGroupSetBits(s_eg, GSM_KICK);
     }
 }
 

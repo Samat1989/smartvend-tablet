@@ -24,7 +24,15 @@
 // before it polls the bank; when our socket dies, Realtime drops us from it.
 // What we track there — {device, ver, variant, net, rssi_dbm, csq, heap} — goes
 // out on every join and again when the signal moves or every 5 minutes, so the
-// panel sees the board's state without asking. pong carries the same fields.
+// panel sees the board's state without asking. pong carries the same fields,
+// plus `boot` — why the board last started (power, netwd, panic, ...).
+//
+// Uplink watchdog: sb_realtime reports how long the server has been silent.
+// After NETWD_KICK_MS the modem is reset (Wi-Fi reconnected), again every
+// NETWD_KICK_MS; after NETWD_REBOOT_MS the board reboots once the lock is idle.
+// A reboot that did not bring the link back raises the next limit to 30, then
+// 60 minutes, so an operator outage does not reboot the board every 10 minutes;
+// the first join resets it.
 
 #include "app.h"
 
@@ -36,6 +44,7 @@
 #include "board.h"
 #include "cJSON.h"
 #include "config.h"
+#include "esp_attr.h"
 #include "esp_log.h"
 #include "esp_system.h"
 #include "freertos/FreeRTOS.h"
@@ -204,15 +213,73 @@ static void handle_ota_check(cJSON *p) {
     ota_check_now(id->valuestring);
 }
 
+// ---------------- uplink watchdog ----------------
+// Survive esp_restart() (not a power cut): how many watchdog reboots in a row
+// went by without the board getting back into the channel.
+#define NETWD_MAGIC 0x6e657477u   // "netw"
+static RTC_NOINIT_ATTR uint32_t s_netwd_magic;
+static RTC_NOINIT_ATTR uint32_t s_netwd_reboots;
+static bool s_kicked;
+static TickType_t s_kicked_at;
+static const char *s_boot = "?";
+
+static uint32_t netwd_reboot_ms(void) {
+    if (s_netwd_reboots == 0) return NETWD_REBOOT_MS;
+    if (s_netwd_reboots == 1) return NETWD_REBOOT2_MS;
+    return NETWD_REBOOT_MAX_MS;
+}
+
+// Why the board started; read once, before the counter can change.
+static void boot_reason_init(void) {
+    bool netwd = s_netwd_magic == NETWD_MAGIC && s_netwd_reboots > 0;
+    if (s_netwd_magic != NETWD_MAGIC) {
+        s_netwd_magic = NETWD_MAGIC;
+        s_netwd_reboots = 0;
+    }
+    switch (esp_reset_reason()) {
+    case ESP_RST_POWERON:  s_boot = "power"; break;
+    case ESP_RST_EXT:      s_boot = "ext"; break;
+    case ESP_RST_SW:       s_boot = netwd ? "netwd" : "sw"; break;
+    case ESP_RST_PANIC:    s_boot = "panic"; break;
+    case ESP_RST_INT_WDT:
+    case ESP_RST_TASK_WDT:
+    case ESP_RST_WDT:      s_boot = "wdt"; break;
+    case ESP_RST_BROWNOUT: s_boot = "brownout"; break;
+    default:               s_boot = "other"; break;
+    }
+    ESP_LOGI(TAG, "boot reason: %s (netwd reboots in a row: %lu)", s_boot, (unsigned long)s_netwd_reboots);
+}
+
+static void on_silence(uint32_t silence_ms, void *ctx) {
+    if (silence_ms < NETWD_KICK_MS) {
+        s_kicked = false;
+        return;
+    }
+    if (silence_ms >= netwd_reboot_ms() && app_idle()) {
+        s_netwd_reboots++;
+        ESP_LOGE(TAG, "netwd: no answer from the server for %lu s — rebooting (#%lu)",
+                 (unsigned long)(silence_ms / 1000), (unsigned long)s_netwd_reboots);
+        vTaskDelay(pdMS_TO_TICKS(500));
+        esp_restart();
+    }
+    if (!s_kicked || xTaskGetTickCount() - s_kicked_at >= pdMS_TO_TICKS(NETWD_KICK_MS)) {
+        ESP_LOGW(TAG, "netwd: no answer from the server for %lu s — resetting the uplink",
+                 (unsigned long)(silence_ms / 1000));
+        s_kicked = true;
+        s_kicked_at = xTaskGetTickCount();
+        net_kick();
+    }
+}
+
 // Board state as JSON object fields (no braces), shared by Presence and pong.
 static int state_fields(char *out, size_t sz) {
     int dbm, csq;
     net_signal(&dbm, &csq);
     return snprintf(out, sz,
                     "\"device\":\"%s\",\"ver\":\"%s\",\"variant\":\"%s\",\"net\":\"%s\","
-                    "\"rssi_dbm\":%d,\"csq\":%d,\"heap\":%lu",
+                    "\"rssi_dbm\":%d,\"csq\":%d,\"heap\":%lu,\"boot\":\"%s\"",
                     store_device_id(), FW_VERSION_NAME, FW_VARIANT, g_cfg.netmode,
-                    dbm, csq, (unsigned long)esp_get_free_heap_size());
+                    dbm, csq, (unsigned long)esp_get_free_heap_size(), s_boot);
 }
 
 static void handle_ping(cJSON *p) {
@@ -272,11 +339,13 @@ static void on_broadcast(const char *event, const char *payload_json, void *ctx)
 }
 
 static void on_joined(void *ctx) {
+    s_netwd_reboots = 0;
     ESP_LOGI(TAG, "online in channel (free heap %lu, min %lu)",
              (unsigned long)esp_get_free_heap_size(), (unsigned long)esp_get_minimum_free_heap_size());
 }
 
 void app_start(void) {
+    boot_reason_init();
     s_msgq = xQueueCreate(6, sizeof(msg_t));
     s_lockq = xQueueCreate(4, sizeof(int));
     xTaskCreate(lock_task, "lock", 3072, NULL, 6, NULL);
@@ -299,6 +368,7 @@ void app_start(void) {
         .presence_meta = meta,
         .on_broadcast = on_broadcast,
         .on_joined = on_joined,
+        .on_silence = on_silence,
     };
     ESP_ERROR_CHECK(sbrt_start(&c));
     xTaskCreate(state_task, "state", 4096, NULL, 4, NULL);

@@ -6,6 +6,7 @@
 void net_init(void);                       // netif, event loop, Wi-Fi driver
 void net_start(void);                      // brings up g_cfg.netmode and keeps it up
 bool net_wait_ip(int timeout_ms);
+void net_kick(void);                       // uplink "up" but silent: reconnect Wi-Fi / reset the modem
 bool net_has_ip(void);
 void net_portal_mode(void);              // before the portal starts Wi-Fi: no auto-connect
 bool net_wifi_try(const char *ssid, const char *pass);   // portal: test credentials (APSTA)

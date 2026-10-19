@@ -12,8 +12,14 @@
 //
 // Realtime closes a socket that sends no heartbeat for ~60 s; we send one every
 // 25 s. The other direction matters as much: a GSM link can die without a TCP
-// reset, and the socket then looks open forever. If no heartbeat reply comes
-// back for HB_DEAD_MS we tear the client down and start it again.
+// reset, and the socket then looks open forever. So every heartbeat is checked
+// HB_RETRY_MS after it went out; an unanswered one is followed at once by
+// another, and after HB_MISS_MAX unanswered in a row (~45 s of silence) we tear
+// the client down and start it again.
+//
+// A socket restart cannot help when the uplink itself is dead (a modem that
+// stays "online" without moving data). That is for the application to fix, so
+// on_silence reports how long the server has been silent, restarts or not.
 
 #include "sb_realtime.h"
 
@@ -32,7 +38,8 @@
 static const char *TAG = "sbrt";
 
 #define HB_EVERY_MS   25000
-#define HB_DEAD_MS    70000
+#define HB_RETRY_MS   10000   // an unanswered heartbeat is re-sent this soon
+#define HB_MISS_MAX   2       // unanswered heartbeats in a row -> restart socket
 #define RX_BUF_SZ     4096
 #define TX_BUF_SZ     1024
 
@@ -46,7 +53,8 @@ static char s_topic[96];        // "realtime:<topic>"
 static char s_join_ref[12];
 static unsigned s_ref;
 static volatile bool s_joined;
-static volatile TickType_t s_last_reply;
+static volatile TickType_t s_last_reply;     // any message in; reset by a socket restart
+static volatile TickType_t s_last_contact;   // any message in; never reset — what on_silence counts
 
 static char s_rx[RX_BUF_SZ];
 static int  s_rx_len;
@@ -116,9 +124,9 @@ static void handle_message(const char *json) {
     const cJSON *ref   = cJSON_GetObjectItem(root, "ref");
     const cJSON *pl    = cJSON_GetObjectItem(root, "payload");
     if (!cJSON_IsString(event)) goto done;
+    s_last_reply = s_last_contact = xTaskGetTickCount();
 
     if (strcmp(event->valuestring, "phx_reply") == 0) {
-        s_last_reply = xTaskGetTickCount();
         const cJSON *status = cJSON_GetObjectItem(pl, "status");
         bool is_join = cJSON_IsString(ref) && strcmp(ref->valuestring, s_join_ref) == 0 &&
                        cJSON_IsString(topic) && strcmp(topic->valuestring, s_topic) == 0;
@@ -196,19 +204,46 @@ static void ws_event(void *arg, esp_event_base_t base, int32_t id, void *data) {
     }
 }
 
+// Answered: anything came in from the server since `sent`.
+static bool answered_since(TickType_t sent) {
+    return (int32_t)(s_last_reply - sent) >= 0;
+}
+
+static void restart_socket(const char *why) {
+    ESP_LOGW(TAG, "%s — restarting socket", why);
+    s_joined = false;
+    esp_websocket_client_stop(s_client);
+    vTaskDelay(pdMS_TO_TICKS(1000));
+    s_last_reply = xTaskGetTickCount();
+    esp_websocket_client_start(s_client);
+}
+
 static void heartbeat_task(void *pv) {
+    int misses = 0;
+    vTaskDelay(pdMS_TO_TICKS(HB_EVERY_MS));
     while (true) {
-        vTaskDelay(pdMS_TO_TICKS(HB_EVERY_MS));
-        if (!esp_websocket_client_is_connected(s_client)) continue;
-        send_frame("phoenix", "heartbeat", "{}", NULL, NULL, 0);
-        if (xTaskGetTickCount() - s_last_reply > pdMS_TO_TICKS(HB_DEAD_MS)) {
-            ESP_LOGW(TAG, "no reply for %d s — restarting socket", HB_DEAD_MS / 1000);
-            s_joined = false;
-            esp_websocket_client_stop(s_client);
-            vTaskDelay(pdMS_TO_TICKS(1000));
-            s_last_reply = xTaskGetTickCount();
-            esp_websocket_client_start(s_client);
+        if (esp_websocket_client_is_connected(s_client)) {
+            TickType_t sent = xTaskGetTickCount();
+            send_frame("phoenix", "heartbeat", "{}", NULL, NULL, 0);
+            vTaskDelay(pdMS_TO_TICKS(HB_RETRY_MS));
+            if (answered_since(sent)) {
+                misses = 0;
+                vTaskDelay(pdMS_TO_TICKS(HB_EVERY_MS - HB_RETRY_MS));
+            } else if (++misses >= HB_MISS_MAX) {
+                misses = 0;
+                restart_socket("heartbeats unanswered");
+            }
+        } else {
+            // The client re-dials by itself every few seconds; restart it only
+            // if that has gone on for as long as a dead socket would.
+            misses = 0;
+            vTaskDelay(pdMS_TO_TICKS(HB_RETRY_MS));
+            if (xTaskGetTickCount() - s_last_reply >
+                pdMS_TO_TICKS(HB_EVERY_MS + HB_MISS_MAX * HB_RETRY_MS)) {
+                restart_socket("cannot connect");
+            }
         }
+        if (s_cfg.on_silence) s_cfg.on_silence(sbrt_silence_ms(), s_cfg.ctx);
     }
 }
 
@@ -224,6 +259,7 @@ esp_err_t sbrt_start(const sbrt_config_t *cfg) {
     if (cfg->presence_meta && cfg->presence_meta[0]) strlcpy(s_meta, cfg->presence_meta, sizeof(s_meta));
     snprintf(s_topic, sizeof(s_topic), "realtime:%s", s_cfg.topic);
     s_tx_lock = xSemaphoreCreateMutex();
+    s_last_reply = s_last_contact = xTaskGetTickCount();
 
     char *uri = NULL;
     if (asprintf(&uri, "wss://%s/realtime/v1/websocket?apikey=%s&vsn=1.0.0",
@@ -246,7 +282,7 @@ esp_err_t sbrt_start(const sbrt_config_t *cfg) {
     esp_websocket_register_events(s_client, WEBSOCKET_EVENT_ANY, ws_event, NULL);
     esp_err_t err = esp_websocket_client_start(s_client);
     if (err != ESP_OK) return err;
-    xTaskCreate(heartbeat_task, "sbrt_hb", 3072, NULL, 5, NULL);
+    xTaskCreate(heartbeat_task, "sbrt_hb", 4096, NULL, 5, NULL);
     return ESP_OK;
 }
 
@@ -260,6 +296,10 @@ esp_err_t sbrt_send(const char *event, const char *payload_json) {
 }
 
 bool sbrt_joined(void) { return s_joined; }
+
+uint32_t sbrt_silence_ms(void) {
+    return (uint32_t)pdTICKS_TO_MS(xTaskGetTickCount() - s_last_contact);
+}
 
 esp_err_t sbrt_track(const char *meta_json) {
     if (!meta_json || strlen(meta_json) >= sizeof(s_meta)) return ESP_ERR_INVALID_SIZE;
