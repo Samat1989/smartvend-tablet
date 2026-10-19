@@ -1127,6 +1127,10 @@ export default function Admin() {
           onTransfer={(m) => setTransferTarget(m)}
           onDeleteDevice={deleteDevice}
           onChangeKind={changeDeviceKind}
+          onCheckUpdate={async (m) => {
+            const r = await checkBoardUpdate(m);
+            showToast(`${m.name || `${t('apparatus_no')}${m.id}`}: ${r.text}`, r.ok ? 'success' : 'error');
+          }}
         />
       ) : activeTab === 'catalog' ? (
         <CatalogTab
