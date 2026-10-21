@@ -132,7 +132,7 @@
 не обновятся: переход описан ниже.
 
 ```bash
-. ~/esp/v5.5.1/esp-idf/export.sh
+. ~/esp/esp-idf/export.sh
 cd firmware/esp-rt
 idf.py -B build/pulse -D SDKCONFIG=build/pulse/sdkconfig \
        -D SDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.pulse" build
