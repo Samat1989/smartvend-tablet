@@ -32,6 +32,14 @@ key.properties
 # service_role key used by the release scripts to publish artifacts to
 # Supabase Storage. Full access to the project — never commit.
 .supabase_key
+.supabase_access_token
+# Any other Supabase key/token file (service_role, sb_secret_, access tokens, CLI creds).
+**/.supabase_*
+**/*supabase*.key
+**/*supabase*.token
+supabase/.env*
+supabase/functions/.env*
+!supabase/**/.env.example
 
 # Third-party tooling jars (downloaded separately when needed).
 apktool*.jar
