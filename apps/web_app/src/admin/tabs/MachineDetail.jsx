@@ -17,7 +17,7 @@ import { CellTag, FlatInventory, InventoryByLayout } from './Inventory';
  */
 export default function MachineDetail({
   market, marketId, rtLive, rtState, products, loading, categories, layout,
-  onBack, onAdd, onQr, onServiceOpen, serviceOpening, onSettings, onCategories, onEdit, onDelete,
+  onBack, onAdd, onQr, onServiceOpen, serviceOpening, onSettings, onCategories, onEdit, onDelete, onAdjustStock,
 }) {
   const { t, i18n } = useTranslation();
   const [q, setQ] = useState('');
@@ -125,7 +125,7 @@ export default function MachineDetail({
         <KpiCard accent="blue" icon={Layers} label={t('kpi_positions')} value={loading ? '—' : String(products.length)} note={loading ? null : t('units_in_machine', { count: units })} />
         <KpiCard accent="orange" icon={AlertTriangle} label={t('filter_low')} value={loading ? '—' : String(lowN)} pill={t('low_stock_rule', { n: LOW_STOCK })} pillTone="orange" />
         <KpiCard accent="red" icon={Package} label={t('filter_empty')} value={loading ? '—' : String(emptyN)} />
-        <KpiCard accent="green" icon={ShoppingBag} label={t('kpi_sold_today')} value={sold == null ? '—' : sold.net == null ? '!' : `${money(sold.net)} ${currency}`} pill={sold?.units ? t('pcs_n', { count: sold.units }) : null} />
+        <KpiCard accent="blue" icon={ShoppingBag} label={t('kpi_sold_today')} value={sold == null ? '—' : sold.net == null ? '!' : `${money(sold.net)} ${currency}`} pill={sold?.units ? t('pcs_n', { count: sold.units }) : null} />
       </div>
 
       {!openShelf && (
@@ -184,6 +184,9 @@ export default function MachineDetail({
             currency={currency}
             onEdit={onEdit}
             onDelete={onDelete}
+            // Only where there is no tablet to own the stock: on a vending or
+            // tablet machine the count belongs to the tablet's own screens.
+            onAdjustStock={openShelf ? onAdjustStock : undefined}
             emptyTitle={filtering ? t('nothing_found') : t('no_products')}
             emptyHint={filtering ? t('nothing_found_hint') : t('no_products_hint')}
           />

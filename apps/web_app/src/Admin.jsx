@@ -532,7 +532,9 @@ export default function Admin() {
 
   async function saveProduct() {
     if (!editingProduct.product_id) return showToast(t('pick_product_from_catalog'), 'error');
-    if (editingProduct.price == null || editingProduct.price === '') return showToast(t('specify_price'), 'error');
+    // 0 is what an empty price field holds, and a free product would sell for
+    // nothing: «not filled in» and «zero» are the same answer here.
+    if (!(Number(editingProduct.price) > 0)) return showToast(t('specify_price'), 'error');
 
     // Номер ячейки правится только у машины с экраном — см. payload ниже.
     let cellNumber = null;
@@ -609,6 +611,29 @@ export default function Admin() {
       );
     } finally {
       setSavingProduct(false);
+    }
+  }
+
+  // «−/+» on a row of a machine with no tablet. The row collects the taps and
+  // calls this once, when the operator presses ✓ — so a stray tap changes
+  // nothing. What goes out is a RELATIVE change (adjust_inventory_stock adds to
+  // whatever the database holds), never an absolute value from this page's
+  // possibly stale list: a sale made while the panel was open would be written
+  // over. The server's answer then replaces the guess, so sales that landed
+  // meanwhile show up too.
+  async function adjustStock(p, delta) {
+    if (!delta) return;
+    setProducts((prev) => prev.map((x) => (x.id === p.id ? { ...x, stock: Math.max(0, (x.stock ?? 0) + delta) } : x)));
+    try {
+      const { data, error } = await supabase.rpc('adjust_inventory_stock', { p_id: p.id, p_delta: delta });
+      if (error) throw error;
+      setProducts((prev) => prev.map((x) => (x.id === p.id ? { ...x, stock: Math.max(0, Number(data)) } : x)));
+    } catch (err) {
+      console.error('Adjust stock error:', err);
+      if (await handleAuthFailure(err)) return;
+      // Take our guess back out; a no-op if the operator has left the machine.
+      setProducts((prev) => prev.map((x) => (x.id === p.id ? { ...x, stock: Math.max(0, (x.stock ?? 0) - delta) } : x)));
+      showToast(isNetworkFailure(err) ? t('stock_adjust_network_error') : `${t('stock_adjust_error')}: ${err.message || ''}`, 'error');
     }
   }
 
@@ -1181,6 +1206,7 @@ export default function Admin() {
             onCategories={() => setShowCategoryManager(true)}
             onEdit={(p) => setEditingProduct({ ...p })}
             onDelete={deleteProduct}
+            onAdjustStock={adjustStock}
           />
         )
       ) : (
