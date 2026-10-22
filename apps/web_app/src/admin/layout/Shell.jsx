@@ -41,7 +41,7 @@ function Brand({ compact = false }) {
 function NavItem({ item, active, onClick }) {
   const Icon = item.icon;
   const on = active === item.key;
-  const accent = item.admin ? 'shadow-[inset_3px_0_0_#f59e0b]' : 'shadow-[inset_3px_0_0_#3b82f6]';
+  const accent = item.admin ? 'shadow-[inset_3px_0_0_var(--color-amber-500)]' : 'shadow-[inset_3px_0_0_var(--color-blue-500)]';
   return (
     <button
       type="button"
@@ -194,7 +194,7 @@ export default function Shell({ items, active, email, isSuperadmin, onLogout, ch
         </div>
       )}
 
-      <main id="main" className="flex-1 min-w-0 px-4 sm:px-6 lg:px-9 py-5 sm:py-7 pb-28 lg:pb-10">
+      <main id="main" className="flex-1 min-w-0 px-4 sm:px-6 lg:px-9 pt-5 sm:pt-7 pb-[calc(6rem+env(safe-area-inset-bottom))] lg:pb-10">
         <div className="max-w-[1320px] mx-auto">{children}</div>
       </main>
 
@@ -209,7 +209,7 @@ export default function Shell({ items, active, email, isSuperadmin, onLogout, ch
               type="button"
               onClick={() => pick(item)}
               aria-current={on ? 'page' : undefined}
-              className={`flex-1 min-w-0 flex flex-col items-center justify-center gap-1 h-16 text-xs transition-colors focus-visible:outline-none focus-visible:bg-sidebar-raised ${on ? `text-white font-bold ${item.admin ? 'shadow-[inset_0_3px_0_#f59e0b]' : 'shadow-[inset_0_3px_0_#3b82f6]'}` : 'text-slate-400 font-medium'}`}
+              className={`flex-1 min-w-0 flex flex-col items-center justify-center gap-1 h-16 text-xs transition-colors focus-visible:outline-none focus-visible:bg-sidebar-raised ${on ? `text-white font-bold ${item.admin ? 'shadow-[inset_0_3px_0_var(--color-amber-500)]' : 'shadow-[inset_0_3px_0_var(--color-blue-500)]'}` : 'text-slate-400 font-medium'}`}
             >
               <Icon size={22} className={on ? (item.admin ? 'text-amber-400' : 'text-blue-400') : ''} />
               <span className="truncate max-w-full px-1">{item.short ?? item.label}</span>

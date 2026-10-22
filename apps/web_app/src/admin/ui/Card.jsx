@@ -48,7 +48,9 @@ const ACCENTS = {
 };
 
 /**
- * Headline number with a coloured edge. `pill` is a short badge under the
+ * Headline number with a coloured edge. The edge colour is a signal, not
+ * decoration: blue for plain figures, amber for "running low", red for a
+ * problem (refunds, empty cells), grey for a calm zero. `pill` is a short badge under the
  * number (a change in percent, a count); `note` the grey words after it.
  */
 export function KpiCard({ label, value, pill, pillTone, note, accent = 'blue', icon: Icon, compact = false }) {
@@ -58,7 +60,7 @@ export function KpiCard({ label, value, pill, pillTone, note, accent = 'blue', i
     <div className={`relative overflow-hidden bg-white border border-slate-200 rounded-[12px] shadow-card ${compact ? 'p-3 pl-4' : 'px-5 py-4 pl-6'}`}>
       <span className={`absolute left-0 inset-y-0 w-1 ${a.bar}`} aria-hidden="true" />
       <div className="flex items-start justify-between gap-2">
-        <span className={`font-bold uppercase tracking-wider text-slate-600 ${compact ? 'text-[11px]' : 'text-xs'}`}>{label}</span>
+        <span className={`font-bold uppercase tracking-wider text-slate-600 text-xs`}>{label}</span>
         {Icon && !compact && (
           <span className={`w-8 h-8 rounded-full flex items-center justify-center shrink-0 ${a.soft}`} aria-hidden="true"><Icon size={16} /></span>
         )}

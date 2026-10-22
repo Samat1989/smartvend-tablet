@@ -1,5 +1,9 @@
 import React, { Suspense, lazy } from 'react'
 import ReactDOM from 'react-dom/client'
+// Self-hosted: no round trip to fonts.googleapis.com before the first paint,
+// and the panel still reads right when that host is slow or blocked.
+import '@fontsource-variable/inter'
+import '@fontsource-variable/lexend'
 import './index.css'
 import './i18n'
 

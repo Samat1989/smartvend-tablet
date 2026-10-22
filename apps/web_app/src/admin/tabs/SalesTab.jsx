@@ -247,7 +247,7 @@ export default function SalesTab({ markets, categories, showToast, onConfirm }) 
           note={!multi && prevMain ? vsNote : stats.totals.some((c) => c.refund > 0) ? `${t('paid_gross')}: ${sumText('gross')}` : null}
         />
         <KpiCard
-          accent="orange" icon={Receipt}
+          accent="blue" icon={Receipt}
           label={t('orders')}
           value={money(stats.orders)}
           pill={fmtDelta(delta(stats.orders, prevStats?.orders))}
@@ -255,7 +255,7 @@ export default function SalesTab({ markets, categories, showToast, onConfirm }) 
           note={prevStats ? vsNote : null}
         />
         <KpiCard
-          accent="green" icon={TrendingUp}
+          accent="blue" icon={TrendingUp}
           label={t('avg_check')}
           value={main?.avg != null ? `${money(main.avg)} ${main.currency}` : '—'}
           pill={fmtDelta(delta(main?.avg, prevMain?.avg))}
@@ -263,7 +263,7 @@ export default function SalesTab({ markets, categories, showToast, onConfirm }) 
           note={prevMain?.avg != null ? vsNote : null}
         />
         <KpiCard
-          accent={stats.refundCount > 0 ? 'red' : 'violet'} icon={RotateCcw}
+          accent={stats.refundCount > 0 ? 'red' : 'slate'} icon={RotateCcw}
           label={t('refund_due')}
           value={stats.refundCount === 0 ? '0' : stats.totals.filter((c) => c.refund > 0).map((c) => `${money(c.refund)} ${c.currency}`).join(' · ')}
           pill={stats.refundCount > 0 ? `${stats.refundCount} ${t('orders_short')}` : null}
