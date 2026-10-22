@@ -500,7 +500,7 @@ function App() {
           onChange={setSelectedCategory}
           options={[
             { value: 'All', label: t('all_items') },
-            ...categories.map(cat => ({ value: cat.id, label: getCategoryName(cat) })),
+            ...categories.filter(cat => items.some(i => i.category_id === cat.id)).map(cat => ({ value: cat.id, label: getCategoryName(cat) })),
           ]}
         />
 

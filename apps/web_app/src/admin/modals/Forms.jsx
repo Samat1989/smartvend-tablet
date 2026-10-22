@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import Cropper from 'react-easy-crop';
-import { ArrowRight, CheckCircle2, Image, Loader2, Pencil, Plus, Save, ShoppingBag, Trash2, Upload } from 'lucide-react';
+import { ArrowRight, CheckCircle2, Image, Loader2, Lock, Pencil, Plus, Save, ShoppingBag, Trash2, Upload } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import Modal from '../ui/Modal';
 import { Button, IconButton } from '../ui/Button';
@@ -114,6 +114,17 @@ export function InventoryEditModal({ value, onChange, isScreen, layout, categori
           </div>
         ) : null}
 
+        {p.product_id && (
+          <Field label={t('category')} hint={t('category_shared_hint')}>
+            {({ id, describedBy }) => (
+              <select id={id} aria-describedby={describedBy} className={inputCls} value={p.category_id || ''} onChange={e => set({ category_id: e.target.value || null })}>
+                <option value="">{t('no_category')}</option>
+                {categories.map(c => <option key={c.id} value={c.id}>{catName(c, i18n.language)}</option>)}
+              </select>
+            )}
+          </Field>
+        )}
+
         {/* Stock left, price right — the order of the list row. */}
         <div className="grid sm:grid-cols-2 gap-4">
           <NumberField label={t('stock_pcs')} value={p.stock} onChange={(stock) => set({ stock })} />
@@ -150,13 +161,20 @@ export function CategoryManagerModal({ categories, onAdd, onDelete, onClose }) {
       </form>
 
       <ul className="mt-5 pt-5 border-t border-slate-200 flex flex-col gap-2">
-        {categories.map(c => (
+        {categories.slice().sort((a, b) => (a.owner_id == null) - (b.owner_id == null)).map(c => (
           <li key={c.id} className="flex justify-between items-center gap-3 bg-slate-50 border border-slate-200 p-3 rounded-[8px]">
             <div className="flex flex-col min-w-0">
               <span className="font-bold text-sm">{catName(c, i18n.language)}</span>
               <span className="text-xs text-slate-600 truncate">{[c.name_ru, c.name_kz, c.name_en].filter(Boolean).join(' / ')}</span>
             </div>
-            <IconButton icon={Trash2} label={t('delete')} tone="danger" onClick={() => onDelete(c.id)} />
+            {c.owner_id == null ? (
+              // A default category: shared by everyone, the database refuses to change it.
+              <span className="inline-flex items-center gap-1.5 shrink-0 text-xs font-semibold text-slate-600" title={t('category_default_hint')}>
+                <Lock size={14} /> {t('category_default')}
+              </span>
+            ) : (
+              <IconButton icon={Trash2} label={t('delete')} tone="danger" onClick={() => onDelete(c.id)} />
+            )}
           </li>
         ))}
         {categories.length === 0 && <p className="text-center text-sm text-slate-600 py-4">{t('no_categories')}</p>}

@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { AlertTriangle, ChevronLeft, KeyRound, Layers, Package, Plus, QrCode, Settings, ShoppingBag, Tags } from 'lucide-react';
+import { AlertTriangle, ChevronLeft, KeyRound, Layers, Package, Plus, QrCode, Settings, ShoppingBag } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { Button } from '../ui/Button';
 import { Card, KpiCard, PageHeader } from '../ui/Card';
@@ -17,7 +17,7 @@ import { CellTag, FlatInventory, InventoryByLayout } from './Inventory';
  */
 export default function MachineDetail({
   market, marketId, rtLive, rtState, products, loading, categories, layout,
-  onBack, onAdd, onQr, onServiceOpen, serviceOpening, onSettings, onCategories, onEdit, onDelete, onAdjustStock,
+  onBack, onAdd, onQr, onServiceOpen, serviceOpening, onSettings, onEdit, onDelete, onAdjustStock,
 }) {
   const { t, i18n } = useTranslation();
   const [q, setQ] = useState('');
@@ -115,7 +115,6 @@ export default function MachineDetail({
                 {t('machine_settings_short')}
               </Button>
             )}
-            <Button icon={Tags} onClick={onCategories} className="flex-1 sm:flex-none">{t('categories')}</Button>
             {openShelf && <Button variant="primary" icon={Plus} onClick={onAdd} className="flex-1 sm:flex-none">{t('add_product_short')}</Button>}
           </>
         )}

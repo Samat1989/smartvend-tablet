@@ -307,8 +307,8 @@ export default function Admin() {
 
   async function fetchCategories() {
     try {
-      // RLS limits categories to owner_id=auth.uid() OR owner_id IS NULL
-      // (legacy shared rows from before the per-owner migration).
+      // RLS returns the owner's own categories plus the shared defaults
+      // (owner_id IS NULL), which are read-only.
       const { data, error } = await supabase.from('categories').select('*').order('name_ru');
       if (error && error.code !== '42P01') throw error;
       if (data) setCategories(data);
@@ -582,6 +582,14 @@ export default function Admin() {
           micromarket_id: editingProduct.micromarket_id || selectedMarketId,
         });
         if (error) throw error;
+        // The category belongs to the SKU: change it there and in every machine.
+        const before = catalogProducts.find(c => c.id === editingProduct.product_id)?.category_id ?? null;
+        if (editingProduct.product_id && (payload.category_id ?? null) !== before) {
+          const catError = await patchRow('products', editingProduct.product_id, { category_id: payload.category_id });
+          if (catError) throw catError;
+          const mirrorError = await mirrorCategory(editingProduct.product_id, payload.category_id);
+          if (mirrorError) throw mirrorError;
+        }
       }
       setEditingProduct(null);
       showToast(t('product_saved'));
@@ -676,6 +684,7 @@ export default function Admin() {
   }
 
   function deleteCategory(id) {
+    if (categories.find(c => c.id === id)?.owner_id == null) return showToast(t('category_default_hint'), 'error');
     setConfirmAction({
       message: t('delete_category_confirm'),
       onYes: async () => {
@@ -717,6 +726,14 @@ export default function Admin() {
     }
   }
 
+  // The storefront and the tablet read category_id from inventory, a mirror of
+  // products.category_id: a category changed on the SKU has to reach every
+  // position of it, otherwise the buyer keeps seeing the old one.
+  async function mirrorCategory(productId, categoryId) {
+    const { error } = await supabase.from('inventory').update({ category_id: categoryId || null }).eq('product_id', productId);
+    return error;
+  }
+
   async function saveCatalogProduct() {
     if (!editingCatalog?.name?.trim()) return showToast(t('name_required'), 'error');
     setSavingCatalog(true);
@@ -744,6 +761,8 @@ export default function Admin() {
           is_archived: !!editingCatalog.is_archived,
         });
         if (error) throw error;
+        const mirrorError = await mirrorCategory(editingCatalog.id, payload.category_id);
+        if (mirrorError) throw mirrorError;
         showToast(t('product_saved'));
       }
       setEditingCatalog(null);
@@ -1159,6 +1178,7 @@ export default function Admin() {
         />
       ) : activeTab === 'catalog' ? (
         <CatalogTab
+          onCategories={() => setShowCategoryManager(true)}
           products={catalogProducts}
           categories={categories}
           filter={catalogFilter}
@@ -1203,7 +1223,6 @@ export default function Admin() {
             onServiceOpen={() => openForService(selectedMarket || { id: selectedMarketId })}
             serviceOpening={String(serviceOpening) === String(selectedMarketId)}
             onSettings={() => setPairMarket(selectedMarket)}
-            onCategories={() => setShowCategoryManager(true)}
             onEdit={(p) => setEditingProduct({ ...p })}
             onDelete={deleteProduct}
             onAdjustStock={adjustStock}

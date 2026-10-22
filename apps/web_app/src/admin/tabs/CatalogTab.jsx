@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Archive, ArchiveRestore, CheckCircle2, Image, Pencil, Plus, Trash2 } from 'lucide-react';
+import { Archive, ArchiveRestore, CheckCircle2, Image, Pencil, Plus, Tags, Trash2 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { Button, IconButton } from '../ui/Button';
 import { Card, PageHeader, Pill } from '../ui/Card';
@@ -13,7 +13,7 @@ import { catName } from '../lib/machines';
 // SKU that inventory rows reference via `product_id`. Filters cover
 // the three editorial states: active, drafts (auto-created from the
 // tablet), and archived.
-export default function CatalogTab({ products, categories, filter, setFilter, loading, onCreate, onEdit, onArchive, onPublish, onDelete }) {
+export default function CatalogTab({ products, categories, filter, setFilter, loading, onCreate, onCategories, onEdit, onArchive, onPublish, onDelete }) {
   const { t, i18n } = useTranslation();
   const [q, setQ] = useState('');
   const catById = new Map(categories.map((c) => [c.id, c]));
@@ -37,7 +37,12 @@ export default function CatalogTab({ products, categories, filter, setFilter, lo
       <PageHeader
         title={t('catalog_products_title')}
         subtitle={t('catalog_products_subtitle')}
-        actions={<Button variant="primary" icon={Plus} onClick={onCreate} className="min-h-11 w-full sm:w-auto">{t('add_product')}</Button>}
+        actions={(
+          <>
+            <Button icon={Tags} onClick={onCategories} className="min-h-11 flex-1 sm:flex-none">{t('categories')}</Button>
+            <Button variant="primary" icon={Plus} onClick={onCreate} className="min-h-11 flex-1 sm:flex-none">{t('add_product')}</Button>
+          </>
+        )}
       />
 
       <Card>
