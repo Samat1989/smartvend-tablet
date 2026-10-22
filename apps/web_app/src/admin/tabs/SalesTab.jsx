@@ -11,10 +11,11 @@ import DateRangeModal, { parseDay } from '../ui/DateRangeModal';
 import { catName, currencyOf, machineName, money, parseLayout } from '../lib/machines';
 import {
   SALES_PAGE_SIZE, buildChart, computeStats, dateLocale, delta, downloadText, fetchSalesAggregate,
-  fetchSalesPage, periodRange, previousRange, revenueByCategory, revenueByMachine, salesCsv,
+  fetchSalesPage, fetchStockedInventory, periodRange, previousRange, revenueByCategory, revenueByMachine, salesCsv,
 } from '../lib/sales';
 import SaleCard from './SaleCard';
 import { CategoryDonut, MachineBars, RevenueChart } from './SalesCharts';
+import TopProducts from './TopProducts';
 
 const fmtDelta = (d) => (d == null ? null : `${d > 0 ? '+' : ''}${d.toFixed(1).replace('.', ',')}%`);
 // Up is green, down is red, flat is grey — the colour of the card's edge says
@@ -44,6 +45,7 @@ export default function SalesTab({ markets, categories, showToast, onConfirm }) 
   const [moreLoading, setMoreLoading] = useState(false);
   const [agg, setAgg] = useState(null);       // { rows, partial } of the period
   const [prevAgg, setPrevAgg] = useState(null);
+  const [stocked, setStocked] = useState(null);  // positions with stock, for «not selling»; null = none / failed
   const [aggLoading, setAggLoading] = useState(false);
   const [open, setOpen] = useState(() => new Set());
   const [exporting, setExporting] = useState(false);
@@ -67,19 +69,22 @@ export default function SalesTab({ markets, categories, showToast, onConfirm }) 
     setListLoading(true);
     setOpen(new Set());
     const wantAgg = timeFilter !== 'recent';
-    if (wantAgg) setAggLoading(true); else { setAgg(null); setPrevAgg(null); }
+    if (wantAgg) setAggLoading(true); else { setAgg(null); setPrevAgg(null); setStocked(null); }
     try {
       const prev = wantAgg ? previousRange(timeFilter, range) : null;
-      const [page, a, p] = await Promise.all([
+      const [page, a, p, inv] = await Promise.all([
         fetchSalesPage({ market, range, offset: 0, pageSize: timeFilter === 'recent' ? 20 : SALES_PAGE_SIZE }),
         wantAgg ? fetchSalesAggregate({ market, range }) : null,
         prev ? fetchSalesAggregate({ market, range: prev }) : null,
+        // A failed stock list only costs the «not selling» view, not the page.
+        wantAgg ? fetchStockedInventory({ market }).catch((err) => { console.error('Stocked inventory failed:', err); return null; }) : null,
       ]);
       if (id !== reqId.current) return;
       setList(page.rows);
       setCount(page.count);
       setAgg(a);
       setPrevAgg(p);
+      setStocked(inv);
     } catch (err) {
       if (id !== reqId.current) return;
       console.error('Error fetching sales:', err);
@@ -290,6 +295,10 @@ export default function SalesTab({ markets, categories, showToast, onConfirm }) 
             </div>
           )}
         </div>
+      )}
+
+      {agg && main && (
+        <TopProducts rows={agg.rows} prevRows={prevAgg?.rows} inventory={stocked} currency={cur} currencyFor={currencyFor} />
       )}
 
       <div>
