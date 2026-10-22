@@ -385,8 +385,11 @@ function App() {
         let reason = error?.message;
         try { reason = (await error?.context?.json())?.error || reason; } catch (_) {}
         if (reason === 'offline') {
+          // Not an error screen: the same short «machine is offline» notice the
+          // storefront shows up front, with its «check again» link.
           setMachineOffline(true);
-          throw new Error(t('machine_offline_desc'));
+          setPaymentStatus('idle');
+          return;
         }
         throw new Error(reason || data?.error || 'Payment initialization failed');
       }
@@ -692,7 +695,6 @@ function App() {
                 )}
                 {machineOffline && paymentStatus !== 'error' && (
                   <Alert tone="warning" icon={WifiOff} title={t('machine_offline_title')}>
-                    <p className="opacity-90">{t('machine_offline_desc')}</p>
                     <button type="button" onClick={() => checkMachineOnline(marketToken)} className="mt-1.5 font-bold underline underline-offset-2">
                       {t('machine_offline_retry')}
                     </button>
