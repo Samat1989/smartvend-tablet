@@ -5,7 +5,7 @@ import { useTranslation } from 'react-i18next';
 import Modal from '../ui/Modal';
 import { Button, IconButton } from '../ui/Button';
 import { Banner, EmptyState, Spinner } from '../ui/Feedback';
-import { Field, SearchInput, inputCls, matches } from '../ui/Field';
+import { Field, NumberField, SearchInput, inputCls, matches } from '../ui/Field';
 import { MACHINE_KINDS, catName, kindLabel, machineName, motorToSlotLabel } from '../lib/machines';
 import { PHOTO_ACCEPT } from '../lib/photo';
 
@@ -115,21 +115,10 @@ export function InventoryEditModal({ value, onChange, isScreen, layout, categori
         ) : null}
 
         {/* Stock left, price right — the order of the list row. */}
-        <div className="grid grid-cols-2 gap-4">
-          <Field
-            label={t('stock_pcs')}
-            type="number" inputMode="numeric" min="0"
-            value={p.stock === 0 ? '' : p.stock}
-            placeholder="0"
-            onChange={e => set({ stock: e.target.value === '' ? 0 : Number(e.target.value) })}
-          />
-          <Field
-            label={`${t('price_label')} (${currency})`}
-            type="number" inputMode="numeric" min="0"
-            value={p.price === 0 ? '' : p.price}
-            placeholder="0"
-            onChange={e => set({ price: e.target.value === '' ? 0 : Number(e.target.value) })}
-          />
+        <div className="grid sm:grid-cols-2 gap-4">
+          <NumberField label={t('stock_pcs')} value={p.stock} onChange={(stock) => set({ stock })} />
+          {/* The price is typed, never nudged: no «−/+» here, unlike the stock. */}
+          <NumberField label={`${t('price_label')} (${currency})`} value={p.price} buttons={false} onChange={(price) => set({ price })} />
         </div>
 
         <Banner tone="info">{t('edit_photo_in_catalog')}</Banner>

@@ -1,5 +1,5 @@
 import { useId, useState } from 'react';
-import { Eye, EyeOff, Search, X } from 'lucide-react';
+import { Eye, EyeOff, Minus, Plus, Search, X } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
 // Shared look of every text input, select and textarea. The focus ring is the
@@ -7,7 +7,7 @@ import { useTranslation } from 'react-i18next';
 // user could not see where they were.
 export const inputCls =
   'w-full min-h-11 px-3.5 rounded-[10px] border border-slate-300 bg-white text-[15px] text-ink placeholder-slate-400 ' +
-  'focus:outline-none focus:border-brand focus:ring-3 focus:ring-blue-200 disabled:bg-slate-100 disabled:text-slate-500 ' +
+  'focus:outline-none focus:border-brand focus:ring-3 focus:ring-blue-200 disabled:bg-slate-100 disabled:text-slate-600 ' +
   'aria-[invalid=true]:border-rose-500 aria-[invalid=true]:bg-rose-50';
 
 /**
@@ -32,6 +32,48 @@ export function Field({ label, hint, error, className = '', children, ...inputPr
         <p id={hintId} className={`text-[13px] leading-snug ${error ? 'font-semibold text-rose-700' : 'text-slate-600'}`}>{error || hint}</p>
       )}
     </div>
+  );
+}
+
+/**
+ * A whole number you can type or nudge: «−», the field, «+». Typing works as
+ * in a plain number input (the keyboard on a phone is numeric); the buttons
+ * move by `step` and stop at `min`. The native spin arrows are hidden — these
+ * buttons replace them, and are big enough to hit with a thumb. Zero shows as
+ * an empty field with the «0» placeholder, as the form always did.
+ * `buttons={false}` leaves the plain typed field (the price: no one nudges it).
+ */
+export function NumberField({ label, hint, value, onChange, step = 1, min = 0, placeholder = '0', buttons = true, className = '' }) {
+  const { t } = useTranslation();
+  const cur = Number(value) || 0;
+  const nudge = (d) => onChange(Math.max(min, cur + d));
+  const btn = 'w-11 h-11 shrink-0 inline-flex items-center justify-center rounded-[10px] border border-slate-300 bg-white text-slate-700 transition-colors hover:border-brand hover:text-brand-dark active:scale-95 disabled:opacity-40 disabled:cursor-not-allowed focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-blue-300';
+  return (
+    <Field label={label} hint={hint} className={className}>
+      {({ id, describedBy }) => (
+        <div className="flex items-stretch gap-1.5">
+          {buttons && (
+            <button type="button" className={btn} aria-label={`${label}: ${t('value_decrease')}`} title={t('value_decrease')} disabled={cur <= min} onClick={() => nudge(-step)}>
+              <Minus size={18} />
+            </button>
+          )}
+          <input
+            id={id}
+            aria-describedby={describedBy}
+            type="number" inputMode="numeric" min={min}
+            value={cur === 0 ? '' : cur}
+            placeholder={placeholder}
+            onChange={(e) => onChange(e.target.value === '' ? 0 : Number(e.target.value))}
+            className={`${inputCls} min-w-0 flex-1 ${buttons ? 'text-center font-bold' : ''} tabular-nums [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none`}
+          />
+          {buttons && (
+            <button type="button" className={btn} aria-label={`${label}: ${t('value_increase')}`} title={t('value_increase')} onClick={() => nudge(step)}>
+              <Plus size={18} />
+            </button>
+          )}
+        </div>
+      )}
+    </Field>
   );
 }
 
