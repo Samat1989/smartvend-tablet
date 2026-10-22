@@ -409,7 +409,7 @@ class VendingService extends ChangeNotifier {
       _error = null;
       notifyListeners();
     }
-    // Categories list is global (not per-machid) — we fetch it in parallel
+    // The categories table is global (not per-machid) — we fetch it in parallel
     // with inventory and surface only the latter's failure as a hard error.
     // If categories fail we just show no filter chips, which still lets
     // the operator browse and dispense.
@@ -445,9 +445,17 @@ class VendingService extends ChangeNotifier {
       ..clear()
       ..addAll(invRes.data!.where((p) => p.stock > 0));
     _catalog.sort((a, b) => a.shelfLabel.compareTo(b.shelfLabel));
+    // The table is readable by anyone, so it also holds other owners' private
+    // categories: keep only those used by products shown on the shelf (the
+    // same rule as the web storefront).
+    final usedCategoryIds = {
+      for (final p in _catalog)
+        if (p.categoryId != null) p.categoryId!,
+    };
     _categories
       ..clear()
-      ..addAll(catRes.isOk ? catRes.data! : const []);
+      ..addAll((catRes.isOk ? catRes.data! : const <Category>[])
+          .where((c) => usedCategoryIds.contains(c.id)));
     _state = CatalogState.ready;
     notifyListeners();
   }
