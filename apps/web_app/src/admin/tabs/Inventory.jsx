@@ -25,8 +25,10 @@ const stockTone = (s) => (s <= 0 ? 'bg-rose-100 text-rose-800' : isLowStock(s) ?
 function StockValue({ stock, label }) {
   const s = stock ?? 0;
   return (
-    <div className="flex flex-col items-end shrink-0">
-      <span className="hidden sm:block text-xs font-bold text-slate-600 uppercase tracking-wider">{label}</span>
+    // On a phone it takes its own line under the name (label left, number
+    // right), so the name keeps the width; from sm up it is a column in the row.
+    <div className="order-last basis-full sm:order-none sm:basis-auto flex items-center justify-between sm:flex-col sm:items-end shrink-0 pt-2 sm:pt-0 border-t border-slate-200 sm:border-0">
+      <span className="text-xs font-bold text-slate-600 uppercase tracking-wider">{label}</span>
       <span className={`text-base font-extrabold px-2 py-0.5 rounded-md tabular-nums ${stockTone(s)}`}>{s}</span>
     </div>
   );
@@ -92,8 +94,9 @@ function StockStepper({ stock, label, onAdjust }) {
 
 function PriceValue({ price, currency, label }) {
   return (
-    <div className="flex flex-col items-end shrink-0 min-w-[72px]">
-      <span className="hidden sm:block text-xs font-bold text-slate-600 uppercase tracking-wider">{label}</span>
+    // Hidden on a phone: there the price sits under the name (see ItemRow).
+    <div className="hidden sm:flex flex-col items-end shrink-0 min-w-[72px]">
+      <span className="text-xs font-bold text-slate-600 uppercase tracking-wider">{label}</span>
       <span className="text-base font-extrabold text-brand-dark tabular-nums whitespace-nowrap">{money(price)} {currency}</span>
     </div>
   );
@@ -120,13 +123,16 @@ export function ItemRow({ p, slot, category, currency, onEdit, onDelete, onAdjus
   return (
     <li
       onClick={() => onEdit(p)}
-      className={`group flex items-center gap-3 p-2.5 sm:p-3 rounded-[12px] border ${tone} hover:border-brand hover:shadow-card cursor-pointer transition-all ${onAdjustStock ? 'flex-wrap sm:flex-nowrap' : ''}`}
+      className={`group flex items-center gap-3 p-2.5 sm:p-3 rounded-[12px] border ${tone} hover:border-brand hover:shadow-card cursor-pointer transition-all flex-wrap sm:flex-nowrap`}
     >
       {slot}
       <Thumb p={p} />
       <div className="flex-1 min-w-0">
-        <div className="font-bold text-[15px] text-ink truncate">{p.name || '—'}</div>
+        {/* Up to two lines on a phone: with the stock and price moved off this
+            line the name has the room, and «Co…» told nobody which product it was. */}
+        <div className="font-bold text-[15px] leading-snug text-ink break-words line-clamp-2 sm:line-clamp-1">{p.name || '—'}</div>
         <div className="text-[13px] text-slate-600 truncate">{warn ?? category ?? t('no_category')}</div>
+        <div className="sm:hidden mt-0.5 text-[15px] font-extrabold text-brand-dark tabular-nums">{money(p.price)} {currency}</div>
       </div>
       {onAdjustStock
         ? <StockStepper stock={p.stock} label={t('stock_label')} onAdjust={(d) => onAdjustStock(p, d)} />

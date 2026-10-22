@@ -6,7 +6,7 @@ import { IconButton } from '../ui/Button';
 import { Card, KpiCard, PageHeader, Pagination, Pill } from '../ui/Card';
 import { ChipGroup } from '../ui/Chips';
 import { EmptyState, SkeletonRows } from '../ui/Feedback';
-import { SearchInput, inputCls, matches } from '../ui/Field';
+import { SearchInput, matches } from '../ui/Field';
 import { DeviceStatusDot, KindBadge, PayChannelBadge, machineOnline } from '../status/Status';
 import { LOW_STOCK, currencyOf, isLowStock, machineName, money } from '../lib/machines';
 import { fetchSalesAggregate, periodRange, saleOutcome } from '../lib/sales';
@@ -181,14 +181,6 @@ export default function MachinesTab({ markets, loaded, rtOnline, onOpen, onRenam
       <Card>
         <div className="flex flex-wrap items-center justify-between gap-3 p-4 sm:px-5">
           <SearchInput value={q} onChange={(v) => { setQ(v); setPage(1); }} placeholder={t('machines_search')} className="w-full sm:w-80" />
-          {/* Phones have no column headers to click: a select does the same job. */}
-          <label className="md:hidden w-full">
-            <span className="sr-only">{t('sort_by')}</span>
-            <select className={`${inputCls} !w-full font-semibold`} value={sort.key ?? ''} onChange={(e) => { setSort({ key: e.target.value || null, dir: 1 }); setPage(1); }}>
-              <option value="">{t('sort_default')}</option>
-              {Object.entries(SORTS).map(([k, v]) => <option key={k} value={k}>{t(v.label)}</option>)}
-            </select>
-          </label>
           <ChipGroup
             label={t('filter')}
             value={filter}
