@@ -691,13 +691,15 @@ export default function Admin() {
         try {
           // supabase-js returns the error instead of throwing it; without this
           // check the panel reported «deleted» even when nothing was.
-          const { error } = await deleteRow('categories', id, 'delete_category');
+          const { error, deleted } = await deleteRow('categories', id, 'delete_category');
           if (error) throw error;
+          if (!deleted) throw new Error('not deleted');
           fetchCategories();
           showToast(t('category_deleted'));
         } catch (err) {
           console.error('Delete category error:', err);
-          showToast(t('category_delete_error'), 'error');
+          // 23503: inventory.category_id still points at it.
+          showToast(err?.code === '23503' ? t('category_in_use') : t('category_delete_error'), 'error');
         }
       },
     });
