@@ -97,15 +97,18 @@ export function signalInfo(state) {
   return { gsm, dbm, csq, Icon, tier, ver: state.ver };
 }
 
-// «GSM · CSQ 18/31 · −77 dBm»: the numbers for whoever needs them — the
-// tooltip on a desktop, a line in the machine's settings on a phone.
+// «GSM · CSQ 21/31» or «Wi-Fi · −62 dBm»: the numbers for whoever needs them —
+// the tooltip on a desktop, a line in the machine's settings on a phone.
+// One figure per link, in the unit its own world uses. For GSM the board
+// derives dBm from CSQ (−113 + 2·CSQ), so printing both is the same reading
+// twice; installers talk in CSQ, so that stays. Wi-Fi has only dBm.
 export function signalDetails(state, { ver = true } = {}) {
   const s = signalInfo(state);
   if (!s) return null;
+  const gsmCsq = s.gsm && s.csq >= 0 && s.csq <= 31;
   return [
     s.gsm ? 'GSM' : 'Wi-Fi',
-    s.gsm && s.csq <= 31 ? `CSQ ${s.csq}/31` : null,
-    `${s.dbm} dBm`,
+    gsmCsq ? `CSQ ${s.csq}/31` : `${s.dbm} dBm`,
     ver && s.ver && `v${s.ver}`,
   ].filter(Boolean).join(' · ');
 }
