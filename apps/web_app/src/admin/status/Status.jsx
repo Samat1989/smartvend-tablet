@@ -70,30 +70,75 @@ export function PayChannelBadge({ status }) {
 // Signal of a Realtime board from its Presence state, drawn the way a phone
 // does: cellular bars for GSM, the Wi-Fi fan for Wi-Fi. dBm is negative for
 // both (closer to 0 = stronger); for GSM the modem's own CSQ scale (0..31,
-// 99 = unknown) goes in the tooltip too, since that is what installers know.
-export function SignalIcon({ state }) {
+// 99 = unknown) goes in the details too, since that is what installers know.
+//
+// Three tiers, one colour each, because a tooltip does not exist on a phone and
+// "which bar of five" is not what the owner asks — "will it work?" is:
+//   good  (green)  — CSQ ≥ 15 / Wi-Fi ≥ −67 dBm
+//   mid   (amber)  — CSQ 8–14 / Wi-Fi −75…−67 dBm
+//   weak  (red)    — below that. The board is in Presence, so it IS connected:
+//                    "weak", not "no signal" (that is the red offline lamp).
+// null when the board reports no reading (CSQ 99 arrives as 0 dBm).
+export function signalInfo(state) {
   const dbm = Number(state?.rssi_dbm);
   if (!dbm) return null;
   const gsm = state.net === 'gsm';
-  let Icon, level;
+  const csq = Number(state.csq);
+  let Icon, level, tier;
   if (gsm) {
-    const csq = Number(state.csq);
-    level = csq >= 20 ? 4 : csq >= 15 ? 3 : csq >= 10 ? 2 : csq >= 1 ? 1 : 0;
+    level = csq >= 20 ? 4 : csq >= 15 ? 3 : csq >= 8 ? 2 : csq >= 1 ? 1 : 0;
     Icon = [SignalZero, SignalLow, SignalMedium, SignalHigh, Signal][level];
+    tier = level >= 3 ? 'good' : level === 2 ? 'mid' : 'weak';
   } else {
     level = dbm >= -55 ? 3 : dbm >= -67 ? 2 : dbm >= -75 ? 1 : 0;
     Icon = [WifiZero, WifiLow, WifiHigh, Wifi][level];
+    tier = level >= 2 ? 'good' : level === 1 ? 'mid' : 'weak';
   }
-  const tone = level >= 2 ? 'text-emerald-700' : level === 1 ? 'text-amber-600' : 'text-rose-600';
-  const title = [
-    gsm ? 'GSM' : 'Wi-Fi',
-    gsm && Number(state.csq) <= 31 ? `CSQ ${state.csq}/31` : null,
-    `${dbm} dBm`,
-    state.ver && `v${state.ver}`,
+  return { gsm, dbm, csq, Icon, tier, ver: state.ver };
+}
+
+// «GSM · CSQ 18/31 · −77 dBm»: the numbers for whoever needs them — the
+// tooltip on a desktop, a line in the machine's settings on a phone.
+export function signalDetails(state, { ver = true } = {}) {
+  const s = signalInfo(state);
+  if (!s) return null;
+  return [
+    s.gsm ? 'GSM' : 'Wi-Fi',
+    s.gsm && s.csq <= 31 ? `CSQ ${s.csq}/31` : null,
+    `${s.dbm} dBm`,
+    ver && s.ver && `v${s.ver}`,
   ].filter(Boolean).join(' · ');
+}
+
+const SIGNAL_TIER = {
+  good: { text: 'text-emerald-700', chip: 'bg-emerald-100 text-emerald-800', word: 'signal_good' },
+  mid: { text: 'text-amber-700', chip: 'bg-amber-100 text-amber-900', word: 'signal_mid' },
+  weak: { text: 'text-rose-700', chip: 'bg-rose-100 text-rose-800', word: 'signal_weak' },
+};
+
+// Bare icon (compact lamps) or, with `withLabel`, a chip that says the word
+// out loud: bars + «Отличный / Средний / Слабый» in the tier's colour.
+export function SignalIcon({ state, withLabel = false }) {
+  const { t } = useTranslation();
+  const s = signalInfo(state);
+  if (!s) return null;
+  const tier = SIGNAL_TIER[s.tier];
+  const { Icon } = s;
+  const word = t(tier.word);
+  const title = `${t('signal_label')}: ${word} · ${signalDetails(state)}`;
+  if (withLabel) {
+    return (
+      <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[13px] font-semibold whitespace-nowrap shrink-0 ${tier.chip}`} title={title}>
+        <Icon size={16} strokeWidth={2.5} aria-hidden="true" />
+        <span className="sr-only">{t('signal_label')}: </span>
+        {word}
+      </span>
+    );
+  }
   return (
-    <span className={`shrink-0 ${tone}`} title={title}>
-      <Icon size={14} strokeWidth={2.5} />
+    <span className={`shrink-0 ${tier.text}`} title={title}>
+      <Icon size={14} strokeWidth={2.5} aria-hidden="true" />
+      <span className="sr-only">{`${t('signal_label')}: ${word}`}</span>
     </span>
   );
 }
@@ -105,7 +150,7 @@ const LAMP = {
   amber: 'bg-amber-100 text-amber-900',
   red: 'bg-rose-100 text-rose-800',
   grey: 'bg-slate-100 text-slate-700',
-  wait: 'bg-slate-100 text-slate-500',
+  wait: 'bg-slate-100 text-slate-600',
 };
 // Status words come lower-case from the dictionary (they also sit mid-sentence
 // in tooltips); a pill starts with a capital.
@@ -146,15 +191,26 @@ export function BoardLamp({ rt, rtState, rtRow, withLabel, prefix }) {
     ? `${t('status_last_seen')} ${new Date(rtRow.last_seen_at).toLocaleString(i18n.language)}`
     : null;
   const head = prefix ? `${prefix}: ` : '';
-  return (
+  const lamp = (
     <Lamp
       tone={tone}
       label={head + label}
       title={[head + label, lastSeen].filter(Boolean).join(' · ')}
       withLabel={withLabel}
-      extra={rt === true ? <SignalIcon state={rtState} /> : null}
+      extra={!withLabel && rt === true ? <SignalIcon state={rtState} /> : null}
     />
   );
+  // With labels the signal is its own chip beside the lamp, in words, so a
+  // phone shows it without a hover; the compact dot keeps the bare icon.
+  if (withLabel && rt === true && signalInfo(rtState)) {
+    return (
+      <span className="inline-flex flex-wrap items-center gap-1.5">
+        {lamp}
+        <SignalIcon state={rtState} withLabel />
+      </span>
+    );
+  }
+  return lamp;
 }
 
 export function DeviceStatusDot({ status, kind, withLabel = false, rt, rtState, rtRow }) {

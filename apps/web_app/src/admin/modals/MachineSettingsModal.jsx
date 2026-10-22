@@ -7,7 +7,7 @@ import { Button } from '../ui/Button';
 import { inputCls } from '../ui/Field';
 import { Tabs } from '../ui/Chips';
 import { Banner } from '../ui/Feedback';
-import { BoardLamp, DeviceStatusDot } from '../status/Status';
+import { BoardLamp, DeviceStatusDot, signalDetails } from '../status/Status';
 import { kindLabel, machineName } from '../lib/machines';
 
 // Привязка платы на Realtime-прошивке (firmware/esp-rt). Владелец получает
@@ -184,6 +184,12 @@ export default function MachineSettingsModal({ market, rtLive, rtState, onClose,
               <dd className="font-mono font-semibold text-ink truncate">{market.rt.device_id || '—'}</dd>
               <dt className="text-slate-600">{t('settings_firmware')}</dt>
               <dd className="font-semibold text-ink">{market.rt.board_ver || '—'}</dd>
+              {rtLive === true && signalDetails(rtState, { ver: false }) && (
+                <>
+                  <dt className="text-slate-600">{t('signal_label')}</dt>
+                  <dd className="font-semibold text-ink">{signalDetails(rtState, { ver: false })}</dd>
+                </>
+              )}
               <dt className="text-slate-600">{t('adm_paired_at')}</dt>
               <dd className="font-semibold text-ink">{pairedAt ? new Date(pairedAt).toLocaleString(i18n.language) : '—'}</dd>
               {rtLive === false && market.rt.last_seen_at && (
