@@ -361,61 +361,6 @@ export function revenueByCategory(rows, currency, currencyFor) {
   return [...m.entries()].map(([categoryId, value]) => ({ categoryId, value })).sort((a, b) => b.value - a.value);
 }
 
-// Two spellings of one product must not split the ranking: «Cola », «cola».
-export const productKey = (name) => (name || '').trim().toLowerCase();
-
-// What was actually sold, by product name, across the machines of one currency.
-// The name is the snapshot written into sales_items at the moment of the sale —
-// the only one that survives the position being deleted later — and the same
-// product on two machines becomes one row, which is what a fleet owner asks.
-// The same rows count as in revenueByCategory: nothing in progress, nothing the
-// door never released, no lines marked as not dispensed.
-export function topProducts(rows, currency, currencyFor) {
-  const m = new Map();
-  for (const s of rows) {
-    if (currencyFor(s.micromarket_id) !== currency) continue;
-    if (s.status === 'in_progress') continue;
-    if (s.door_status === 'failed' || s.door_status === 'no_ack') continue;
-    for (const it of s.sales_items || []) {
-      if (it.dispensed === false) continue;
-      const key = productKey(it.product_name);
-      if (!key) continue;
-      const units = it.quantity || 1;
-      const e = m.get(key) ?? { key, name: it.product_name.trim(), units: 0, revenue: 0 };
-      e.units += units;
-      e.revenue += (it.price || 0) * units;
-      m.set(key, e);
-    }
-  }
-  return [...m.values()];
-}
-
-// What sits in the machines and does not move: current positions with stock,
-// least sold in the period first (zero included). `sold` is a Map key → units.
-export function slowProducts(inventory, sold, currency, currencyFor) {
-  const m = new Map();
-  for (const r of inventory || []) {
-    if ((r.stock ?? 0) <= 0) continue;
-    if (currencyFor(r.micromarket_id) !== currency) continue;
-    const key = productKey(r.name);
-    if (!key) continue;
-    const e = m.get(key) ?? { key, name: r.name.trim(), stock: 0, sold: sold.get(key) ?? 0 };
-    e.stock += r.stock;
-    m.set(key, e);
-  }
-  return [...m.values()].sort((a, b) => a.sold - b.sold || b.stock - a.stock);
-}
-
-// Positions that still have stock, for the «not selling» list. One request: a
-// fleet is a few hundred positions, under the 1000-row page of PostgREST.
-export async function fetchStockedInventory({ market }) {
-  let q = supabase.from('inventory').select('name, stock, micromarket_id').gt('stock', 0);
-  if (market !== 'all') q = q.eq('micromarket_id', market);
-  const { data, error } = await q.range(0, 999);
-  if (error) throw error;
-  return data || [];
-}
-
 // ── CSV ────────────────────────────────────────────────────────────────────
 
 const csvCell = (v) => {
