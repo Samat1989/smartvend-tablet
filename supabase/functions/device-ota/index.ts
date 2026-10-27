@@ -63,10 +63,14 @@ Deno.serve(async (req) => {
 
     ch = await DeviceChannel.open(admin, rt.topic, rt.device_id ?? "");
     const ans = await ch.otaCheck(rt.key, 8000);
-    if (!ans) return json({ ok: true, status: "offline" });
+    if (!ans) {
+      console.warn(`ota-check machid=${machid}: channel dev:${rt.topic} joined, board present=${ch.present()}, no answer in 8s`);
+      return json({ ok: true, status: "offline", detail: `no_answer present=${ch.present()}` });
+    }
     console.log(`ota-check machid=${machid} by=${caller.user.id} -> ${ans.status}`);
     return json({ ok: true, status: ans.status, code: ans.code, ver: ans.ver });
   } catch (e) {
+    console.error(`ota-check failed: ${(e as Error).message}`);
     return json({ ok: true, status: "offline", detail: (e as Error).message });
   } finally {
     await ch?.close();

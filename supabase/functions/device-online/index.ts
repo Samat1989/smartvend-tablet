@@ -51,14 +51,18 @@ Deno.serve(async (req) => {
     try {
       ch = await DeviceChannel.open(supabase, rt.topic, rt.device_id ?? "");
       const pong = await ch.ping(3000);
-      if (!pong) return json({ online: false });
+      if (!pong) {
+        console.warn(`device-online machid=${market.id}: joined dev:${rt.topic}, present=${ch.present()}, no pong in 3s`);
+        return json({ online: false });
+      }
       return json({
         online: true,
         lock_ok: pong.lock_ok !== false,
         net: pong.net,
         rssi_dbm: pong.rssi_dbm,
       });
-    } catch (_) {
+    } catch (e) {
+      console.error(`device-online machid=${market.id}: ${(e as Error).message}`);
       return json({ online: false });
     } finally {
       await ch?.close();

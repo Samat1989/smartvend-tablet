@@ -211,7 +211,10 @@ static void handle_ota_check(cJSON *p) {
         return;
     }
     long long now = (long long)time(NULL);
-    if (!net_time_synced() || exp_s < now || exp_s > now + MAX_EXP_AHEAD_S) return;
+    if (!net_time_synced() || exp_s < now || exp_s > now + MAX_EXP_AHEAD_S) {
+        ESP_LOGW(TAG, "ota-check: refused (synced=%d, exp-now=%lld s)", net_time_synced(), exp_s - now);
+        return;
+    }
     ota_check_now(id->valuestring);
 }
 
@@ -337,6 +340,7 @@ static void worker_task(void *pv) {
 
 static void on_broadcast(const char *event, const char *payload_json, void *ctx) {
     msg_t m;
+    ESP_LOGI(TAG, "rx %s", event);
     if (strlen(event) >= sizeof(m.event) || strlen(payload_json) >= sizeof(m.payload)) return;
     strcpy(m.event, event);
     strcpy(m.payload, payload_json);

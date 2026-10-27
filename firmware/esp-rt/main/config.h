@@ -3,8 +3,8 @@
 
 #include "sdkconfig.h"
 
-#define FW_VERSION_NAME   "1.1.5"
-#define FW_VERSION_CODE   10105
+#define FW_VERSION_NAME   "1.1.6"
+#define FW_VERSION_CODE   10106
 
 // --- Cloud ---
 #define SUPABASE_HOST     "cgvfhtvdtdjsyluhlcbq.supabase.co"

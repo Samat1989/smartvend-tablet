@@ -70,7 +70,7 @@ static void mark_left(void) {
     s_joined = false;
 }
 
-// Sends one frame. `join_ref` may be NULL (heartbeat).
+// Sends one frame. `join_ref` may be NULL (heartbeat; phx_join fills it in itself).
 static esp_err_t send_frame(const char *topic, const char *event, const char *payload_json,
                             const char *join_ref, char *ref_out, size_t ref_out_sz) {
     if (!s_client || !esp_websocket_client_is_connected(s_client)) return ESP_ERR_INVALID_STATE;
@@ -81,6 +81,10 @@ static esp_err_t send_frame(const char *topic, const char *event, const char *pa
     // Before sending: the reply can arrive before send_text returns.
     if (ref_out) strlcpy(ref_out, ref, ref_out_sz);
     int n;
+    // phx_join carries its own ref as join_ref (what supabase-js sends). Without
+    // it Realtime accepts the join but drops everything the board sends after:
+    // no Presence, no pong, no ota answer.
+    if (!join_ref && ref_out && strcmp(event, "phx_join") == 0) join_ref = ref;
     if (join_ref) {
         n = snprintf(buf, sizeof(buf),
                      "{\"topic\":\"%s\",\"event\":\"%s\",\"ref\":\"%s\",\"join_ref\":\"%s\",\"payload\":%s}",
