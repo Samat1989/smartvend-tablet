@@ -192,14 +192,22 @@ class _BoardDiagScreenState extends State<BoardDiagScreen> {
   /// мы трогаем соединение. Наоборот — [BoardClient.autoConnect] ушёл бы
   /// искать плату, которой на проводе нет, и повесил бы системный диалог
   /// разрешения USB поверх экрана.
+  Future<void> _setMmVariant(MmVariant v) async {
+    context.read<BoardClient>().setP6lz(v == MmVariant.p6lz);
+    await _setStandaloneLock(v == MmVariant.headless);
+  }
+
   Future<void> _setStandaloneLock(bool v) async {
     final board = context.read<BoardClient>();
     final storage = context.read<DeviceStorage>();
+    final wasStandalone = board.isStandaloneLock;
     board.setStandaloneLock(v);
     if (v) {
       await board.disconnect();
       return;
     }
+    // Тот же serial-порт, ничего переподключать не нужно
+    if (!wasStandalone && board.isConnected) return;
     final path = storage.serialPortPath;
     if (path != null) {
       await board.connectNative(path);
@@ -277,7 +285,10 @@ class _BoardDiagScreenState extends State<BoardDiagScreen> {
                   context.read<DeviceStorage>().setLockHoldSeconds(v),
               standalone: board.isStandaloneLock,
               standaloneAllowed: !context.watch<DeviceStorage>().isOdengi,
-              onStandaloneChanged: _setStandaloneLock,
+              mmVariant: board.isStandaloneLock
+                  ? MmVariant.headless
+                  : (board.isP6lz ? MmVariant.p6lz : MmVariant.serial),
+              onMmVariantChanged: _setMmVariant,
               motorType: board.m102MotorType,
               onMotorTypeChanged: (v) =>
                   context.read<BoardClient>().setM102MotorType(v),
@@ -327,7 +338,8 @@ class _ProtocolCard extends StatelessWidget {
     required this.onHoldChanged,
     required this.standalone,
     required this.standaloneAllowed,
-    required this.onStandaloneChanged,
+    required this.mmVariant,
+    required this.onMmVariantChanged,
     required this.motorType,
     required this.onMotorTypeChanged,
   });
@@ -339,12 +351,14 @@ class _ProtocolCard extends StatelessWidget {
   /// Микромаркет на автономной плате esp-relay: планшет замком не управляет.
   final bool standalone;
 
+  /// Вариант микромаркета: serial, P6-LZ или автономный (headless).
+  final MmVariant mmVariant;
+  final ValueChanged<MmVariant> onMmVariantChanged;
+
   /// Автономный вариант вообще предлагается. Ложь для O!Деньги: заказ там
   /// пришлось бы оформлять через `create-payment`, а она умеет только Kaspi,
   /// и покупатель в Кыргызстане получил бы не тот QR.
   final bool standaloneAllowed;
-
-  final ValueChanged<bool> onStandaloneChanged;
 
   final BoardProtocol selected;
 
@@ -391,26 +405,12 @@ class _ProtocolCard extends StatelessWidget {
             ),
           ),
           const SizedBox(height: 8),
-          Wrap(
-            spacing: 6,
-            runSpacing: 6,
-            children: [
-              for (final p in BoardProtocol.values)
-                ChoiceChip(
-                  label: Text(p.label),
-                  selected: selected == p,
-                  onSelected: (_) {
-                    if (selected != p) onSelect(p);
-                  },
-                  labelStyle: const TextStyle(
-                    color: Colors.black,
-                    fontSize: 12,
-                    fontWeight: FontWeight.w600,
-                  ),
-                  backgroundColor: Colors.grey.shade300,
-                  selectedColor: Colors.amberAccent,
-                ),
-            ],
+          _Dropdown<BoardProtocol>(
+            value: selected,
+            items: {for (final p in BoardProtocol.values) p: p.label},
+            onChanged: (p) {
+              if (selected != p) onSelect(p);
+            },
           ),
           const SizedBox(height: 6),
           Text(
@@ -463,43 +463,29 @@ class _ProtocolCard extends StatelessWidget {
               ),
             ),
             const SizedBox(height: 8),
-            Wrap(
-              spacing: 6,
-              runSpacing: 6,
-              children: [
-                for (final mode in const [false, true])
-                  ChoiceChip(
-                    label: Text(s.t(mode
-                        ? 'diag_mm_link_standalone'
-                        : 'diag_mm_link_usb')),
-                    selected: standalone == mode,
-                    // Заблокированный чип не молчит: подпись под ним говорит,
-                    // почему автономный вариант недоступен.
-                    onSelected: (mode && !standaloneAllowed)
-                        ? null
-                        : (_) {
-                            if (standalone != mode) onStandaloneChanged(mode);
-                          },
-                    labelStyle: TextStyle(
-                      color: (mode && !standaloneAllowed)
-                          ? Colors.black38
-                          : Colors.black,
-                      fontSize: 12,
-                      fontWeight: FontWeight.w600,
-                    ),
-                    backgroundColor: Colors.grey.shade300,
-                    disabledColor: Colors.grey.shade700,
-                    selectedColor: Colors.amberAccent,
-                  ),
-              ],
+            _Dropdown<MmVariant>(
+              value: mmVariant,
+              items: {
+                MmVariant.serial: s.t('diag_mm_var_serial'),
+                MmVariant.p6lz: s.t('diag_mm_var_p6lz'),
+                if (standaloneAllowed)
+                  MmVariant.headless: s.t('diag_mm_var_headless'),
+              },
+              onChanged: (v) {
+                if (mmVariant != v) onMmVariantChanged(v);
+              },
             ),
             const SizedBox(height: 6),
             Text(
-              standaloneAllowed
+              mmVariant == MmVariant.headless
                   ? s.t('diag_mm_link_standalone_hint')
-                  : s.t('diag_mm_link_odg_blocked'),
+                  : mmVariant == MmVariant.p6lz
+                      ? s.t('diag_mm_var_p6lz_hint')
+                      : standaloneAllowed
+                          ? s.t('diag_mm_var_serial_hint')
+                          : s.t('diag_mm_link_odg_blocked'),
               style: TextStyle(
-                color: standaloneAllowed
+                color: (standaloneAllowed || mmVariant != MmVariant.serial)
                     ? Colors.white38
                     : Colors.orangeAccent.shade100,
                 fontSize: 11,
@@ -797,7 +783,17 @@ class _ControlsCard extends StatelessWidget {
         color: Colors.white.withValues(alpha: 0.06),
         borderRadius: BorderRadius.circular(12),
       ),
-      child: Row(
+      child: Column(mainAxisSize: MainAxisSize.min, children: [
+        if (board.isP6lz)
+          Padding(
+            padding: const EdgeInsets.only(bottom: 6),
+            child: Text(
+              '${s.t('diag_lock_state')}: ${_lockText(s, board.lockLocked)}   '
+              '${s.t('diag_door_state')}: ${_doorText(s, board.doorOpen)}',
+              style: const TextStyle(color: Colors.white70),
+            ),
+          ),
+        Row(
         children: [
           Expanded(
             child: FilledButton.icon(
@@ -866,9 +862,18 @@ class _ControlsCard extends StatelessWidget {
             ),
           ],
         ],
-      ),
+        ),
+      ]),
     );
   }
+
+  static String _lockText(Strings s, bool? locked) => locked == null
+      ? '—'
+      : s.t(locked ? 'diag_state_locked' : 'diag_state_unlocked');
+
+  static String _doorText(Strings s, bool? open) => open == null
+      ? '—'
+      : s.t(open ? 'diag_door_open' : 'diag_door_closed');
 }
 
 class _LogPanel extends StatelessWidget {
@@ -968,6 +973,50 @@ class _LogPanel extends StatelessWidget {
             ),
           ),
         ],
+      ),
+    );
+  }
+}
+
+/// Вариант платы в режиме «Микромаркет».
+enum MmVariant { serial, p6lz, headless }
+
+/// Выпадающий список в стиле карточек вкладки «Плата».
+class _Dropdown<T> extends StatelessWidget {
+  const _Dropdown({
+    required this.value,
+    required this.items,
+    required this.onChanged,
+  });
+
+  final T value;
+  final Map<T, String> items;
+  final ValueChanged<T> onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12),
+      decoration: BoxDecoration(
+        color: Colors.white.withValues(alpha: 0.08),
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: DropdownButtonHideUnderline(
+        child: DropdownButton<T>(
+          value: items.containsKey(value) ? value : null,
+          isExpanded: true,
+          dropdownColor: Colors.grey.shade800,
+          iconEnabledColor: Colors.amberAccent,
+          style: const TextStyle(
+              color: Colors.white, fontSize: 14, fontWeight: FontWeight.w600),
+          items: [
+            for (final e in items.entries)
+              DropdownMenuItem<T>(value: e.key, child: Text(e.value)),
+          ],
+          onChanged: (v) {
+            if (v != null) onChanged(v);
+          },
+        ),
       ),
     );
   }

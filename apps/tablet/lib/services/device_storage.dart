@@ -59,6 +59,7 @@ class DeviceStorage extends ChangeNotifier {
   // сети, слушает MQTT и открывает замок по оплате. Планшету с ней говорить
   // не о чем, поэтому отсутствие USB в этом режиме не авария, а норма.
   static const _kMmStandalone = 'micromarket_standalone';
+  static const _kMmP6lz = 'micromarket_p6lz';
 
   // Сколько секунд держать замок открытым в режиме микромаркета.
   // Живёт на планшете, а не в прошивке: у релейной платы нет сетевого OTA,
@@ -212,6 +213,15 @@ class DeviceStorage extends ChangeNotifier {
 
   Future<void> setMicromarketStandalone(bool v) async {
     await _prefs.setBool(_kMmStandalone, v);
+    notifyListeners();
+  }
+
+  /// Микромаркет на плате P6-LZ (замок + холодильник по тому же serial-каналу).
+  /// Значим только вне автономного режима — гейт в [BoardClient.isP6lz].
+  bool get micromarketP6lz => _prefs.getBool(_kMmP6lz) ?? false;
+
+  Future<void> setMicromarketP6lz(bool v) async {
+    await _prefs.setBool(_kMmP6lz, v);
     notifyListeners();
   }
 

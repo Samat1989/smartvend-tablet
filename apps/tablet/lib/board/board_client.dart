@@ -194,6 +194,27 @@ class BoardClient extends ChangeNotifier {
   bool _standaloneLock = false;
   bool get isStandaloneLock => _standaloneLock && isMicromarket;
 
+  /// Микромаркет на плате P6-LZ: тот же текстовый канал, что у esp-serial,
+  /// плюс `STATUS` (замок/дверь) и `CLIMATE …` (холодильник под управлением
+  /// демона платы). У обычной serial-платы этих команд нет, поэтому опрос
+  /// статуса и вкладка «Холодильник» включаются только этим флагом.
+  bool _p6lz = false;
+  bool get isP6lz => _p6lz && isMicromarket && !isStandaloneLock;
+
+  void setP6lz(bool v) {
+    if (_p6lz == v) return;
+    _p6lz = v;
+    _statusUnsupported = false;
+    _lockLocked = null;
+    _doorOpen = null;
+    // ignore: unawaited_futures — fire-and-forget prefs write
+    _storage?.setMicromarketP6lz(v);
+    _info(v
+        ? 'Плата → P6-LZ: замок, статус двери и холодильник'
+        : 'Плата → обычный serial: только замок');
+    notifyListeners();
+  }
+
   /// Переключить способ связи с замком. Вызывающий сам разрывает или
   /// поднимает соединение — порядок важен, флаг должен встать раньше, иначе
   /// [autoConnect] уйдёт искать плату, которой нет.
@@ -319,6 +340,7 @@ class BoardClient extends ChangeNotifier {
     _lytSwapRowCol = storage?.lytSwapRowCol ?? false;
     _m102MotorType = storage?.m102MotorType ?? 2;
     _standaloneLock = storage?.micromarketStandalone ?? false;
+    _p6lz = storage?.micromarketP6lz ?? false;
     _usbEventSub = UsbSerial.usbEventStream?.listen((event) async {
       // Автономный микромаркет: провода нет, и любое USB-событие тут чужое —
       // флешка монтажника, зарядка. Без этого выхода мы бы вывесили системный
@@ -834,6 +856,9 @@ class BoardClient extends ChangeNotifier {
     _lytRx.clear();
     _firmwareId = null;
     _consecutiveFailures = 0;
+    _statusUnsupported = false;
+    _lockLocked = null;
+    _doorOpen = null;
     notifyListeners();
     try {
       await oldRx?.cancel();
@@ -1059,8 +1084,10 @@ class BoardClient extends ChangeNotifier {
           _info('Связь с платой восстановлена');
           notifyListeners();
         }
+        await refreshLockStatus();
         return;
       }
+      _setLockStatus(null, null);
       _consecutiveFailures++;
       _err('Плата не ответила на PING (подряд: $_consecutiveFailures)');
       notifyListeners();
@@ -1172,6 +1199,140 @@ class BoardClient extends ChangeNotifier {
     }
     _err('Замок не открылся: ${reply ?? "нет ответа"}');
     return false;
+  }
+
+  // ---------- Микромаркет: статус замка/двери и климат (плата P6-LZ) ----------
+  //
+  // Эти команды понимает мост на P6-LZ (`usb_cmd_bridge.sh`): `STATUS` ->
+  // `LOCK=<0|1> DOOR=<0|1>`, `CLIMATE SETPOINT <t>` / `OFF` / `STATE`. Релейная
+  // плата esp-serial отвечает на них `ERR ...` — тогда считаем, что функции нет,
+  // и больше не спрашиваем (до переподключения).
+
+  bool? _lockLocked;
+  bool? _doorOpen;
+
+  /// Замок заперт? null — статус неизвестен или плата его не отдаёт.
+  bool? get lockLocked => _lockLocked;
+
+  /// Дверь открыта (hall-датчик)? null — неизвестно.
+  bool? get doorOpen => _doorOpen;
+
+  bool _statusUnsupported = false;
+
+  void _setLockStatus(bool? locked, bool? doorOpen) {
+    if (_lockLocked == locked && _doorOpen == doorOpen) return;
+    _lockLocked = locked;
+    _doorOpen = doorOpen;
+    notifyListeners();
+  }
+
+  /// Разбор `LOCK=1 DOOR=0` (регистр и порядок не важны). Значения не 0/1
+  /// дают null. Возвращает null, если в строке нет ни одного поля.
+  @visibleForTesting
+  static ({bool? locked, bool? doorOpen})? parseLockStatus(String line) {
+    bool? locked;
+    bool? door;
+    var found = false;
+    for (final part in line.trim().split(RegExp(r'\s+'))) {
+      final kv = part.split('=');
+      if (kv.length != 2) continue;
+      final v = kv[1] == '1' ? true : (kv[1] == '0' ? false : null);
+      switch (kv[0].toUpperCase()) {
+        case 'LOCK':
+          // g67 на P6-LZ — датчик «замок открыт»: 1 = открыт, 0 = заперт
+          locked = v == null ? null : !v;
+          found = true;
+        case 'DOOR':
+          // hall g70: 1 = дверь открыта, 0 = закрыта (магнит рядом)
+          door = v;
+          found = true;
+      }
+    }
+    return found ? (locked: locked, doorOpen: door) : null;
+  }
+
+  /// Спросить у платы состояние замка и двери. false — нет ответа или
+  /// плата команды не знает.
+  Future<bool> refreshLockStatus() async {
+    if (!isP6lz || _statusUnsupported) return false;
+    final reply = await _mmCommand('STATUS');
+    if (reply == null) return false;
+    final parsed = parseLockStatus(reply);
+    if (parsed == null) {
+      _statusUnsupported = true;
+      _info('Плата не отдаёт STATUS ($reply) — опрос выключен');
+      _setLockStatus(null, null);
+      return false;
+    }
+    _setLockStatus(parsed.locked, parsed.doorOpen);
+    return true;
+  }
+
+  /// Уставка температуры, °C. true — плата ответила `OK`.
+  Future<bool> setClimateSetpoint(num celsius) async {
+    if (!isP6lz) return false;
+    // плата принимает только целые градусы
+    final t = celsius.round().clamp(-30, 30);
+    final reply = await _mmCommand('CLIMATE SETPOINT $t',
+        timeout: const Duration(seconds: 8));
+    final ok = reply != null && !reply.toUpperCase().startsWith('ERR');
+    if (ok) {
+      _info('Уставка климата $t °C: $reply');
+    } else {
+      _err('Уставка не принята: ${reply ?? "нет ответа"}');
+    }
+    return ok;
+  }
+
+  /// Выключить компрессор (через демон платы).
+  Future<bool> climateOff() async {
+    if (!isP6lz) return false;
+    final reply =
+        await _mmCommand('CLIMATE OFF', timeout: const Duration(seconds: 8));
+    return reply != null && !reply.toUpperCase().startsWith('ERR');
+  }
+
+  /// Разбор `STATE mode=1 temp=5`: mode 1 — охлаждение, 3 — выкл; temp — уставка
+  /// (100 = «выкл»). `?` и мусор дают null. null целиком — это не STATE.
+  @visibleForTesting
+  static ({int? mode, int? setpoint})? parseClimateState(String line) {
+    final t = line.trim().split(RegExp(r'\s+'));
+    if (t.isEmpty || t.first.toUpperCase() != 'STATE') return null;
+    int? mode;
+    int? temp;
+    for (final part in t.skip(1)) {
+      final kv = part.split('=');
+      if (kv.length != 2) continue;
+      final v = int.tryParse(kv[1]);
+      if (kv[0] == 'mode') mode = v;
+      if (kv[0] == 'temp') temp = v;
+    }
+    return (mode: mode, setpoint: temp);
+  }
+
+  /// Разбор `TEMP=4.5`. `none`, `ERR…`, мусор и −100 (так демон платы
+  /// отмечает «датчика нет») дают null.
+  @visibleForTesting
+  static double? parseClimateTemp(String line) {
+    final m = RegExp(r'^\s*TEMP=(-?\d+(?:\.\d+)?)\s*$', caseSensitive: false)
+        .firstMatch(line);
+    final v = m == null ? null : double.tryParse(m.group(1)!);
+    return (v == null || v <= -50) ? null : v;
+  }
+
+  /// Текущая температура в салоне, °C. null — нет ответа или датчик молчит.
+  Future<double?> climateTemp() async {
+    if (!isP6lz) return null;
+    final reply = await _mmCommand('CLIMATE TEMP',
+        timeout: const Duration(seconds: 3));
+    return reply == null ? null : parseClimateTemp(reply);
+  }
+
+  /// Режим и уставка климата, как их хранит плата. null — нет ответа.
+  Future<({int? mode, int? setpoint})?> climateState() async {
+    if (!isP6lz) return null;
+    final reply = await _mmCommand('CLIMATE STATE');
+    return reply == null ? null : parseClimateState(reply);
   }
 
   // ---------- BarysVend V27.2 (LiYuTai) protocol ----------

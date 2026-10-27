@@ -7,6 +7,7 @@ import '../services/strings.dart';
 import '../widgets/service_tile.dart';
 import 'board_diag_screen.dart';
 import 'climate_screen.dart';
+import 'p6_climate_screen.dart';
 import 'inventory_edit_screen.dart';
 import 'layout_editor_screen.dart';
 import 'screensaver_media_screen.dart';
@@ -26,7 +27,9 @@ class ServiceMenuScreen extends StatelessWidget {
     // На плате с замком половина сервисных функций физически отсутствует:
     // моторов нет, каналов DO и датчиков температуры тоже. Плитки не прячем,
     // а гасим — см. ServiceTile.disabledReason.
-    final lockBoard = context.watch<BoardClient>().isMicromarket;
+    final board = context.watch<BoardClient>();
+    final lockBoard = board.isMicromarket;
+    final p6lz = board.isP6lz;
 
     return Scaffold(
       backgroundColor: Colors.grey.shade900,
@@ -69,10 +72,16 @@ class ServiceMenuScreen extends StatelessWidget {
                       // На релейной плате нет каналов DO и датчиков: writeDo и
                       // readTemp в этом режиме возвращают «не поддерживается»,
                       // так что экран климата управлял бы пустотой.
-                      disabledReason: lockBoard ? s.t('tile_off_no_channels') : null,
+                      // P6-LZ — исключение: холодильником там заведует демон
+                      // платы, у него свой экран (режим и уставка).
+                      disabledReason: (lockBoard && !p6lz)
+                          ? s.t('tile_off_no_channels')
+                          : null,
                       onTap: () => Navigator.of(context).push(
                         MaterialPageRoute(
-                            builder: (_) => const ClimateScreen()),
+                            builder: (_) => p6lz
+                                ? const P6ClimateScreen()
+                                : const ClimateScreen()),
                       ),
                     ),
                     ServiceTile(
