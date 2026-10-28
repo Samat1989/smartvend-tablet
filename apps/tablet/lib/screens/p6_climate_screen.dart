@@ -26,6 +26,7 @@ class _P6ClimateScreenState extends State<P6ClimateScreen> {
   int? _boardMode;
   int? _boardSetpoint;
   double? _temp;
+  bool? _light;
   bool _answered = true;
   bool _busy = false;
   Timer? _timer;
@@ -50,8 +51,10 @@ class _P6ClimateScreenState extends State<P6ClimateScreen> {
     final board = context.read<BoardClient>();
     final st = await board.climateState();
     final temp = st == null ? null : await board.climateTemp();
+    final light = st == null ? null : await board.lightState();
     if (!mounted) return;
     setState(() {
+      _light = light;
       _answered = st != null;
       _boardMode = st?.mode;
       _boardSetpoint = st?.setpoint;
@@ -62,6 +65,25 @@ class _P6ClimateScreenState extends State<P6ClimateScreen> {
         if (sp != null && sp >= _min && sp <= _max) _setpoint = sp.toDouble();
       }
     });
+  }
+
+  Future<void> _toggleLight(bool on) async {
+    final s = context.read<Strings>();
+    final board = context.read<BoardClient>();
+    final messenger = ScaffoldMessenger.of(context);
+    setState(() => _busy = true);
+    final ok = await board.setLight(on);
+    if (!mounted) return;
+    setState(() {
+      _busy = false;
+      if (ok) _light = on;
+    });
+    if (!ok) {
+      messenger.showSnackBar(SnackBar(
+        content: Text(s.t('fridge_failed')),
+        backgroundColor: Colors.redAccent,
+      ));
+    }
   }
 
   Future<void> _apply() async {
@@ -92,6 +114,16 @@ class _P6ClimateScreenState extends State<P6ClimateScreen> {
         padding: const EdgeInsets.all(16),
         children: [
           _stateCard(s),
+          const SizedBox(height: 16),
+          Card(
+            child: SwitchListTile(
+              secondary: Icon(Icons.lightbulb,
+                  color: _light == true ? Colors.amber : Colors.grey),
+              title: Text(s.t('fridge_light')),
+              value: _light ?? false,
+              onChanged: (_busy || _light == null) ? null : _toggleLight,
+            ),
+          ),
           const SizedBox(height: 16),
           Card(
             child: Padding(

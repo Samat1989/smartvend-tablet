@@ -1335,6 +1335,25 @@ class BoardClient extends ChangeNotifier {
     return reply == null ? null : parseClimateState(reply);
   }
 
+  /// Подсветка холодильника (`LIGHT STATE` -> `LIGHT=ON|OFF`). null — нет
+  /// ответа или плата команды не знает.
+  Future<bool?> lightState() async {
+    if (!isP6lz) return null;
+    final reply = await _mmCommand('LIGHT STATE');
+    if (reply == null) return null;
+    final v = reply.trim().toUpperCase();
+    return v == 'LIGHT=ON' ? true : (v == 'LIGHT=OFF' ? false : null);
+  }
+
+  /// Включить/выключить подсветку холодильника. true — плата ответила `OK`.
+  Future<bool> setLight(bool on) async {
+    if (!isP6lz) return false;
+    final reply = await _mmCommand('LIGHT ${on ? 'ON' : 'OFF'}');
+    final ok = reply != null && !reply.toUpperCase().startsWith('ERR');
+    if (!ok) _err('Подсветка не переключилась: ${reply ?? "нет ответа"}');
+    return ok;
+  }
+
   // ---------- BarysVend V27.2 (LiYuTai) protocol ----------
   //
   // Frame: `AA [len] … [XOR] DD` — start 0xAA, stop 0xDD, checksum =

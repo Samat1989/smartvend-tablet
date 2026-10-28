@@ -1352,6 +1352,12 @@ class Strings extends ChangeNotifier {
       'ky': 'Плата жооп берген жок',
       'en': 'No answer from the board',
     },
+    'fridge_light': {
+      'ru': 'Подсветка',
+      'kk': 'Жарық',
+      'ky': 'Жарыктандыруу',
+      'en': 'Light',
+    },
     'diag_lock_ok': {
       'ru': 'Плата приняла команду — замок открыт на %n% с',
       'kk': 'Плата команданы қабылдады — құлып %n% с ашық',
