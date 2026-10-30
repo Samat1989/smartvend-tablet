@@ -6,6 +6,10 @@ import { IconButton } from './Button';
 // Open dialogs, innermost last. Escape closes only the top one: the catalog
 // picker sits on the inventory form, and one key press must not close both.
 const stack = [];
+// Исходный overflow у body запоминается один раз — когда открывается первая
+// модалка. Если каждая запоминает его сама, вторая (поверх первой) сохраняет
+// уже 'hidden', и при закрытии в обратном порядке прокрутка остаётся заблокированной.
+let savedOverflow = '';
 
 const FOCUSABLE = 'input:not([type=hidden]):not([disabled]), select:not([disabled]), textarea:not([disabled]), button:not([disabled]), [href], [tabindex]:not([tabindex="-1"])';
 
@@ -47,6 +51,7 @@ export default function Modal({
 
   useEffect(() => {
     const token = {};
+    if (!stack.length) savedOverflow = document.body.style.overflow;
     stack.push(token);
     const opener = document.activeElement;
     const root = ref.current;
@@ -55,7 +60,6 @@ export default function Modal({
       ?? root?.querySelector(FOCUSABLE);
     first?.focus({ preventScroll: true });
 
-    const prevOverflow = document.body.style.overflow;
     document.body.style.overflow = 'hidden';
 
     const onKey = (e) => {
@@ -79,7 +83,7 @@ export default function Modal({
       document.removeEventListener('keydown', onKey);
       const i = stack.indexOf(token);
       if (i >= 0) stack.splice(i, 1);
-      if (!stack.length) document.body.style.overflow = prevOverflow;
+      if (!stack.length) document.body.style.overflow = savedOverflow;
       if (opener && typeof opener.focus === 'function' && document.contains(opener)) opener.focus({ preventScroll: true });
     };
   }, []);
