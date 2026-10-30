@@ -13,7 +13,7 @@
 //
 // The door's outcome lands in sales.door_status: opened | failed | no_ack.
 
-import type { SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2";
+import type { SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2.118.0";
 import { DeviceChannel, sleep } from "./device_channel.ts";
 import { paymentResult } from "./smartvend.ts";
 

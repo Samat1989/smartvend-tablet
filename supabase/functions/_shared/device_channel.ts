@@ -11,7 +11,7 @@
 // window runs inside create-payment's background task and stays subscribed
 // for its whole length.
 
-import type { SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2";
+import type { SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2.118.0";
 
 type Payload = Record<string, unknown>;
 type Waiter = { event: string; pred: (p: Payload) => boolean; resolve: (p: Payload | null) => void };

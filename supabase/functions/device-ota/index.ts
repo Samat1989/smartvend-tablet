@@ -1,4 +1,4 @@
-import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { createClient } from "https://esm.sh/@supabase/supabase-js@2.118.0";
 import { DeviceChannel } from "../_shared/device_channel.ts";
 
 // Проверка обновления прошивки платы прямо сейчас (кнопка в панели).

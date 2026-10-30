@@ -1,4 +1,4 @@
-import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { createClient } from "https://esm.sh/@supabase/supabase-js@2.118.0";
 
 // Device provisioning lookup. The ESP32 relay can't download the 1.85 MB /
 // 14867-entry SmartVend machine list (no RAM), so it asks us by machid and we

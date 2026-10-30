@@ -1,4 +1,4 @@
-import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { createClient } from "https://esm.sh/@supabase/supabase-js@2.118.0";
 
 // Finalize a payment from the ESP32 relay. The device subscribes to the
 // SmartVend MQTT topic and, on a "Processed order" (code 1) event, POSTs
