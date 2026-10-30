@@ -178,8 +178,16 @@ export default function Admin() {
       err?.status === 401 || err?.context?.status === 401;
     if (!looksAuth) return false;
 
+    // getSession() only reads localStorage, so a token the server has already
+    // revoked (signed in elsewhere, session closed) still comes back "alive".
+    // Ask the server: refreshSession() fails for a dead session, and is a
+    // no-op in effect for a live one — whose 401 was then a genuine denial.
     const { data } = await supabase.auth.getSession();
-    if (data?.session) return false;   // signed in after all — a genuine denial
+    if (data?.session) {
+      const { data: fresh, error } = await supabase.auth.refreshSession();
+      if (fresh?.session && !error) return false;
+      await supabase.auth.signOut({ scope: 'local' }).catch(() => {});
+    }
 
     setSession(null);
     showToast(t('session_expired'), 'error');
