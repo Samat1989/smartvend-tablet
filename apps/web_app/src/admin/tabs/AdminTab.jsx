@@ -212,7 +212,7 @@ function DevicesTable({ rows, loading, onTransfer, onDelete, onChangeKind, onChe
                             <span className="block font-bold text-ink">{m.name || '—'}</span>
                             <span className="block text-xs text-slate-600">
                               {t('apparatus_no')}{m.id}
-                              {m.heartbeat?.app_version && ` · ${t('lamp_tablet')} ${m.heartbeat.app_version}`}
+                              {m.kind !== 'micromarket_static' && m.heartbeat?.app_version && ` · ${t('lamp_tablet')} ${m.heartbeat.app_version}`}
                               {m.rt?.board_ver && ` · ${t('lamp_board')} ${m.rt.board_ver}`}
                             </span>
                           </span>

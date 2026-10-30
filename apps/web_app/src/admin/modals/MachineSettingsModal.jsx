@@ -269,7 +269,7 @@ export default function MachineSettingsModal({ market, rtLive, rtState, onClose,
             <dt className="text-slate-600">{t('adm_col_kind')}</dt>
             <dd className="font-semibold text-ink">{kindLabel(market.kind, t)}</dd>
             <dt className="text-slate-600">{t('tablet_app_version')}</dt>
-            <dd className="font-semibold text-ink">{market.status?.app_version || '—'}</dd>
+            <dd className="font-semibold text-ink">{market.kind === 'micromarket_static' ? '—' : (market.status?.app_version || '—')}</dd>
             <dt className="text-slate-600">{t('tablet_last_signal')}</dt>
             <dd className="font-semibold text-ink">{seen ? new Date(seen).toLocaleString(i18n.language) : t('never')}</dd>
           </dl>
