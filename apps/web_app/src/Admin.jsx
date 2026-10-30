@@ -999,33 +999,51 @@ export default function Admin() {
   }
 
   // The owner is picked in TransferModal; this asks once more, naming both.
-  function confirmTransfer(to) {
+  function confirmTransfer(to, resetHistory = false) {
     const market = transferTarget;
     if (!market || !to) return;
     const from = adminOwners.find((o) => o.id === market.owner_id)?.email ?? t('no_owner');
+    const subject = `${machineName(market, t)} · ${t('apparatus_no')}${market.id}`;
+    if (!resetHistory) {
+      setConfirmAction({
+        title: t('transfer_confirm_title'),
+        subject,
+        message: t('transfer_confirm_msg', { from, to: to.email }),
+        tone: 'primary',
+        yesLabel: t('transfer_short'),
+        onYes: () => transferDevice(to, false),
+      });
+      return;
+    }
+    // История стирается безвозвратно — как при удалении, нужен ввод номера.
     setConfirmAction({
-      title: t('transfer_confirm_title'),
-      subject: `${machineName(market, t)} · ${t('apparatus_no')}${market.id}`,
-      message: t('transfer_confirm_msg', { from, to: to.email }),
-      tone: 'primary',
-      yesLabel: t('transfer_short'),
-      onYes: () => transferDevice(to),
+      title: t('transfer_reset_title'),
+      subject,
+      message: t('transfer_reset_msg', { from, to: to.email, id: market.id }),
+      typeToConfirm: String(market.id),
+      typeLabel: t('delete_device_type_label'),
+      yesLabel: t('transfer_reset_yes'),
+      onYes: () => transferDevice(to, true),
     });
   }
 
-  async function transferDevice(to) {
+  async function transferDevice(to, resetHistory = false) {
     const market = transferTarget;
     if (!market || !to) return;
     setTransferring(true);
     try {
       const data = await invokeAdminFn('device-admin', {
-        body: { action: 'transfer', machid: market.id, owner_id: to.id },
+        body: {
+          action: 'transfer', machid: market.id, owner_id: to.id,
+          ...(resetHistory ? { reset_history: true, confirm: true } : {}),
+        },
       });
       setTransferTarget(null);
       await Promise.all([fetchAdminDevices(), fetchUsers(), fetchMarkets()]);
       showToast(`${t('device_transferred')} → ${data?.owner_email ?? to.email}`);
     } catch (err) {
-      showToast(`${t('device_transfer_error')}: ${err.message}`, 'error');
+      if (err.code === 'has_pending_orders') showToast(t('device_del_pending'), 'error');
+      else showToast(`${t('device_transfer_error')}: ${err.message}`, 'error');
     } finally {
       setTransferring(false);
     }

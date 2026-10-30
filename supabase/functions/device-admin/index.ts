@@ -1,10 +1,12 @@
-import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { createClient } from "https://esm.sh/@supabase/supabase-js@2.118.0";
 
 // Superadmin-only fleet management, called from the web admin
 // (apps/web_app → /admin, "Пользователи" tab → «Все устройства»).
 //
 //   POST { action: 'list' }                        → every machine + owner email
-//   POST { action: 'transfer', machid, owner_id }  → reassign to another account
+//   POST { action: 'transfer', machid, owner_id, reset_history?, confirm? }
+//                                                  → reassign to another account
+//   POST { action: 'reset_history', machid, confirm? } → wipe sales/orders, keep the machine
 //   POST { action: 'rename', machid, name }        → rename any machine
 //   POST { action: 'kind', machid, kind }          → change the machine type
 //   POST { action: 'delete', machid, confirm? }    → remove the machine
@@ -48,6 +50,28 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 // complete-order → finalize_paid_order; час перекрывает её многократно и
 // при этом не даёт вчерашнему мусору держать аппарат.
 const PENDING_FRESH_MS = 60 * 60 * 1000;
+
+// Сколько истории есть у аппарата и нет ли денег в полёте. Общий подсчёт для
+// delete и для очистки истории: оба стирают одни и те же таблицы.
+async function historyImpact(supabase, machid: number) {
+  const freshSince = new Date(Date.now() - PENDING_FRESH_MS).toISOString();
+  const [{ count: sales }, { count: orders }, { count: freshPending }] = await Promise.all([
+    supabase.from("sales").select("id", { count: "exact", head: true }).eq("micromarket_id", machid),
+    supabase.from("pending_orders").select("orderid", { count: "exact", head: true })
+      .eq("micromarket_id", machid),
+    supabase.from("pending_orders").select("orderid", { count: "exact", head: true })
+      .eq("micromarket_id", machid).eq("status", "pending").gte("created_at", freshSince),
+  ]);
+  return { sales: sales ?? 0, orders: orders ?? 0, freshPending: freshPending ?? 0 };
+}
+
+// Стирает продажи и заказы, оставляя аппарат, остатки, secret и привязку платы.
+async function wipeHistory(supabase, machid: number) {
+  const { error: e1 } = await supabase.from("sales").delete().eq("micromarket_id", machid);
+  if (e1) throw e1;
+  const { error: e2 } = await supabase.from("pending_orders").delete().eq("micromarket_id", machid);
+  if (e2) throw e2;
+}
 
 // Зеркало CHECK на micromarkets.kind (20260831120000) и того же списка в
 // device-claim. Значение, принятое здесь и отсутствующее там, приезжает
@@ -152,11 +176,45 @@ Deno.serve(async (req) => {
       const { data: target, error: targetErr } = await supabase.auth.admin.getUserById(ownerId);
       if (targetErr || !target?.user) return json({ error: "owner_not_found" }, 404);
 
+      // Перенос «с чистого листа»: история уходит, аппарат и его настройки
+      // остаются — без удаления и повторной привязки платы.
+      let wiped: { sales: number; orders: number } | null = null;
+      if (body.reset_history === true) {
+        const impact = await historyImpact(supabase, machid);
+        if (impact.freshPending > 0) {
+          return json({ error: "has_pending_orders", pending: impact.freshPending }, 409);
+        }
+        if (body.confirm !== true) {
+          return json({
+            error: "confirm_required", machid, name: market.name,
+            sales: impact.sales, orders: impact.orders,
+          }, 409);
+        }
+        await wipeHistory(supabase, machid);
+        wiped = { sales: impact.sales, orders: impact.orders };
+      }
+
       const { data: row, error } = await supabase
         .from("micromarkets").update({ owner_id: ownerId }).eq("id", machid)
         .select("id, name, kind, owner_id").single();
       if (error) throw error;
-      return json({ market: row, owner_email: target.user.email });
+      return json({ market: row, owner_email: target.user.email, wiped });
+    }
+
+    // ── reset_history: стереть продажи и заказы, аппарат оставить ──────────
+    if (action === "reset_history") {
+      const impact = await historyImpact(supabase, machid);
+      if (impact.freshPending > 0) {
+        return json({ error: "has_pending_orders", pending: impact.freshPending }, 409);
+      }
+      if (body.confirm !== true) {
+        return json({
+          error: "confirm_required", machid, name: market.name,
+          sales: impact.sales, orders: impact.orders,
+        }, 409);
+      }
+      await wipeHistory(supabase, machid);
+      return json({ reset: machid, sales: impact.sales, orders: impact.orders });
     }
 
     // ── rename ──────────────────────────────────────────────────────────────

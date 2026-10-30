@@ -430,6 +430,7 @@ export function TransferModal({ market, owners, busy, onConfirm, onClose }) {
   const { t } = useTranslation();
   const [q, setQ] = useState('');
   const [to, setTo] = useState(null);
+  const [resetHistory, setResetHistory] = useState(false);
   const from = owners.find(o => o.id === market.owner_id) || null;
   const shown = owners.filter(o => o.id !== market.owner_id && matches(q, o.email));
   return (
@@ -439,7 +440,7 @@ export function TransferModal({ market, owners, busy, onConfirm, onClose }) {
       onClose={busy ? () => {} : onClose}
       dismissable={!busy}
       mobile="full"
-      onSubmit={() => to && onConfirm(to)}
+      onSubmit={() => to && onConfirm(to, resetHistory)}
       footer={(
         <>
           <Button variant="secondary" onClick={onClose} disabled={busy}>{t('cancel')}</Button>
@@ -477,6 +478,20 @@ export function TransferModal({ market, owners, busy, onConfirm, onClose }) {
           ))}
           {shown.length === 0 && <li className="text-sm text-slate-600 py-3 text-center">{t('nothing_found')}</li>}
         </ul>
+
+        <label className="flex items-start gap-2 text-sm font-semibold text-ink cursor-pointer">
+          <input
+            type="checkbox"
+            className="mt-0.5 size-4"
+            checked={resetHistory}
+            onChange={(e) => setResetHistory(e.target.checked)}
+            disabled={busy}
+          />
+          <span>
+            {t('transfer_reset_history')}
+            <span className="block text-xs font-normal text-slate-600">{t('transfer_reset_history_hint')}</span>
+          </span>
+        </label>
 
         <Banner tone="warning">{t('transfer_confirm_hint')}</Banner>
       </div>
