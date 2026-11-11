@@ -69,6 +69,32 @@ flutter build apk --release    # релизная сборка
 
 Планшет должен быть с Android 5.0+ и USB OTG / USB-Host. На борту нужен FTDI или CH340 USB-RS485 адаптер.
 
+### Эмулятор, как у планшета Shengma
+
+Реальный планшет: Android 13 (API 33), 800×1280, 240 dpi, портрет.
+
+```bash
+tools/tablet_emulator.sh          # создаст AVD shengma_tab13 (при первом запуске) и запустит
+cd apps/tablet && flutter run -d emulator-5554
+```
+
+Нюансы:
+
+- Нужен KVM (`ls /dev/kvm`) и JDK (скрипт сам берёт из `~/.jdks`, иначе задайте `JAVA_HOME`).
+- `sdkmanager` устарел и зависает — образ ставится через `android sdk install` (делает скрипт).
+- USB-RS485 в эмуляторе нет: UI и платёж проверять можно, обмен с платой M109E/M102 — только на реальном планшете.
+
+### Отладка по Wi-Fi (adb)
+
+На планшете: Параметры разработчика → Отладка по Wi-Fi. Порты меняются при каждом открытии окна.
+
+```bash
+adb pair <ip>:<порт_сопряжения> <код>   # один раз
+adb mdns services                       # актуальный порт подключения
+adb connect <ip>:<порт_подключения>
+flutter run -d <id из flutter devices>
+```
+
 ## Подключение Supabase / Kaspi
 
 Подставьте свои значения в [services/supabase_api.dart](lib/services/supabase_api.dart) (`SupabaseConfig.url`, `SupabaseConfig.anonKey`) и [services/payment_service.dart](lib/services/payment_service.dart) (`SmartVendConfig.paymentUrl`). По умолчанию указаны проект `cgvfhtvdtdjsyluhlcbq.supabase.co` и шлюз `levending.smartvend.kz`.
