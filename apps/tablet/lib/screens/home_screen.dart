@@ -93,7 +93,8 @@ class _HomeScreenState extends State<HomeScreen> {
   /// clearly mid-pick and we mustn't steal their place in the catalog.
   static const Duration _shelfCycleAfter = Duration(seconds: 30);
   static const Duration _shelfCycleStep = Duration(seconds: 10);
-  static const Duration _cartAbandonAfter = Duration(minutes: 2);
+  static const Duration _cartAbandonAfter =
+      IdleService.returnToStorefrontAfter;
   // Idle delay before the attract loop is operator-set — a shop window
   // wants it after half a minute, a busy corridor not at all for ten.
   Duration get _screensaverAfter =>

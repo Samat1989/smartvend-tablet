@@ -11,10 +11,17 @@ class IdleService {
   IdleService._();
   static final IdleService instance = IdleService._();
 
+  /// Через сколько секунд без касаний сервисный режим, техподдержка и
+  /// брошенная корзина возвращают покупателя на витрину продаж.
+  static const Duration returnToStorefrontAfter = Duration(seconds: 120);
+
+  /// Источник времени; в тестах подменяется, чтобы двигать часы вручную.
+  DateTime Function() now = DateTime.now;
+
   DateTime lastTouchAt = DateTime.now();
 
   /// Bump the timestamp. Called from the top-level Listener on every
   /// `onPointerDown` / `onPointerMove` so any flick or tap counts as
   /// activity regardless of which screen handled it.
-  void touched() => lastTouchAt = DateTime.now();
+  void touched() => lastTouchAt = now();
 }

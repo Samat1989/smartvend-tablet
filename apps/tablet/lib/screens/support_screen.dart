@@ -6,6 +6,7 @@ import '../services/device_storage.dart';
 import '../services/strings.dart';
 import '../theme.dart';
 import '../widgets/close_circle_button.dart';
+import '../widgets/idle_return_timer.dart';
 
 /// Digits for a `wa.me` link, derived from however the operator typed the
 /// number. wa.me wants an international number with no punctuation and no
@@ -51,6 +52,14 @@ class SupportScreen extends StatelessWidget {
     final hours = storage.supportHours;
     final wa = whatsappDigits(storage.supportWhatsapp);
 
+    return IdleReturnTimer(
+      builder: (context, _) => _buildScaffold(
+          context, s, machid, phone, hours, wa),
+    );
+  }
+
+  Widget _buildScaffold(BuildContext context, Strings s, String? machid,
+      String? phone, String? hours, String? wa) {
     return Scaffold(
       backgroundColor: AppColors.iosBackground,
       body: SafeArea(

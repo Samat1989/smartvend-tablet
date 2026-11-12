@@ -4,6 +4,7 @@ import 'package:provider/provider.dart';
 import '../board/board_client.dart';
 import '../services/device_storage.dart';
 import '../services/strings.dart';
+import '../widgets/idle_return_timer.dart';
 import '../widgets/service_tile.dart';
 import 'board_diag_screen.dart';
 import 'climate_screen.dart';
@@ -31,6 +32,14 @@ class ServiceMenuScreen extends StatelessWidget {
     final lockBoard = board.isMicromarket;
     final p6lz = board.isP6lz;
 
+    return IdleReturnTimer(
+      builder: (context, remaining) => _buildScaffold(
+          context, s, remaining, lockBoard, p6lz),
+    );
+  }
+
+  Widget _buildScaffold(BuildContext context, Strings s, Duration remaining,
+      bool lockBoard, bool p6lz) {
     return Scaffold(
       backgroundColor: Colors.grey.shade900,
       appBar: AppBar(
@@ -39,6 +48,30 @@ class ServiceMenuScreen extends StatelessWidget {
         elevation: 0,
         title: Text(s.t('service_mode'),
             style: const TextStyle(fontWeight: FontWeight.bold)),
+        actions: [
+          Center(
+            child: Padding(
+              padding: const EdgeInsets.only(right: 16),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const Icon(Icons.timer_outlined, size: 18),
+                  const SizedBox(width: 4),
+                  Text(
+                    formatIdleRemaining(remaining),
+                    style: TextStyle(
+                      fontWeight: FontWeight.bold,
+                      fontFeatures: const [FontFeature.tabularFigures()],
+                      color: remaining.inSeconds <= 10
+                          ? Colors.redAccent
+                          : Colors.white,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ],
       ),
       body: SafeArea(
         child: Padding(
