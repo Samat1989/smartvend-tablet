@@ -205,21 +205,21 @@ class LayoutTemplate {
     builder: _buildFactory6x6Twin3,
   );
 
-  /// Заводская нумерация, но полки 1–3 — по 5 сдвоенных слотов
-  /// (моторы 99..95, 89..85, 79..75), полки 4–6 — по 10 обычных
-  /// (69..60, 59..50, 49..40). Подписи 001–005 / 011–015 / 021–025 /
-  /// 031–040 / 041–050 / 051–060.
-  static const LayoutTemplate factory3x5Twin3x10 = LayoutTemplate(
-    id: 'factory_3x5_twin_3x10',
-    name: 'lt_factory_3x5_3x10',
-    description: 'lt_factory_3x5_3x10_desc',
-    builder: _buildFactory3x5Twin3x10,
+  /// Заводская нумерация, но верхняя полка — 5 сдвоенных слотов (моторы
+  /// 99..95), остальные 5 полок — по 10 обычных (89..80, 79..70, 69..60,
+  /// 59..50, 49..40). Подписи 001–005 / 011–020 / 021–030 / 031–040 /
+  /// 041–050 / 051–060.
+  static const LayoutTemplate factory1x5Twin5x10 = LayoutTemplate(
+    id: 'factory_1x5_twin_5x10',
+    name: 'lt_factory_1x5_5x10',
+    description: 'lt_factory_1x5_5x10_desc',
+    builder: _buildFactory1x5Twin5x10,
   );
 
   static const List<LayoutTemplate> all = [
     factory6x6,
     factory6x6Twin3,
-    factory3x5Twin3x10,
+    factory1x5Twin5x10,
     mp2404_5_50,
     barysvendV272,
     micromarket4x5,
@@ -297,8 +297,8 @@ MachineLayout _buildFactory6x6Twin3() => MachineLayout(shelves: [
       for (var s = 1; s <= 6; s++) _factoryShelf(s, s <= 2 ? 3 : 6),
     ]);
 
-MachineLayout _buildFactory3x5Twin3x10() => MachineLayout(shelves: [
-      for (var s = 1; s <= 6; s++) _factoryShelf(s, s <= 3 ? 5 : 10),
+MachineLayout _buildFactory1x5Twin5x10() => MachineLayout(shelves: [
+      for (var s = 1; s <= 6; s++) _factoryShelf(s, s == 1 ? 5 : 10),
     ]);
 
 MachineLayout _buildMp2404() {

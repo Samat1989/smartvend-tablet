@@ -31,29 +31,28 @@ void main() {
     });
   });
 
-  group('factory3x5Twin3x10', () {
-    final l = LayoutTemplate.factory3x5Twin3x10.build();
+  group('factory1x5Twin5x10', () {
+    final l = LayoutTemplate.factory1x5Twin5x10.build();
 
-    test('3 полки по 5 и 3 по 10', () {
-      expect(l.shelves.map((s) => s.slots.length), [5, 5, 5, 10, 10, 10]);
+    test('1 полка на 5 слотов и 5 полок по 10', () {
+      expect(l.shelves.map((s) => s.slots.length), [5, 10, 10, 10, 10, 10]);
     });
 
     test('моторы и подписи', () {
       expect(_motors(l.shelves[0]), [99, 98, 97, 96, 95]);
-      expect(_motors(l.shelves[2]), [79, 78, 77, 76, 75]);
-      expect(_motors(l.shelves[3]),
-          [69, 68, 67, 66, 65, 64, 63, 62, 61, 60]);
+      expect(_labels(l.shelves[0]), ['001', '002', '003', '004', '005']);
+      expect(_motors(l.shelves[1]),
+          [89, 88, 87, 86, 85, 84, 83, 82, 81, 80]);
+      expect(_labels(l.shelves[1]).first, '011');
+      expect(l.shelves[1].label, '011 — 020');
       expect(_motors(l.shelves[5]).last, 40);
-      expect(_labels(l.shelves[2]).first, '021');
-      expect(l.shelves[3].label, '031 — 040');
       expect(l.shelves[5].label, '051 — 060');
     });
 
     test('моторы и подписи не повторяются', () {
-      final m = l.allUsedMotorIds;
-      expect(m.length, 45);
+      expect(l.allUsedMotorIds.length, 55);
       final labels = {for (final s in l.shelves) ..._labels(s)};
-      expect(labels.length, 45);
+      expect(labels.length, 55);
     });
   });
 
