@@ -23,6 +23,19 @@ import '../widgets/product_thumb.dart';
 /// Future iteration will interleave operator-supplied images / videos
 /// from `lib/services/media_service.dart`; the cycle infrastructure
 /// here is built to handle that case (the [_Slide] enum + page list).
+/// Дошёл ли ролик до конца. video_player не сообщает о завершении, поэтому
+/// смотрим на позицию у самой длительности при остановленном воспроизведении
+/// (при выключенном зацикливании так бывает только в конце).
+@visibleForTesting
+bool clipHasEnded({
+  required Duration position,
+  required Duration duration,
+  required bool isPlaying,
+}) {
+  if (duration <= Duration.zero || isPlaying) return false;
+  return position >= duration - const Duration(milliseconds: 250);
+}
+
 class ScreensaverScreen extends StatefulWidget {
   const ScreensaverScreen({super.key});
 
@@ -40,6 +53,11 @@ class _ScreensaverScreenState extends State<ScreensaverScreen> {
   /// re-arming on every rebuild — the screen rebuilds whenever MediaService
   /// or VendingService notifies, which has nothing to do with slide timing.
   int? _armedIndex;
+
+  /// Конец текущего ролика уже обработан. Слушатель контроллера срабатывает
+  /// на каждое изменение, и до перерисовки он мог вызвать `_advance` дважды
+  /// подряд — слайды перескакивали через один. Сбрасывается при запуске ролика.
+  bool _clipEndHandled = false;
 
   @override
   void initState() {
@@ -68,11 +86,14 @@ class _ScreensaverScreenState extends State<ScreensaverScreen> {
   /// with playback stopped — with looping off that only happens at the end.
   void _onVideoTick() {
     final c = _videoController;
-    if (c == null || !c.value.isInitialized) return;
-    final d = c.value.duration;
-    if (d <= Duration.zero) return;
-    if (c.value.isPlaying) return;
-    if (c.value.position < d - const Duration(milliseconds: 250)) return;
+    if (c == null || !c.value.isInitialized || _clipEndHandled) return;
+    if (!clipHasEnded(
+      position: c.value.position,
+      duration: c.value.duration,
+      isPlaying: c.value.isPlaying,
+    )) {
+      return;
+    }
     final count = _buildSlides().length;
     if (count <= 1) {
       // Single slide: nothing to advance to, so replay instead of
@@ -81,6 +102,7 @@ class _ScreensaverScreenState extends State<ScreensaverScreen> {
       c.play();
       return;
     }
+    _clipEndHandled = true;
     _advance(count);
   }
 
@@ -104,13 +126,13 @@ class _ScreensaverScreenState extends State<ScreensaverScreen> {
   /// Same shelf-resolution rule the catalog uses (MachineLayout first,
   /// MotorLayout fallback), so the screensaver mirrors whatever the
   /// customer would see if they tapped the screen and resumed shopping.
-  List<_ShelfData> _buildShelves(VendingService svc) {
+  List<ShelfData> _buildShelves(VendingService svc) {
     final byMotor = {for (final p in svc.catalog) p.motorId: p};
     final layout = svc.layout;
     if (layout.isNotEmpty) {
       return [
         for (final sh in layout.shelves)
-          _ShelfData(
+          ShelfData(
             label: sh.label,
             products: [
               for (final slot in sh.slots)
@@ -122,7 +144,7 @@ class _ScreensaverScreenState extends State<ScreensaverScreen> {
     }
     return [
       for (var s = 1; s <= MotorLayout.rows; s++)
-        _ShelfData(
+        ShelfData(
           label: MotorLayout.shelfLabelRange(s),
           products: [
             for (final m in MotorLayout.motorsForShelf(s))
@@ -177,6 +199,7 @@ class _ScreensaverScreenState extends State<ScreensaverScreen> {
     if (_videoForPath == slide.item.path && _videoController != null) {
       // Same clip coming round again (single-video loop): restart it
       // rather than leaving the last frame frozen on screen.
+      _clipEndHandled = false;
       await _videoController!.seekTo(Duration.zero);
       await _videoController!.play();
       return true;
@@ -193,6 +216,7 @@ class _ScreensaverScreenState extends State<ScreensaverScreen> {
       // event we advance on. With waitEnd off the slide timer cuts the
       // video anyway, and looping keeps short clips from freezing.
       await ctrl.setLooping(!waitEnd);
+      _clipEndHandled = false;
       await ctrl.setVolume(0); // silent attract loop
       await ctrl.play();
       if (!mounted) {
@@ -283,9 +307,10 @@ class _ScreensaverScreenState extends State<ScreensaverScreen> {
 
   Widget _renderSlide(_Slide slide, {required int index, required int total}) {
     return switch (slide) {
-      _ShelfSlide(:final data) => _ShelfSlideView(
+      _ShelfSlide(:final data) => ShelfSlideView(
           key: ValueKey('shelf-$index-${data.label}'),
           shelf: data,
+          columns: context.watch<DeviceStorage>().gridColumns,
           index: index,
           total: total,
         ),
@@ -308,7 +333,7 @@ sealed class _Slide {
 
 class _ShelfSlide extends _Slide {
   const _ShelfSlide(this.data);
-  final _ShelfData data;
+  final ShelfData data;
 }
 
 class _MediaSlide extends _Slide {
@@ -316,23 +341,32 @@ class _MediaSlide extends _Slide {
   final MediaItem item;
 }
 
-class _ShelfData {
-  const _ShelfData({required this.label, required this.products});
+@visibleForTesting
+class ShelfData {
+  const ShelfData({required this.label, required this.products});
   final String label;
   final List<Product> products;
 }
 
-class _ShelfSlideView extends StatelessWidget {
-  const _ShelfSlideView({
+@visibleForTesting
+class ShelfSlideView extends StatelessWidget {
+  const ShelfSlideView({
     super.key,
     required this.shelf,
     required this.index,
     required this.total,
+    required this.columns,
   });
 
-  final _ShelfData shelf;
+  final ShelfData shelf;
   final int index;
   final int total;
+
+  /// Колонок карточек — та же настройка, что у витрины
+  /// ([DeviceStorage.gridColumns]), чтобы скринсейвер показывал полки так же,
+  /// как их видит покупатель. Раньше число зависело от ширины в dp (на
+  /// планшете 800 px / 240 dpi всегда получалось 2).
+  final int columns;
 
   @override
   Widget build(BuildContext context) {
@@ -363,14 +397,10 @@ class _ShelfSlideView extends StatelessWidget {
           Expanded(
             child: LayoutBuilder(
               builder: (context, c) {
-                // 3 cols when there's room (wider tablets / landscape),
-                // 2 cols otherwise. Cards are big to grab attention from
-                // across the room.
-                final cols = c.maxWidth >= 720 ? 3 : 2;
                 return GridView.builder(
                   physics: const NeverScrollableScrollPhysics(),
                   gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
-                    crossAxisCount: cols,
+                    crossAxisCount: columns,
                     mainAxisSpacing: 20,
                     crossAxisSpacing: 20,
                     childAspectRatio: 0.78,
@@ -433,6 +463,15 @@ class _ShowcaseCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    // В 3 колонки на планшете карточка ~140 dp: обычные отступы и шрифты
+    // не помещают название рядом с ценой, поэтому ужимаем.
+    return LayoutBuilder(builder: (context, c) {
+      final compact = c.maxWidth < 180;
+      return _card(context, compact);
+    });
+  }
+
+  Widget _card(BuildContext context, bool compact) {
     return Container(
       decoration: const BoxDecoration(
         color: Colors.white,
@@ -457,7 +496,9 @@ class _ShowcaseCard extends StatelessWidget {
           Expanded(
             flex: 1,
             child: Padding(
-              padding: const EdgeInsets.fromLTRB(18, 10, 18, 14),
+              padding: compact
+                  ? const EdgeInsets.fromLTRB(10, 6, 10, 8)
+                  : const EdgeInsets.fromLTRB(18, 10, 18, 14),
               child: Row(
                 crossAxisAlignment: CrossAxisAlignment.center,
                 children: [
@@ -466,21 +507,21 @@ class _ShowcaseCard extends StatelessWidget {
                       product.name,
                       maxLines: 2,
                       overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(
+                      style: TextStyle(
                         color: AppColors.iosBlack,
-                        fontSize: 16,
+                        fontSize: compact ? 13 : 16,
                         fontWeight: FontWeight.w700,
                         letterSpacing: -0.1,
                         height: 1.15,
                       ),
                     ),
                   ),
-                  const SizedBox(width: 10),
+                  SizedBox(width: compact ? 6 : 10),
                   Text(
                     '${product.priceTenge} ${context.watch<Strings>().currency}',
-                    style: const TextStyle(
+                    style: TextStyle(
                       color: AppColors.iosOrange,
-                      fontSize: 20,
+                      fontSize: compact ? 15 : 20,
                       fontWeight: FontWeight.w900,
                       letterSpacing: -0.2,
                     ),
