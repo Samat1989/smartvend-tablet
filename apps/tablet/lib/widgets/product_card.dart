@@ -167,8 +167,7 @@ class ProductCard extends StatelessWidget {
                       ),
                     ),
                     // Card with a photo — the number rides in a small badge
-                    // at the bottom-left, clear of the counter pill (top
-                    // left) and the add button (top right).
+                    // at the bottom-left of the picture.
                     if (slotLabel != null && hasPhoto)
                       Positioned(
                         bottom: 10,
@@ -192,42 +191,6 @@ class ProductCard extends StatelessWidget {
                           ),
                         ),
                       ),
-                    // Counter pill on the left, blue plus on the right —
-                    // mirrors the Figma "Selected" Card state. Counter pill
-                    // is hidden until at least one is in the cart.
-                    //
-                    // Laid out as one spaceBetween Row rather than two
-                    // independently positioned children: pinned separately
-                    // to left: 12 / right: 12 they overlapped on a narrow
-                    // card (3 columns, long "12" counter), the plus sitting
-                    // on top of the pill. In a Row they share the width and
-                    // the pill gives way instead of colliding.
-                    if (interactive)
-                      Positioned(
-                        top: 12,
-                        left: 12,
-                        right: 12,
-                        child: Row(
-                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            if (count > 0)
-                              Flexible(
-                                child: _CounterPill(
-                                  count: count,
-                                  onRemove: () =>
-                                      svc.removeOne(product.motorId),
-                                ),
-                              )
-                            else
-                              const SizedBox.shrink(),
-                            _AddButton(
-                              enabled: canAdd,
-                              onTap: canAdd ? () => _tryAdd(context) : null,
-                            ),
-                          ],
-                        ),
-                      ),
                   ],
                 ),
               ),
@@ -240,6 +203,24 @@ class ProductCard extends StatelessWidget {
               // price were cut off. The text needs a constant number of dp
               // (two 14-sp lines + padding); only the photo should give way
               // as cards get smaller.
+              // Выбранный товар: вместо названия и цены — «−  количество  +».
+              // Плюс-кнопки на фото больше нет (много синих кружков, а в
+              // 3 колонки они громоздкие); тап по самой карточке по-прежнему
+              // добавляет единицу.
+              if (interactive && count > 0)
+                SizedBox(
+                  height: _kTextStripHeight,
+                  child: Padding(
+                    padding: const EdgeInsets.fromLTRB(8, 6, 8, 8),
+                    child: _Stepper(
+                      count: count,
+                      canAdd: canAdd,
+                      onRemove: () => svc.removeOne(product.motorId),
+                      onAdd: () => _tryAdd(context),
+                    ),
+                  ),
+                )
+              else
               SizedBox(
                 height: _kTextStripHeight,
                 child: Padding(
@@ -303,101 +284,75 @@ class ProductCard extends StatelessWidget {
   }
 }
 
-/// Round blue "+" button overlaid on the card's image — matches the
-/// Figma "Menu - Nothing Selected" spec: solid blue 44-dp circle, no
-/// white outline ring, soft drop shadow underneath.
-class _AddButton extends StatelessWidget {
-  const _AddButton({required this.enabled, required this.onTap});
+/// «−  3  +» в нижней строке выбранной карточки. Кнопки светлые, чтобы
+/// на экране не множились синие и красные кружки; число по центру.
+/// Тап вне кнопок попадает в саму карточку и добавляет единицу.
+class _Stepper extends StatelessWidget {
+  const _Stepper({
+    required this.count,
+    required this.canAdd,
+    required this.onRemove,
+    required this.onAdd,
+  });
 
-  final bool enabled;
-  final VoidCallback? onTap;
+  final int count;
+  final bool canAdd;
+  final VoidCallback onRemove;
+  final VoidCallback onAdd;
 
   @override
   Widget build(BuildContext context) {
-    return DecoratedBox(
-      decoration: const BoxDecoration(
-        shape: BoxShape.circle,
-        boxShadow: [
-          BoxShadow(
-            color: Color(0x33000000),
-            blurRadius: 6,
-            offset: Offset(0, 2),
-          ),
-        ],
-      ),
-      child: Material(
-        color: enabled
-            ? AppColors.iosBlue
-            : AppColors.iosGray.withValues(alpha: 0.6),
-        shape: const CircleBorder(),
-        child: InkWell(
-          customBorder: const CircleBorder(),
-          onTap: onTap,
-          child: const SizedBox(
-            width: 44,
-            height: 44,
-            child: Icon(Icons.add, color: Colors.white, size: 24),
+    return Row(
+      children: [
+        Expanded(
+          child: _StepButton(icon: Icons.remove, onTap: onRemove),
+        ),
+        SizedBox(
+          width: 52,
+          child: Center(
+            child: Text(
+              '$count',
+              style: const TextStyle(
+                color: AppColors.iosBlack,
+                fontSize: 22,
+                fontWeight: FontWeight.w800,
+                height: 1,
+              ),
+            ),
           ),
         ),
-      ),
+        Expanded(
+          child: _StepButton(
+            icon: Icons.add,
+            onTap: canAdd ? onAdd : null,
+          ),
+        ),
+      ],
     );
   }
 }
 
-/// Red rounded pill shown on the top-left of a product's image once
-/// at least one is in the cart. The whole pill is a single tap target
-/// that removes one — the white minus circle inside is purely visual
-/// (no nested gesture). Operators on the kiosk preferred a bigger
-/// hit area to the tiny 28-dp minus circle.
-class _CounterPill extends StatelessWidget {
-  const _CounterPill({required this.count, required this.onRemove});
+class _StepButton extends StatelessWidget {
+  const _StepButton({required this.icon, required this.onTap});
 
-  final int count;
-  final VoidCallback onRemove;
+  final IconData icon;
+  final VoidCallback? onTap;
 
   @override
   Widget build(BuildContext context) {
+    final enabled = onTap != null;
     return Material(
-      color: const Color(0xFFE53935),
-      shape: const StadiumBorder(),
-      elevation: 1,
-      shadowColor: const Color(0x14000000),
+      color: AppColors.iosBackground,
+      borderRadius: BorderRadius.circular(12),
       child: InkWell(
-        customBorder: const StadiumBorder(),
-        onTap: onRemove,
+        borderRadius: BorderRadius.circular(12),
+        onTap: onTap,
         child: SizedBox(
-          height: 44,
-          child: Padding(
-            padding: const EdgeInsets.fromLTRB(16, 0, 6, 0),
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Text(
-                  '$count',
-                  style: const TextStyle(
-                    color: Colors.white,
-                    fontSize: 18,
-                    fontWeight: FontWeight.w700,
-                    letterSpacing: -0.2,
-                    height: 1,
-                  ),
-                ),
-                const SizedBox(width: 8),
-                Container(
-                  width: 28,
-                  height: 28,
-                  decoration: const BoxDecoration(
-                    color: Colors.white,
-                    shape: BoxShape.circle,
-                  ),
-                  child: const Icon(
-                    Icons.remove,
-                    color: Color(0xFFE53935),
-                    size: 18,
-                  ),
-                ),
-              ],
-            ),
+          height: double.infinity,
+          child: Icon(
+            icon,
+            size: 26,
+            color: enabled ? AppColors.iosBlack : AppColors.iosGray,
           ),
         ),
       ),
