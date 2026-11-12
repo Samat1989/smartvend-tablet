@@ -485,15 +485,10 @@ class _ShowcaseCard extends StatelessWidget {
           Expanded(
             child: ColoredBox(
               color: AppColors.iosBackground,
-              // В 3 колонки область под фото низкая и cover обрезает товар:
-              // там вписываем целиком (contain) с небольшим полем.
-              child: Padding(
-                padding: EdgeInsets.all(compact ? 8 : 0),
-                child: ProductThumb(
-                  product: product,
-                  emojiSize: compact ? 48 : 72,
-                  fit: compact ? BoxFit.contain : BoxFit.cover,
-                ),
+              child: ProductThumb(
+                product: product,
+                emojiSize: 72,
+                fit: BoxFit.cover,
               ),
             ),
           ),
