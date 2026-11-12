@@ -305,7 +305,14 @@ class _Stepper extends StatelessWidget {
     return Row(
       children: [
         Expanded(
-          child: _StepButton(icon: Icons.remove, onTap: onRemove),
+          child: _StepButton(
+            icon: Icons.remove,
+            onTap: onRemove,
+            // Приглушённый красный и зелёный: различаются с первого взгляда,
+            // но не кричат на фоне фото.
+            background: const Color(0xFFF3DCDA),
+            foreground: const Color(0xFFB0524C),
+          ),
         ),
         SizedBox(
           width: 52,
@@ -325,6 +332,8 @@ class _Stepper extends StatelessWidget {
           child: _StepButton(
             icon: Icons.add,
             onTap: canAdd ? onAdd : null,
+            background: const Color(0xFFDCEBDD),
+            foreground: const Color(0xFF4E8A5B),
           ),
         ),
       ],
@@ -333,16 +342,23 @@ class _Stepper extends StatelessWidget {
 }
 
 class _StepButton extends StatelessWidget {
-  const _StepButton({required this.icon, required this.onTap});
+  const _StepButton({
+    required this.icon,
+    required this.onTap,
+    required this.background,
+    required this.foreground,
+  });
 
   final IconData icon;
   final VoidCallback? onTap;
+  final Color background;
+  final Color foreground;
 
   @override
   Widget build(BuildContext context) {
     final enabled = onTap != null;
     return Material(
-      color: AppColors.iosBackground,
+      color: enabled ? background : AppColors.iosBackground,
       borderRadius: BorderRadius.circular(12),
       child: InkWell(
         borderRadius: BorderRadius.circular(12),
@@ -352,7 +368,7 @@ class _StepButton extends StatelessWidget {
           child: Icon(
             icon,
             size: 26,
-            color: enabled ? AppColors.iosBlack : AppColors.iosGray,
+            color: enabled ? foreground : AppColors.iosGray,
           ),
         ),
       ),
