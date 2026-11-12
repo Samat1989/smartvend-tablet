@@ -57,67 +57,88 @@ class StorefrontSettingsScreen extends StatelessWidget {
         backgroundColor: Colors.transparent,
         foregroundColor: Colors.white,
         elevation: 0,
+        toolbarHeight: 44,
         title: Text(s.t('service_storefront'),
-            style: const TextStyle(fontWeight: FontWeight.bold)),
+            style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 18)),
       ),
       body: SafeArea(
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
             // ─── Settings header ───
+            //
+            // Компактно: строка «сколько в ряд» с крупным переключателем,
+            // ниже два выключателя в одну строку. Пояснения спрятаны за
+            // значком «i» (нажать — появится подсказка), иначе шапка
+            // занимала треть экрана и отнимала место у предпросмотра.
             Padding(
-              padding: const EdgeInsets.fromLTRB(16, 4, 16, 14),
-              child: Row(
-                crossAxisAlignment: CrossAxisAlignment.start,
+              padding: const EdgeInsets.fromLTRB(16, 0, 16, 10),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  // Columns
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
+                  Row(
+                    children: [
+                      Expanded(
+                        child: Text(
                           s.t('storefront_columns'),
                           style: const TextStyle(
                             color: Colors.white,
-                            fontSize: 15,
+                            fontSize: 16,
                             fontWeight: FontWeight.w700,
                           ),
                         ),
-                        const SizedBox(height: 8),
-                        SegmentedButton<int>(
-                          segments: [
-                            for (var n = DeviceStorage.minGridColumns;
-                                n <= DeviceStorage.maxGridColumns;
-                                n++)
-                              ButtonSegment(value: n, label: Text('$n')),
-                          ],
-                          selected: {storage.gridColumns},
-                          showSelectedIcon: false,
-                          onSelectionChanged: (v) =>
-                              storage.setGridColumns(v.first),
+                      ),
+                      SegmentedButton<int>(
+                        segments: [
+                          for (var n = DeviceStorage.minGridColumns;
+                              n <= DeviceStorage.maxGridColumns;
+                              n++)
+                            ButtonSegment(value: n, label: Text('$n')),
+                        ],
+                        selected: {storage.gridColumns},
+                        showSelectedIcon: false,
+                        style: ButtonStyle(
+                          minimumSize:
+                              const WidgetStatePropertyAll(Size(84, 48)),
+                          textStyle: const WidgetStatePropertyAll(TextStyle(
+                              fontSize: 22, fontWeight: FontWeight.w800)),
+                          foregroundColor: WidgetStateProperty.resolveWith(
+                              (st) => st.contains(WidgetState.selected)
+                                  ? Colors.white
+                                  : Colors.white70),
+                          backgroundColor: WidgetStateProperty.resolveWith(
+                              (st) => st.contains(WidgetState.selected)
+                                  ? AppColors.iosBlue
+                                  : Colors.transparent),
+                          side: const WidgetStatePropertyAll(
+                              BorderSide(color: Colors.white38, width: 1.5)),
                         ),
-                      ],
-                    ),
+                        onSelectionChanged: (v) =>
+                            storage.setGridColumns(v.first),
+                      ),
+                    ],
                   ),
-                  const SizedBox(width: 20),
-                  Expanded(
-                    flex: 3,
-                    child: _SwitchBlock(
-                      value: storage.showSlotNumber,
-                      onChanged: storage.setShowSlotNumber,
-                      title: s.t('storefront_show_slot'),
-                      hint: s.t('storefront_show_slot_hint'),
-                    ),
-                  ),
-                  const SizedBox(width: 20),
-                  Expanded(
-                    flex: 3,
-                    child: _SwitchBlock(
-                      value: storage.showShelfLabels,
-                      onChanged: storage.setShowShelfLabels,
-                      title: s.t('storefront_show_shelves'),
-                      hint: s.t('storefront_show_shelves_hint'),
-                    ),
+                  const SizedBox(height: 6),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: _SwitchBlock(
+                          value: storage.showSlotNumber,
+                          onChanged: storage.setShowSlotNumber,
+                          title: s.t('storefront_show_slot'),
+                          hint: s.t('storefront_show_slot_hint'),
+                        ),
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: _SwitchBlock(
+                          value: storage.showShelfLabels,
+                          onChanged: storage.setShowShelfLabels,
+                          title: s.t('storefront_show_shelves'),
+                          hint: s.t('storefront_show_shelves_hint'),
+                        ),
+                      ),
+                    ],
                   ),
                 ],
               ),
@@ -170,30 +191,33 @@ class _SwitchBlock extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
+    return Row(
       children: [
-        Row(
-          children: [
-            Switch(value: value, onChanged: onChanged),
-            const SizedBox(width: 8),
-            Expanded(
-              child: Text(
-                title,
-                style: const TextStyle(
-                  color: Colors.white,
-                  fontSize: 15,
-                  fontWeight: FontWeight.w700,
-                ),
-              ),
+        Switch(value: value, onChanged: onChanged),
+        const SizedBox(width: 4),
+        Expanded(
+          child: Text(
+            title,
+            maxLines: 2,
+            overflow: TextOverflow.ellipsis,
+            style: const TextStyle(
+              color: Colors.white,
+              fontSize: 14,
+              fontWeight: FontWeight.w700,
+              height: 1.15,
             ),
-          ],
+          ),
         ),
-        const SizedBox(height: 2),
-        Text(
-          hint,
-          style: const TextStyle(
-              color: Colors.white54, fontSize: 12, height: 1.3),
+        // Пояснение по нажатию, а не под заголовком: экономит высоту шапки.
+        Tooltip(
+          message: hint,
+          triggerMode: TooltipTriggerMode.tap,
+          showDuration: const Duration(seconds: 8),
+          margin: const EdgeInsets.symmetric(horizontal: 24),
+          child: const Padding(
+            padding: EdgeInsets.all(8),
+            child: Icon(Icons.info_outline, size: 20, color: Colors.white54),
+          ),
         ),
       ],
     );
