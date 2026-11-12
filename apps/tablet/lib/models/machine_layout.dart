@@ -194,8 +194,32 @@ class LayoutTemplate {
     builder: _buildMicromarket4x5,
   );
 
+  /// Заводская 6×6, но на полках 1–2 стоят только 3 сдвоенных слота
+  /// (моторы 99, 98, 97 и 89, 88, 87). Сдвоенный слот — пара спиралей на одном
+  /// канале платы, поэтому в слоте один мотор, как в [mp2404_5_50]. Полки 3–6
+  /// целиком как у заводской.
+  static const LayoutTemplate factory6x6Twin3 = LayoutTemplate(
+    id: 'factory_6x6_twin3',
+    name: 'lt_factory6x6_twin3',
+    description: 'lt_factory6x6_twin3_desc',
+    builder: _buildFactory6x6Twin3,
+  );
+
+  /// Заводская нумерация, но полки 1–3 — по 5 сдвоенных слотов
+  /// (моторы 99..95, 89..85, 79..75), полки 4–6 — по 10 обычных
+  /// (69..60, 59..50, 49..40). Подписи 001–005 / 011–015 / 021–025 /
+  /// 031–040 / 041–050 / 051–060.
+  static const LayoutTemplate factory3x5Twin3x10 = LayoutTemplate(
+    id: 'factory_3x5_twin_3x10',
+    name: 'lt_factory_3x5_3x10',
+    description: 'lt_factory_3x5_3x10_desc',
+    builder: _buildFactory3x5Twin3x10,
+  );
+
   static const List<LayoutTemplate> all = [
     factory6x6,
+    factory6x6Twin3,
+    factory3x5Twin3x10,
     mp2404_5_50,
     barysvendV272,
     micromarket4x5,
@@ -248,6 +272,34 @@ MachineLayout _buildFactory6x6() {
   }
   return MachineLayout(shelves: shelves);
 }
+
+/// Полка заводской схемы: [count] слотов подряд с начала полки [s] (1..6).
+/// Подпись — row*10+col (001.., 011.., …), мотор — декада на полку:
+/// (10-s)*10 + (10-col).
+Shelf _factoryShelf(int s, int count) {
+  final slots = <Slot>[
+    for (var j = 1; j <= count; j++)
+      Slot(
+        label: ((s - 1) * 10 + j).toString().padLeft(3, '0'),
+        motorIds: [(10 - s) * 10 + (10 - j)],
+      ),
+  ];
+  final first = (s - 1) * 10 + 1;
+  final last = (s - 1) * 10 + count;
+  return Shelf(
+    label: '${first.toString().padLeft(3, '0')} — '
+        '${last.toString().padLeft(3, '0')}',
+    slots: slots,
+  );
+}
+
+MachineLayout _buildFactory6x6Twin3() => MachineLayout(shelves: [
+      for (var s = 1; s <= 6; s++) _factoryShelf(s, s <= 2 ? 3 : 6),
+    ]);
+
+MachineLayout _buildFactory3x5Twin3x10() => MachineLayout(shelves: [
+      for (var s = 1; s <= 6; s++) _factoryShelf(s, s <= 3 ? 5 : 10),
+    ]);
 
 MachineLayout _buildMp2404() {
   final shelves = <Shelf>[];
