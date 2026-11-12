@@ -11,6 +11,7 @@ import '../widgets/close_circle_button.dart';
 import '../widgets/support_corner.dart';
 import '../widgets/action_pill.dart';
 import '../widgets/product_thumb.dart';
+import '../widgets/quantity_stepper.dart';
 import 'payment_screen.dart';
 
 /// Cart preview ported from Figma "Checkout - One Item Unselected".
@@ -175,10 +176,9 @@ class _CartList extends StatelessWidget {
   }
 }
 
-/// Cart card. Same shape as the catalog card but in Figma "Selected"
-/// state — counter pill (qty + red minus) on the left, blue "+" on
-/// the right. Tap minus → remove one, tap plus → add another up to
-/// available stock.
+/// Cart card. Same shape as the catalog card; under the name and line total
+/// sits the same «− n +» stepper as on a selected catalog card.
+/// Minus removes one, plus adds another up to available stock.
 class _CartItemCard extends StatelessWidget {
   const _CartItemCard({required this.product, required this.quantity});
 
@@ -241,30 +241,13 @@ class _CartItemCard extends StatelessWidget {
                     ),
                   ),
                 ),
-                Positioned(
-                  top: 12,
-                  left: 12,
-                  child: _CartCounterPill(
-                    count: quantity,
-                    onRemove: () => svc.removeOne(product.motorId),
-                  ),
-                ),
-                Positioned(
-                  top: 12,
-                  right: 12,
-                  child: _CartAddButton(
-                    enabled: canAdd,
-                    onTap:
-                        canAdd ? () => _tryAdd(context) : null,
-                  ),
-                ),
               ],
             ),
           ),
-          Expanded(
-            flex: 60,
+          SizedBox(
+            height: 46,
             child: Padding(
-              padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
+              padding: const EdgeInsets.fromLTRB(16, 6, 16, 4),
               child: Row(
                 // Bottom-aligned, matching ProductCard: the price sits on the
                 // same line as the last line of the name, so it lands in the
@@ -301,6 +284,19 @@ class _CartItemCard extends StatelessWidget {
               ),
             ),
           ),
+          // Тот же степпер, что на карточке витрины.
+          SizedBox(
+            height: 54,
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(8, 4, 8, 8),
+              child: QuantityStepper(
+                count: quantity,
+                canAdd: canAdd,
+                onRemove: () => svc.removeOne(product.motorId),
+                onAdd: () => _tryAdd(context),
+              ),
+            ),
+          ),
             ],
           ),
         ),
@@ -315,104 +311,6 @@ class _CartItemCard extends StatelessWidget {
           ),
         ),
       ],
-    );
-  }
-}
-
-/// Local copy of the catalog screen's counter pill (intentionally not
-/// shared via a `widgets/` file — the two screens are likely to diverge
-/// as the design evolves and a shared widget tempts premature
-/// abstraction).
-class _CartCounterPill extends StatelessWidget {
-  const _CartCounterPill({required this.count, required this.onRemove});
-
-  final int count;
-  final VoidCallback onRemove;
-
-  @override
-  Widget build(BuildContext context) {
-    return Material(
-      color: const Color(0xFFE53935),
-      shape: const StadiumBorder(),
-      elevation: 1,
-      shadowColor: const Color(0x14000000),
-      child: InkWell(
-        customBorder: const StadiumBorder(),
-        onTap: onRemove,
-        child: SizedBox(
-          height: 32,
-          child: Padding(
-            padding: const EdgeInsets.fromLTRB(16, 0, 6, 0),
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Text(
-                  '$count',
-                  style: const TextStyle(
-                    color: Colors.white,
-                    fontSize: 18,
-                    fontWeight: FontWeight.w700,
-                    letterSpacing: -0.2,
-                    height: 1,
-                  ),
-                ),
-                const SizedBox(width: 8),
-                Container(
-                  width: 28,
-                  height: 28,
-                  decoration: const BoxDecoration(
-                    color: Colors.white,
-                    shape: BoxShape.circle,
-                  ),
-                  child: const Icon(
-                    Icons.remove,
-                    color: Color(0xFFE53935),
-                    size: 18,
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-class _CartAddButton extends StatelessWidget {
-  const _CartAddButton({required this.enabled, required this.onTap});
-
-  final bool enabled;
-  final VoidCallback? onTap;
-
-  @override
-  Widget build(BuildContext context) {
-    return DecoratedBox(
-      decoration: const BoxDecoration(
-        shape: BoxShape.circle,
-        boxShadow: [
-          BoxShadow(
-            color: Color(0x33000000),
-            blurRadius: 6,
-            offset: Offset(0, 2),
-          ),
-        ],
-      ),
-      child: Material(
-        color: enabled
-            ? AppColors.iosBlue
-            : AppColors.iosGray.withValues(alpha: 0.6),
-        shape: const CircleBorder(),
-        child: InkWell(
-          customBorder: const CircleBorder(),
-          onTap: onTap,
-          child: const SizedBox(
-            width: 44,
-            height: 44,
-            child: Icon(Icons.add, color: Colors.white, size: 24),
-          ),
-        ),
-      ),
     );
   }
 }
