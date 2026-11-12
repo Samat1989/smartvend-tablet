@@ -308,7 +308,7 @@ class _Stepper extends StatelessWidget {
           child: _StepButton(
             icon: Icons.remove,
             onTap: onRemove,
-            // Приглушённый красный и зелёный: различаются с первого взгляда,
+            // Приглушённые красный и синий: различаются с первого взгляда,
             // но не кричат на фоне фото.
             background: const Color(0xFFF3DCDA),
             foreground: const Color(0xFFB0524C),
@@ -332,8 +332,8 @@ class _Stepper extends StatelessWidget {
           child: _StepButton(
             icon: Icons.add,
             onTap: canAdd ? onAdd : null,
-            background: const Color(0xFFDCEBDD),
-            foreground: const Color(0xFF4E8A5B),
+            background: const Color(0xFFD9E7F7),
+            foreground: const Color(0xFF3B79B8),
           ),
         ),
       ],
