@@ -483,7 +483,6 @@ class _ShowcaseCard extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           Expanded(
-            flex: 4,
             child: ColoredBox(
               color: AppColors.iosBackground,
               child: ProductThumb(
@@ -493,14 +492,19 @@ class _ShowcaseCard extends StatelessWidget {
               ),
             ),
           ),
-          Expanded(
-            flex: 1,
+          // Фиксированная высота, а не доля карточки (как в витрине,
+          // `product_card.dart`): при 3 колонках карточка вдвое ниже, и доля
+          // отрезала вторую строку названия. Сжимается фото, а не текст.
+          SizedBox(
+            height: compact ? 54 : 72,
             child: Padding(
               padding: compact
-                  ? const EdgeInsets.fromLTRB(10, 6, 10, 8)
+                  ? const EdgeInsets.fromLTRB(12, 6, 12, 10)
                   : const EdgeInsets.fromLTRB(18, 10, 18, 14),
               child: Row(
-                crossAxisAlignment: CrossAxisAlignment.center,
+                // Цена внизу справа независимо от того, в одну или две строки
+                // перенесено название.
+                crossAxisAlignment: CrossAxisAlignment.end,
                 children: [
                   Expanded(
                     child: Text(
@@ -509,21 +513,26 @@ class _ShowcaseCard extends StatelessWidget {
                       overflow: TextOverflow.ellipsis,
                       style: TextStyle(
                         color: AppColors.iosBlack,
-                        fontSize: compact ? 13 : 16,
+                        fontSize: compact ? 14 : 16,
                         fontWeight: FontWeight.w700,
                         letterSpacing: -0.1,
-                        height: 1.15,
+                        height: compact ? 1.2 : 1.15,
                       ),
                     ),
                   ),
-                  SizedBox(width: compact ? 6 : 10),
-                  Text(
-                    '${product.priceTenge} ${context.watch<Strings>().currency}',
-                    style: TextStyle(
-                      color: AppColors.iosOrange,
-                      fontSize: compact ? 15 : 20,
-                      fontWeight: FontWeight.w900,
-                      letterSpacing: -0.2,
+                  SizedBox(width: compact ? 8 : 10),
+                  FittedBox(
+                    fit: BoxFit.scaleDown,
+                    alignment: Alignment.bottomRight,
+                    child: Text(
+                      '${product.priceTenge} ${context.watch<Strings>().currency}',
+                      maxLines: 1,
+                      style: TextStyle(
+                        color: AppColors.iosOrange,
+                        fontSize: compact ? 18 : 20,
+                        fontWeight: FontWeight.w900,
+                        letterSpacing: -0.2,
+                      ),
                     ),
                   ),
                 ],
