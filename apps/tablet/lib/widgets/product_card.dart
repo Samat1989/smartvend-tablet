@@ -149,10 +149,18 @@ class ProductCard extends StatelessWidget {
                             // the way it always has. Only the emoji fallback
                             // scales with the box; a real photo is left
                             // alone.
-                            return ProductThumb(
-                              product: product,
-                              emojiSize: short * 0.42,
-                              fit: BoxFit.cover,
+                            // Узкая карточка (3+ колонок): область под фото
+                            // низкая, и cover срезает товар сверху и снизу.
+                            // Там вписываем фото целиком с небольшим полем;
+                            // в 2 колонки всё по-прежнему на всю область.
+                            final narrow = c.maxWidth < 180;
+                            return Padding(
+                              padding: EdgeInsets.all(narrow ? 6 : 0),
+                              child: ProductThumb(
+                                product: product,
+                                emojiSize: short * 0.42,
+                                fit: narrow ? BoxFit.contain : BoxFit.cover,
+                              ),
                             );
                           },
                         ),
