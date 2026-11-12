@@ -234,10 +234,15 @@ class _CartItemCard extends StatelessWidget {
                 Positioned.fill(
                   child: ColoredBox(
                     color: AppColors.iosBackground,
-                    child: ProductThumb(
-                      product: product,
-                      emojiSize: 56,
-                      fit: BoxFit.cover,
+                    // contain с полем: фото целиком внутри рамки карточки, а
+                    // не вплотную к синему контуру и скруглённым углам.
+                    child: Padding(
+                      padding: const EdgeInsets.all(10),
+                      child: ProductThumb(
+                        product: product,
+                        emojiSize: 56,
+                        fit: BoxFit.contain,
+                      ),
                     ),
                   ),
                 ),
